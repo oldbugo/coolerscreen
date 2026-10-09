@@ -7,7 +7,14 @@
     "start": "node bin/serve.js",
     "cli": "node bin/coolerscreen.js"
   },
-  "keywords": [],
+  "keywords": [
+    "lovingcool",
+    "sc70",
+    "aio-cooler",
+    "usb-screen",
+    "winusb",
+    "ffmpeg"
+  ],
   "author": "oldbugo",
   "license": "MIT",
   "type": "commonjs",
@@ -18,12 +25,30 @@
   },
   "allowScripts": {
     "ffmpeg-static@5.3.0": true,
-    "@serialport/bindings-cpp@12.0.1": true
+    "@serialport/bindings-cpp@12.0.1": true,
+    "usb@2.19.1": true
   },
   "bin": {
     "coolerscreen": "bin/coolerscreen.js"
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oldbugo/coolerscreen.git"
+  },
+  "homepage": "https://github.com/oldbugo/coolerscreen#readme",
+  "bugs": {
+    "url": "https://github.com/oldbugo/coolerscreen/issues"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ]
 }

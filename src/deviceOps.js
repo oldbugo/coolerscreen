@@ -80,7 +80,7 @@ async function sendFiles(items, onProgress, opts = {}) {
     try {
       await s.uploadAnimation(file, label, (a, b) => {
         if (a >= b) sent = true;
-        onProgress && onProgress((i + a / b) / total, 'Uploading ' + (label === 'standby' ? 'loop' : 'intro') + ' clip');
+        onProgress && onProgress((i + a / b) / total, 'Uploading ' + (label === 'standby' ? 'loop' : 'intro') + ' clip (the screen writes slowly: ~3 min for 9 MB)');
       });
       sent = true;
     } catch (e) {

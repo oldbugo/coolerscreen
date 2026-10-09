@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const el = (tag, props = {}, ...kids) => {
   const e = Object.assign(document.createElement(tag), props);
-  for (const k of kids) e.append(k);
+  for (const k of kids) if (k !== false && k != null) e.append(k);
   return e;
 };
 let settings = null, items = [], selected = null, slotInfo = null;
@@ -96,7 +96,7 @@ function renderGallery() {
     const info = el('div', { className: 'hint' });
     if (ready) {
       info.append(el('span', { className: 'badge', textContent: `${it.fps} fps` }),
-        el('span', { className: 'badge', textContent: `quality ${it.quality}${it.manual ? '' : ' (auto)'}` }),
+        it.quality != null && el('span', { className: 'badge', textContent: `quality ${it.quality}${it.manual ? '' : ' (auto)'}` }),
         el('span', { className: 'badge', textContent: mb(it.size) }), el('span', { className: 'badge', textContent: it.trim.length + ' s' }));
       if (it.maskOutdated) info.append(el('span', { className: 'badge warn', textContent: 'mask outdated', title: 'Settings mask differs from the one used for this item. Re-convert to apply.' }));
     }
