@@ -1,0 +1,29 @@
+{
+  "name": "coolerscreen",
+  "version": "1.0.0",
+  "description": "Unofficial open-source tool to put your own videos/GIFs/images on the Lovingcool SC70 AIO cooler USB screen",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node bin/serve.js",
+    "cli": "node bin/coolerscreen.js"
+  },
+  "keywords": [],
+  "author": "oldbugo",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "serialport": "^12.0.0",
+    "usb": "^2.19.1"
+  },
+  "allowScripts": {
+    "ffmpeg-static@5.3.0": true,
+    "@serialport/bindings-cpp@12.0.1": true
+  },
+  "bin": {
+    "coolerscreen": "bin/coolerscreen.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
