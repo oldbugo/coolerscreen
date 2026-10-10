@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0 - 2026-10-10
+
+- Desktop window (Electron) instead of a browser + .bat: `CoolerScreen.exe` is the unmodified official Electron runtime
+  (renamed), app files in `resources/app`. Closing the window exits everything; nothing runs in the background.
+- Gallery folder (`Documents\CoolerScreen\Gallery`): files placed there appear automatically, deleted files disappear,
+  imports are copied there, rename renames the file, delete moves it to `_Deleted`; existing items are migrated.
+- Import vendor `.ht` theme files (and plain `.zip` files containing a video or image); drops work anywhere on the page.
+- Notch band width now rounds up to the 16 px MJPEG block grid.
+- "Reconnect" for a screen that Windows failed to enumerate at boot (one admin approval, resets that USB port).
+- `scripts/install-local.ps1` / `uninstall-local.ps1` (current user, no admin; shortcuts only).
+
 ## 1.0.0 - 2026-10-10
 
 First release.

@@ -11,13 +11,12 @@ keeps playing on its own, even after you restart or shut down the PC.
 
 1. **Close and uninstall LOVINGCOOL MONITOR.** (Only one program can talk to the screen at a time, and after step 4 the
    vendor app can no longer see the screen at all. You can undo this later, see "Undo".)
-2. **Download** `CoolerScreen-<version>-win-x64.zip` from the [Releases page](https://github.com/oldbugo/coolerscreen/releases)
-   **Before extracting:** right-click the zip > **Properties** > tick **Unblock** > OK. (Windows tags downloaded files;
-   with *Smart App Control* switched on it refuses to run the launcher from a tagged zip.) Then **extract** it (right click >
-   Extract All) somewhere you will find it again, for example your Documents folder.
-3. **Double-click `Start CoolerScreen.bat`.** A black window opens (keep it open while you use the app) and your web
-   browser opens the CoolerScreen page. Windows may warn that the file came from the internet ("Windows protected your
-   PC" / "Open File - Security Warning"): choose **More info > Run anyway** / **Run**. The app is not code-signed.
+2. **Download** `CoolerScreen-<version>-win-x64.zip` from the [Releases page](https://github.com/oldbugo/coolerscreen/releases).
+   **Before extracting:** right-click the zip > **Properties** > tick **Unblock** > OK (Windows tags downloaded files).
+   Then **extract** it (right click > Extract All) somewhere you will find it again, for example your Documents folder.
+3. **Double-click `CoolerScreen.exe`.** The CoolerScreen window opens. The app is **not code-signed**: Smart App Control
+   normally allows it because it is the unmodified official Electron runtime. If Windows still blocks it, choose
+   **More info > Run anyway**; if that is not offered, use the browser fallback below.
 4. **Click "Set up screen (one-time)"** and approve the Windows prompt. This is needed only once per PC.
    - *What it does:* switches the screen from Windows' standard serial (COM port) driver to **Microsoft's built-in WinUSB
      driver**. Only the screen's own USB entry is changed, nothing else on your PC.
@@ -26,9 +25,11 @@ keeps playing on its own, even after you restart or shut down the PC.
 5. **Import** a video, GIF, image or vendor theme `.ht` file (drop it on the page). Choose the loop length, fps and quality (the defaults are good),
    check the notch mask preview, convert, then press **Send to screen**. The upload takes **about 3 minutes** for a full-size
    clip (the screen's built-in memory writes slowly); the picture appears when it ends.
-6. **Close the app** (close the black window). Done: the screen loops your clip forever.
+6. **Close the app** (close the window). Done: the screen loops your clip forever.
 
 To change the picture later, just start the app again.
+
+*Browser fallback (needs Node.js 18+ from nodejs.org):* run `scripts\start-browser.bat` from the extracted `resources\app` folder (or `npm start` in the source tree); the app opens in your browser instead of its own window.
 
 ## Using it
 
