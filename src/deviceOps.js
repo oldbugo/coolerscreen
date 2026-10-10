@@ -83,6 +83,10 @@ async function openRetry(seconds) {
  * onProgress(0..1 overall, text)
  */
 async function sendFiles(items, onProgress, opts = {}) {
+  if (process.env.COOLERSCREEN_FAKE_DEVICE) { // test hook: pretend to upload for 10 s, never touch USB
+    for (let i = 1; i <= 10; i++) { onProgress && onProgress(i / 10, 'Uploading (fake device)'); await sleep(1000); }
+    return { ok: true, transport: 'fake' };
+  }
   let warning, transport;
   const total = items.length + (opts.playLoop ? 0.1 : 0);
   for (let i = 0; i < items.length; i++) {

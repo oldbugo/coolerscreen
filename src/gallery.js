@@ -8,6 +8,7 @@ const { execFileSync } = require('child_process');
 const paths = require('./paths');
 const settings = require('./settings');
 const lib = require('./library');
+const gate = require('./gate');
 const { probe } = require('./convert');
 const { isThemeFile, extractTheme } = require('./htTheme');
 
@@ -117,7 +118,7 @@ function doSync() {
 
 /** Serialised scan of the gallery folder. */
 function sync() {
-  chain = chain.then(doSync, doSync).catch(e => console.log('Gallery sync error: ' + e.message));
+  chain = chain.then(() => gate.run('convert', doSync), () => gate.run('convert', doSync)).catch(e => console.log('Gallery sync error: ' + e.message));
   return chain;
 }
 
@@ -194,7 +195,7 @@ async function addFile(src, displayFileName) {
   const target = inside ? src : uniquePath(dir, base, ext || '.bin');
   if (!inside) fs.copyFileSync(src, target);
   try {
-    const id = await registerFile(target);
+    const id = await gate.run('convert', () => registerFile(target));
     watch();
     return id;
   } catch (e) {

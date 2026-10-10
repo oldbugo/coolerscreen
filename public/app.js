@@ -23,6 +23,8 @@ function toast(msg, bad = false, ms = 6000) {
   clearTimeout(toastT); toastT = setTimeout(() => (t.className = ''), ms);
 }
 
+const jobText = j => (j.status === 'waiting' ? j.message : (j.message || '') + ' ' + Math.round(j.progress * 100) + '%');
+
 async function pollJob(jobId, onUpdate) {
   for (;;) {
     const j = await api('/api/jobs/' + jobId);
@@ -161,7 +163,7 @@ async function sendItem(it, slot, prog) {
   try {
     setBar(prog, 0, 'Connecting...');
     const { jobId } = await api(`/api/library/${it.id}/send`, 'POST', { slot });
-    const r = await pollJob(jobId, j => setBar(prog, j.progress, j.message + ' ' + Math.round(j.progress * 100) + '%'));
+    const r = await pollJob(jobId, j => setBar(prog, j.progress, jobText(j)));
     setBar(prog, 1, 'Sent');
     toast((r.note || 'Sent') + (r.serialWarning ? '  WARNING: ' + r.serialWarning : ''), !!r.serialWarning, r.serialWarning ? 20000 : 6000);
   } catch (e) { setBar(prog, 1, e.message, true); toast(e.message, true, 12000); if (e.failedUsb) $('reconnectBanner').classList.remove('hidden'); }
@@ -207,6 +209,7 @@ async function runEstimate() {
   const seq = ++estSeq;
   try {
     const e = await api(`/api/library/${dlgItem.id}/estimate`, 'POST', dlgValues());
+    if (e.stale) return;
     if (seq !== estSeq) return;
     const box = D('dEst');
     box.className = 'est ' + (e.fits ? 'ok' : 'bad');
@@ -246,7 +249,7 @@ D('dGo').onclick = async () => {
   dlgBusy = true; D('dGo').disabled = true; clearTimeout(estTimer); estSeq++;
   try {
     const { jobId } = await api(`/api/library/${dlgItem.id}/reconvert`, 'POST', dlgValues());
-    const r = await pollJob(jobId, j => setBar(D('dProg'), j.progress, j.message + ' ' + Math.round(j.progress * 100) + '%'));
+    const r = await pollJob(jobId, j => setBar(D('dProg'), j.progress, jobText(j)));
     setBar(D('dProg'), 1, 'Done');
     D('dEst').className = 'est ' + (r.tooBig ? 'bad' : 'ok');
     D('dEst').textContent = `Result: ${mb(r.size)}, ${r.fps} fps, quality ${r.quality}/100 (q=${r.q}), ${r.trim.length} s` +

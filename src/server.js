@@ -8,6 +8,7 @@ const settings = require('./settings');
 const lib = require('./library');
 const deviceOps = require('./deviceOps');
 const send = require('./send');
+const gate = require('./gate');
 const gallery = require('./gallery');
 const setup = require('./setup');
 const slots = require('./slots');
@@ -20,12 +21,25 @@ const TYPES = {
 };
 
 const jobs = new Map();
-let deviceBusy = false;
+const estimateSeq = new Map();
 
 function newJob(kind) {
   const job = { id: crypto.randomBytes(6).toString('hex'), kind, status: 'running', progress: 0, message: '' };
   jobs.set(job.id, job);
   if (jobs.size > 100) jobs.delete(jobs.keys().next().value);
+  return job;
+}
+
+// A job that waits its turn in the shared gate (see src/gate.js): shows 'waiting' + a message until it starts.
+function gatedJob(kind, jobKind, fn) {
+  const job = newJob(jobKind);
+  job.status = 'waiting';
+  gate.run(kind, () => { job.status = 'running'; job.message = ''; return fn(job); }, {
+    onWait: msg => { if (msg) { job.status = 'waiting'; job.message = msg; } },
+  }).then(
+    r => { job.status = 'done'; job.progress = 1; job.result = r; },
+    e => { job.status = 'error'; job.error = e.message || String(e); job.failedUsb = !!e.failedUsb; },
+  );
   return job;
 }
 
@@ -120,11 +134,7 @@ async function handle(req, res) {
     if (p === '/api/gallery/sync' && m === 'POST') { await gallery.sync(); return json(res, 200, { ok: true }); }
     if (p === "/api/slots" && m === "GET") return json(res, 200, slots.budgets());
     if ((mm0 = /^\/api\/slots\/(startup|standby)\/clear$/.exec(p)) && m === "POST") {
-      if (deviceBusy) return json(res, 409, { error: "The screen is busy with another operation." });
-      deviceBusy = true;
-      const job = runJob(newJob("clear"), async j => {
-        try { return await send.clearSlot(mm0[1], (f, msg) => { j.progress = f; j.message = msg; }); } finally { deviceBusy = false; }
-      });
+      const job = gatedJob("device", "clear", j => send.clearSlot(mm0[1], (f, msg) => { j.progress = f; j.message = msg; }));
       return json(res, 200, { jobId: job.id });
     }
 
@@ -140,43 +150,42 @@ async function handle(req, res) {
     if ((mm = /^\/api\/library\/([a-z0-9]+)\/reconvert$/.exec(p)) && m === 'POST') {
       if (!lib.get(mm[1])) return json(res, 404, { error: 'Unknown item' });
       const o = await readBody(req);
-      const job = runJob(newJob('reconvert'), j => lib.convertEntry(mm[1], o, (f, msg) => { j.progress = f; j.message = msg; }));
+      const job = gatedJob('convert', 'reconvert', j => lib.convertEntry(mm[1], o, (f, msg) => { j.progress = f; j.message = msg; }));
       return json(res, 200, { jobId: job.id });
     }
     if ((mm = /^\/api\/library\/([a-z0-9]+)\/estimate$/.exec(p)) && m === 'POST') {
       if (!lib.get(mm[1])) return json(res, 404, { error: 'Unknown item' });
-      try { return json(res, 200, await lib.estimateEntry(mm[1], await readBody(req))); }
-      catch (e) { return json(res, 400, { error: e.message }); }
+      if (gate.deviceActive()) return json(res, 409, { error: 'The screen is busy with an upload; size estimates are paused until it finishes.' });
+      const body = await readBody(req);
+      const id = mm[1], seq = (estimateSeq.get(id) || 0) + 1;
+      estimateSeq.set(id, seq);
+      try {
+        // Newer estimate requests for the same item supersede queued older ones.
+        return json(res, 200, await gate.run('convert', () => (estimateSeq.get(id) === seq ? lib.estimateEntry(id, body) : { stale: true })));
+      } catch (e) { return json(res, 400, { error: e.message }); }
     }
     if ((mm = /^\/api\/library\/([a-z0-9]+)\/send$/.exec(p)) && m === 'POST') {
       if (!lib.get(mm[1])) return json(res, 404, { error: 'Unknown item' });
-      if (deviceBusy) return json(res, 409, { error: 'The screen is busy with another operation.' });
       const slot = (await readBody(req)).slot;
-      deviceBusy = true;
-      const job = runJob(newJob('send'), async j => {
-        try {
-          const r = await send.sendItem(mm[1], slot, (f, msg) => { j.progress = f; j.message = msg; });
-          return { ...r, note: 'Upload finished. The screen may restart by itself and re-appear on USB for a few seconds.' };
-        } finally { deviceBusy = false; }
+      const job = gatedJob('device', 'send', async j => {
+        const r = await send.sendItem(mm[1], slot, (f, msg) => { j.progress = f; j.message = msg; });
+        return { ...r, note: 'Upload finished. The screen may restart by itself and re-appear on USB for a few seconds.' };
       });
       return json(res, 200, { jobId: job.id });
     }
-    if (p === '/api/transport' && m === 'GET') return json(res, 200, await deviceOps.state());
+    if (p === '/api/transport' && m === 'GET') {
+      if (gate.deviceActive()) return json(res, 409, { error: 'The screen is busy with another operation.' });
+      return json(res, 200, await gate.run('device', () => deviceOps.state()));
+    }
     if ((p === '/api/setup' || p === '/api/restore' || p === '/api/reconnect') && m === 'POST') {
-      if (deviceBusy) return json(res, 409, { error: 'The screen is busy with another operation.' });
-      deviceBusy = true;
       const fn = p === '/api/setup' ? setup.setupWinUsb : p === '/api/reconnect' ? setup.reconnect : setup.restoreSerial;
-      const job = runJob(newJob('setup'), async j => {
-        try { return await fn((f, msg) => { j.progress = f; j.message = msg; }); } finally { deviceBusy = false; }
-      });
+      const job = gatedJob('device', 'setup', j => fn((f, msg) => { j.progress = f; j.message = msg; }));
       return json(res, 200, { jobId: job.id });
     }
     if (p === '/api/device' && m === 'GET') {
-      if (deviceBusy) return json(res, 409, { error: 'The screen is busy with another operation.' });
-      deviceBusy = true;
-      try { return json(res, 200, await deviceOps.checkScreen()); }
+      if (gate.deviceActive()) return json(res, 409, { error: 'The screen is busy with another operation.' });
+      try { return json(res, 200, await gate.run('device', () => deviceOps.checkScreen())); }
       catch (e) { return json(res, 502, { error: e.message, failedUsb: !!e.failedUsb }); }
-      finally { deviceBusy = false; }
     }
     return json(res, 404, { error: 'Not found' });
   }
