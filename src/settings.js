@@ -10,6 +10,7 @@ const DEFAULTS = {
   },
   fps: 20,
   maxSeconds: 10,
+  galleryDir: "", // empty = Documents\CoolerScreen\Gallery
   quality: "auto", // "auto" or 1-100
   totalBudgetMB: 9.5, // shared by startup + standby
   slots: { startup: null, standby: null }, // last sent: { name, size, at }
@@ -47,6 +48,7 @@ function sanitize(s = {}) {
     },
     fps: Math.round(num(s.fps, D.fps, 5, 30)),
     maxSeconds: num(s.maxSeconds, D.maxSeconds, 1, 120),
+    galleryDir: typeof s.galleryDir === "string" ? s.galleryDir.trim().slice(0, 240) : "",
     quality: s.quality === "auto" || s.quality == null ? "auto" : Math.round(num(s.quality, 90, 1, 100)),
     totalBudgetMB: num(s.totalBudgetMB, D.totalBudgetMB, 1, 10),
     slots: { startup: slot(s.slots && s.slots.startup), standby: slot(s.slots && s.slots.standby) },

@@ -137,7 +137,8 @@ function renderGallery() {
     }
     const del = el('button', { className: 'small danger', textContent: 'Delete' });
     del.onclick = async () => {
-      if (!confirm(`Delete "${it.name}" from the library?`)) return;
+      if (!confirm(`Remove "${it.name}" from the gallery?
+The file is moved to the _Deleted folder inside the gallery folder.`)) return;
       await api('/api/library/' + it.id, 'DELETE'); loadLibrary();
     };
     act.append(del);
@@ -261,7 +262,10 @@ async function importFileRaw(file) {
   const box = $('importProgress');
   try {
     setBar(box, 0.1, 'Uploading ' + file.name + '...');
-    const res = await fetch('/api/import?' + new URLSearchParams({ name: file.name }), { method: 'POST', body: file });
+    const localPath = window.cs && window.cs.pathFor ? window.cs.pathFor(file) : '';
+    const res = localPath
+      ? await fetch('/api/import-path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: localPath }) })
+      : await fetch('/api/import?' + new URLSearchParams({ name: file.name }), { method: 'POST', body: file });
     const j = await res.json();
     if (!res.ok) throw new Error(j.error);
     setBar(box, 1, 'Added "' + file.name + '"');
@@ -418,3 +422,22 @@ $('reconnectBtn').onclick = async () => {
     }
   } finally { b.disabled = false; }
 };
+
+// ---------- gallery folder ----------
+$('openGallery').onclick = () => api('/api/gallery/open', 'POST').catch(e => toast(e.message, true));
+api('/api/gallery').then(g => { $('galleryDir').value = g.dir; $('galleryDir').placeholder = g.dir; });
+$('galleryDirSave').onclick = async () => {
+  try { const g = await api('/api/gallery', 'PUT', { dir: $('galleryDir').value }); $('galleryDir').value = g.dir; toast('Gallery folder: ' + g.dir); loadLibrary(); }
+  catch (e) { toast(e.message, true); }
+};
+// Pick up files added/removed in the gallery folder while the app is open (cheap local request, never touches the screen).
+let lastSig = '';
+setInterval(async () => {
+  if (document.hidden || dlgBusy) return;
+  try {
+    const list = await api('/api/library');
+    const sig = JSON.stringify(list.map(i => [i.id, i.status, i.converted, i.name]));
+    if (lastSig && sig !== lastSig && !document.querySelector('.item .progress:not(.hidden)')) await loadLibrary();
+    lastSig = sig;
+  } catch {}
+}, 3000);

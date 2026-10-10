@@ -5,7 +5,6 @@ const paths = require('./paths');
 const settings = require('./settings');
 const { convert, estimate, qualityFromQ } = require('./convert');
 const slots = require('./slots');
-const { isThemeFile, extractTheme } = require('./htTheme');
 
 const ID_RE = /^[a-z0-9]{8,32}$/;
 const FILES = new Set(['preview.mp4', 'thumb.jpg', 'frame.jpg', 'device.mp4', 'meta.json']);
@@ -38,8 +37,11 @@ function get(id) {
   return isId(id) ? readMeta(id) : null;
 }
 
+// The source media: the gallery file itself, or the video extracted from a .ht/.zip theme (kept in the cache dir).
 function originalPath(id) {
   const d = dirOf(id);
+  const meta = readMeta(id);
+  if (meta && meta.file && !meta.extracted) return fs.existsSync(meta.file) ? meta.file : null;
   const f = fs.readdirSync(d).find(n => n.startsWith('original.'));
   return f ? path.join(d, f) : null;
 }
@@ -53,31 +55,6 @@ function mediaPath(id, file) {
   if (!isId(id) || !FILES.has(file)) return null;
   const p = path.join(dirOf(id), file);
   return fs.existsSync(p) ? p : null;
-}
-
-/** Prepare a library entry from a source file (copied into the library). Returns id. */
-function addSource(srcFile, name, sourceName) {
-  const id = newId();
-  const d = dirOf(id);
-  fs.mkdirSync(d, { recursive: true });
-  let themeName = null;
-  if (isThemeFile(srcFile)) {
-    // Vendor .ht theme or plain .zip: use the video/image inside as the original.
-    try {
-      const t = extractTheme(srcFile, d);
-      fs.renameSync(t.path, path.join(d, 'original' + path.extname(t.path).toLowerCase()));
-      themeName = t.name;
-    } catch (e) { fs.rmSync(d, { recursive: true, force: true }); throw e; }
-  } else {
-    const ext = (path.extname(srcFile) || '.bin').toLowerCase().replace(/[^.a-z0-9]/g, '');
-    fs.copyFileSync(srcFile, path.join(d, 'original' + ext));
-  }
-  const source = sourceName || path.basename(srcFile);
-  writeMeta(id, {
-    id, name: name || themeName || path.basename(source, path.extname(source)), source,
-    created: new Date().toISOString(), status: 'new',
-  });
-  return id;
 }
 
 function patchMeta(id, patch) {
@@ -145,17 +122,9 @@ async function convertEntry(id, opts = {}, onProgress) {
   }
 }
 
-function rename(id, name) {
-  const m = get(id);
-  if (!m) throw new Error('Unknown item');
-  m.name = String(name || '').trim().slice(0, 80) || m.name;
-  writeMeta(id, m);
-  return m;
-}
-
 function remove(id) {
   if (!isId(id)) return;
   fs.rmSync(dirOf(id), { recursive: true, force: true });
 }
 
-module.exports = { patchMeta, estimateEntry, originalPath, list, get, addSource, convertEntry, rename, remove, mediaPath, devicePath, isId, dirOf };
+module.exports = { patchMeta, estimateEntry, originalPath, list, get, convertEntry, readMeta, writeMeta, remove, mediaPath, devicePath, isId, dirOf };

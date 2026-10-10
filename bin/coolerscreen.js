@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const path = require('path');
 const lib = require('../src/library');
+const gallery = require('../src/gallery');
 const send = require('../src/send');
 const setup = require('../src/setup');
 const slots = require('../src/slots');
@@ -71,7 +72,8 @@ const bar = label => f => process.stdout.write(`\r${label} ${Math.round(f * 100)
       quality = Number(quality);
       if (!(quality >= 1 && quality <= 100)) throw new Error('--quality must be "auto" or 1-100');
     }
-    const id = lib.addSource(path.resolve(pos[0]), flags.name);
+    const id = await gallery.addFile(path.resolve(pos[0]));
+    if (flags.name) lib.patchMeta(id, { name: flags.name });
     const meta = await lib.convertEntry(id, {
       start: flags.start != null ? Number(flags.start) : undefined,
       length: flags.length != null ? Number(flags.length) : undefined,

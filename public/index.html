@@ -36,9 +36,10 @@
   </section>
 
   <section class="card">
-    <h2>Gallery <button id="reconvertAll" class="small">Re-convert all with current mask</button></h2>
+    <h2>Gallery <button id="reconvertAll" class="small">Re-convert all with current mask</button>
+      <button id="openGallery" class="small">Open gallery folder</button></h2>
     <div id="gallery" class="grid"></div>
-    <p id="empty" class="hint hidden">Nothing imported yet.</p>
+    <p id="empty" class="hint hidden">Nothing here yet. Drop a file above, or put videos/GIFs/images/.ht files into the gallery folder (button above).</p>
   </section>
 
   <section class="card">
@@ -75,6 +76,8 @@
       <button id="setupBtn2" class="small" onclick="document.getElementById('setupBtn').click()">Set up screen (one-time)</button>
       <button id="restoreBtn" class="small danger">Restore original driver</button>
     </div>
+    <div class="row"><label>Gallery folder <input type="text" id="galleryDir" size="48"></label> <button id="galleryDirSave" class="small">Save</button></div>
+    <p class="hint">Files you put in this folder appear in the gallery automatically (and disappear when you delete them). Leave empty for the default: DocumentsCoolerScreenGallery.</p>
     <div id="setupProg" class="progress hidden"><div class="bar"></div><span></span></div>
     <p class="hint">Set up switches the screen to Microsoft's WinUSB driver (no background program needed). Restore puts the standard COM-port driver back; the vendor app can then see the screen again.</p>
   </section>

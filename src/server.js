@@ -8,6 +8,7 @@ const settings = require('./settings');
 const lib = require('./library');
 const deviceOps = require('./deviceOps');
 const send = require('./send');
+const gallery = require('./gallery');
 const setup = require('./setup');
 const slots = require('./slots');
 const { probe } = require('./convert');
@@ -93,13 +94,30 @@ async function handle(req, res) {
         req.pipe(ws); ws.on('finish', resolve); ws.on('error', reject); req.on('error', reject);
       });
       let id;
-      try { id = lib.addSource(tmp, null, path.basename(name)); }
+      try { id = await gallery.addFile(tmp, path.basename(name)); }
       catch (e) { return json(res, 400, { error: e.message }); }
       finally { fs.rmSync(tmp, { force: true }); }
-      const info = await probe(lib.originalPath(id));
-      if (!info.hasVideo) { lib.remove(id); return json(res, 400, { error: "That file has no video or image stream ffmpeg can read." }); }
-      return json(res, 200, { id, item: lib.patchMeta(id, { sourceDuration: info.duration, isImage: info.isImage, srcWidth: info.width, srcHeight: info.height }) });
+      return json(res, 200, { id, item: lib.get(id) });
     }
+    // Import by local path (Electron drag and drop): no upload, the file is copied into the Gallery folder.
+    if (p === '/api/import-path' && m === 'POST') {
+      const src = String((await readBody(req)).path || '');
+      if (!path.isAbsolute(src) || !fs.existsSync(src) || !fs.statSync(src).isFile()) return json(res, 400, { error: 'File not found: ' + src });
+      try { const id = await gallery.addFile(src, path.basename(src)); return json(res, 200, { id, item: lib.get(id) }); }
+      catch (e) { return json(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/gallery' && m === 'GET') return json(res, 200, { dir: gallery.galleryDir() });
+    if (p === '/api/gallery' && m === 'PUT') {
+      try { await gallery.setDir((await readBody(req)).dir); return json(res, 200, { dir: gallery.galleryDir() }); }
+      catch (e) { return json(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/gallery/open' && m === 'POST') {
+      const dir = gallery.galleryDir();
+      fs.mkdirSync(dir, { recursive: true });
+      exec(process.platform === 'win32' ? `explorer.exe "${dir}"` : process.platform === 'darwin' ? `open "${dir}"` : `xdg-open "${dir}"`, () => {});
+      return json(res, 200, { dir });
+    }
+    if (p === '/api/gallery/sync' && m === 'POST') { await gallery.sync(); return json(res, 200, { ok: true }); }
     if (p === "/api/slots" && m === "GET") return json(res, 200, slots.budgets());
     if ((mm0 = /^\/api\/slots\/(startup|standby)\/clear$/.exec(p)) && m === "POST") {
       if (deviceBusy) return json(res, 409, { error: "The screen is busy with another operation." });
@@ -116,8 +134,8 @@ async function handle(req, res) {
     }
     if ((mm = /^\/api\/library\/([a-z0-9]+)$/.exec(p))) {
       if (!lib.get(mm[1])) return json(res, 404, { error: 'Unknown item' });
-      if (m === 'PATCH') return json(res, 200, lib.rename(mm[1], (await readBody(req)).name));
-      if (m === 'DELETE') { lib.remove(mm[1]); return json(res, 200, { ok: true }); }
+      if (m === 'PATCH') { try { return json(res, 200, gallery.renameItem(mm[1], (await readBody(req)).name)); } catch (e) { return json(res, 400, { error: e.message }); } }
+      if (m === 'DELETE') { gallery.removeItem(mm[1]); return json(res, 200, { ok: true }); }
     }
     if ((mm = /^\/api\/library\/([a-z0-9]+)\/reconvert$/.exec(p)) && m === 'POST') {
       if (!lib.get(mm[1])) return json(res, 404, { error: 'Unknown item' });
@@ -183,7 +201,8 @@ function openBrowser(url) {
   exec(cmd, () => {});
 }
 
-function start({ port = Number(process.env.PORT) || 8765, open = true } = {}) {
+async function start({ port = Number(process.env.PORT) || 8765, open = true } = {}) {
+  try { await gallery.init(); } catch (e) { console.log('Gallery init failed: ' + e.message); }
   const server = http.createServer((req, res) => {
     handle(req, res).catch(e => { if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); });
   });

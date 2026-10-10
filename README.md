@@ -35,6 +35,12 @@ To change the picture later, just start the app again.
 - **Import formats:** videos, GIFs, images, and the vendor app's downloaded **theme files (`.ht`)**. Drop a `.ht` file
   (or a plain `.zip` containing a video or image) like any other file; the video inside is extracted and the theme's
   name is used as the title. Drops work anywhere on the page.
+- **Gallery folder:** your clips live in `Documents\CoolerScreen\Gallery` ("Open gallery folder" button). Any video, GIF,
+  image, `.ht` or `.zip` file you put there appears in the app automatically (while it is open, or the next time you start it),
+  and removing the file removes the item. Importing through the app copies the file there (same name, "name (2)" if taken).
+  Renaming in the app renames the file. "Delete" in the app moves the file to a `_Deleted` subfolder instead of erasing it.
+  Converted versions are cached in `%APPDATA%\CoolerScreen`. The folder can be changed under Advanced.
+  Clips from older versions are copied into the gallery folder automatically the first time.
 - **Gallery:** everything you import is kept, so you can switch between clips. Hover to preview, click to play larger.
 - **Per-clip settings** ("Convert settings..."): start and loop length, fps 10-30, quality **Auto** (best that fits) or
   **Manual** 1-100. The estimated size is shown before converting. A clip that is too big for the screen is kept but
@@ -47,7 +53,7 @@ To change the picture later, just start the app again.
   playing it. Tick "Advanced" to send a separate intro clip.
 - **Check screen** shows the device info and whether the one-time setup is done.
 
-Your library lives in `%APPDATA%\CoolerScreen\` (clips and `settings.json`).
+Settings and converted versions live in `%APPDATA%\CoolerScreen\`; your original clips are in the gallery folder.
 
 ## Undo / restore the original driver
 
@@ -84,7 +90,8 @@ Needs Node.js 18+ (Windows is the tested platform).
     git clone https://github.com/oldbugo/coolerscreen
     cd coolerscreen
     npm install            # ffmpeg-static downloads ffmpeg.exe in its install script
-    npm start              # web app on http://127.0.0.1:8765/
+    npm start              # web app on http://127.0.0.1:8765/ (browser)
+    npm run app            # same app in a desktop window (Electron)
 
 npm 11 asks you to approve dependency install scripts; `package.json` already lists the needed ones under `allowScripts`
 (`ffmpeg-static`, `@serialport/bindings-cpp`, `usb`). If ffmpeg.exe is missing afterwards, run `npm approve-scripts` and
