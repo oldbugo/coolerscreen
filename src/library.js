@@ -5,6 +5,7 @@ const paths = require('./paths');
 const settings = require('./settings');
 const { convert, estimate, qualityFromQ } = require('./convert');
 const slots = require('./slots');
+const { isThemeFile, extractTheme } = require('./htTheme');
 
 const ID_RE = /^[a-z0-9]{8,32}$/;
 const FILES = new Set(['preview.mp4', 'thumb.jpg', 'frame.jpg', 'device.mp4', 'meta.json']);
@@ -59,11 +60,21 @@ function addSource(srcFile, name, sourceName) {
   const id = newId();
   const d = dirOf(id);
   fs.mkdirSync(d, { recursive: true });
-  const ext = (path.extname(srcFile) || '.bin').toLowerCase().replace(/[^.a-z0-9]/g, '');
-  fs.copyFileSync(srcFile, path.join(d, 'original' + ext));
+  let themeName = null;
+  if (isThemeFile(srcFile)) {
+    // Vendor .ht theme or plain .zip: use the video/image inside as the original.
+    try {
+      const t = extractTheme(srcFile, d);
+      fs.renameSync(t.path, path.join(d, 'original' + path.extname(t.path).toLowerCase()));
+      themeName = t.name;
+    } catch (e) { fs.rmSync(d, { recursive: true, force: true }); throw e; }
+  } else {
+    const ext = (path.extname(srcFile) || '.bin').toLowerCase().replace(/[^.a-z0-9]/g, '');
+    fs.copyFileSync(srcFile, path.join(d, 'original' + ext));
+  }
   const source = sourceName || path.basename(srcFile);
   writeMeta(id, {
-    id, name: name || path.basename(source, path.extname(source)), source,
+    id, name: name || themeName || path.basename(source, path.extname(source)), source,
     created: new Date().toISOString(), status: 'new',
   });
   return id;

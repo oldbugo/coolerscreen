@@ -23,7 +23,7 @@ keeps playing on its own, even after you restart or shut down the PC.
      driver**. Only the screen's own USB entry is changed, nothing else on your PC.
    - *Why:* the screen's firmware turns its display off about 30 seconds after Windows closes the serial port. With
      WinUSB that never happens, so you do not need to keep any program running.
-5. **Import** a video, GIF or image (drop it on the page). Choose the loop length, fps and quality (the defaults are good),
+5. **Import** a video, GIF, image or vendor theme `.ht` file (drop it on the page). Choose the loop length, fps and quality (the defaults are good),
    check the notch mask preview, convert, then press **Send to screen**. The upload takes **about 3 minutes** for a full-size
    clip (the screen's built-in memory writes slowly); the picture appears when it ends.
 6. **Close the app** (close the black window). Done: the screen loops your clip forever.
@@ -32,6 +32,9 @@ To change the picture later, just start the app again.
 
 ## Using it
 
+- **Import formats:** videos, GIFs, images, and the vendor app's downloaded **theme files (`.ht`)**. Drop a `.ht` file
+  (or a plain `.zip` containing a video or image) like any other file; the video inside is extracted and the theme's
+  name is used as the title. Drops work anywhere on the page.
 - **Gallery:** everything you import is kept, so you can switch between clips. Hover to preview, click to play larger.
 - **Per-clip settings** ("Convert settings..."): start and loop length, fps 10-30, quality **Auto** (best that fits) or
   **Manual** 1-100. The estimated size is shown before converting. A clip that is too big for the screen is kept but

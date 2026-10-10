@@ -93,7 +93,9 @@ async function handle(req, res) {
         req.pipe(ws); ws.on('finish', resolve); ws.on('error', reject); req.on('error', reject);
       });
       let id;
-      try { id = lib.addSource(tmp, path.basename(name, path.extname(name)), path.basename(name)); } finally { fs.rmSync(tmp, { force: true }); }
+      try { id = lib.addSource(tmp, null, path.basename(name)); }
+      catch (e) { return json(res, 400, { error: e.message }); }
+      finally { fs.rmSync(tmp, { force: true }); }
       const info = await probe(lib.originalPath(id));
       if (!info.hasVideo) { lib.remove(id); return json(res, 400, { error: "That file has no video or image stream ffmpeg can read." }); }
       return json(res, 200, { id, item: lib.patchMeta(id, { sourceDuration: info.duration, isImage: info.isImage, srcWidth: info.width, srcHeight: info.height }) });

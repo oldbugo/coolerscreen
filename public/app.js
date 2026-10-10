@@ -274,7 +274,18 @@ drop.onclick = () => $('file').click();
 $('file').onchange = e => { if (e.target.files[0]) importFileRaw(e.target.files[0]); e.target.value = ''; };
 drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) importFileRaw(e.dataTransfer.files[0]); };
+// Accept drops anywhere on the page (browsers otherwise navigate to the dropped file and nothing is imported).
+function handleDrop(e) {
+  e.preventDefault(); drop.classList.remove('over');
+  const files = [...(e.dataTransfer?.files || [])];
+  if (!files.length) { toast('Nothing to import: drop a file from your computer (not a link or text).', true); return; }
+  if (files.length > 1) toast('Importing the first file only (' + files[0].name + '). Drop the others one at a time.');
+  importFileRaw(files[0]);
+}
+drop.ondrop = handleDrop;
+window.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+window.addEventListener('dragleave', e => { if (!e.relatedTarget) drop.classList.remove('over'); });
+window.addEventListener('drop', e => { if (!drop.contains(e.target)) handleDrop(e); });
 
 $('reconvertAll').onclick = async () => {
   for (const it of items.filter(i => i.status === 'ready')) {
