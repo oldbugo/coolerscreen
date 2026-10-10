@@ -62,6 +62,9 @@ gear opens **Settings**.
 - **Notch:** the panel has a camera punch-hole on the left edge. Settings > Notch blacks that area out (default: a black band,
   92 px, applied as 96 px to stay on the screen's 16 px compression grid). New versions use the new setting; older versions
   are marked "Made with an older notch setting" with a **Make updated copy** action.
+- **Rounded corners** (Settings > Notch and corners): a visual preference, off by default. When on, everything outside a
+  rounded rectangle (radius 0-300 px, default 80) is kept black in new versions; the previews show it live. Versions made
+  with different notch or corner settings are marked "Made with older screen settings – re-make".
 - **Start-up logo:** the screen plays a short clip once at power-on before your clip loops. CoolerScreen puts a 1.5 s
   "CoolerScreen" logo (black, small centred wordmark) there the first time you send, and only re-sends it when it is not
   already there. It uses about 0.5 MB, so about 9 MB remain for your clip. There is nothing to set.
@@ -137,7 +140,8 @@ scripts. `COOLERSCREEN_HOME` and `COOLERSCREEN_GALLERY` point the library and th
 
 The input is resampled to **18 fps** (the screen's fixed playback rate, measured at 17.6 and 18.0 fps; it ignores the file's
 timing), framed on the 2400x1080 canvas (zoom relative to "cover", then pad/crop with the x/y alignment; the window's preview
-uses the same arithmetic, `public/js/frame.js`), the notch mask is applied, then it is rotated 90 degrees clockwise
+uses the same arithmetic, `public/js/frame.js`), the notch mask is applied, then (if on) the rounded-corner mask (a cached 2400x1080 RGBA PNG per radius, 1 px
+anti-aliased edge, overlaid on every frame), then it is rotated 90 degrees clockwise
 (`transpose=1`) and stored as 1080x2400 portrait MJPEG in an `.mp4` without audio. In Auto quality the converter estimates the
 size on a sample and picks the lowest JPEG quantiser (`-q:v` 3..31) that fits; if even q=31 does not fit it reports the
 longest length that would. The 1-100 quality scale maps linearly to q 31..3. Defaults: from the start, up to 10 s. Still

@@ -3,6 +3,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const paths = require('./paths');
 
 let ffmpeg = require('ffmpeg-static');
 if (ffmpeg && ffmpeg.includes('app.asar')) ffmpeg = ffmpeg.replace('app.asar', 'app.asar.unpacked');
@@ -130,17 +131,42 @@ function frameGraph(frame) {
     `crop=w=${W}:h=${H}:x='2*trunc((iw-${W})*${f.x}/2)':y='2*trunc((ih-${H})*${f.y}/2)'`;
 }
 
-function inputArgs(file, { isImage, fps, start, length }) {
-  if (isImage) return ['-loop', '1', '-framerate', String(fps), '-t', String(length), '-i', file];
-  return ['-ss', String(start), '-t', String(length), '-i', file];
+// Rounded corners: black outside a rounded rectangle covering the whole 2400x1080 canvas. Made once per radius as an
+// RGBA PNG (1 px anti-aliased edge) and overlaid on every frame, instead of evaluating a per-pixel expression per frame.
+// public/js/frame.js styleCorners() draws the same shape for the preview.
+const cornersOn = mask => !!(mask && mask.corners && mask.corners.on && Math.round(mask.corners.r) > 0);
+async function cornerMaskFile(mask) {
+  if (!cornersOn(mask)) return null;
+  const R = Math.round(mask.corners.r);
+  const dir = path.join(paths.base, 'masks');
+  const f = path.join(dir, `corners-${W}x${H}-r${R}.png`);
+  if (fs.existsSync(f)) return f;
+  fs.mkdirSync(dir, { recursive: true });
+  // Distance from the pixel centre to the rounded rectangle, beyond the corner arcs (0 inside), anti-aliased over 1 px.
+  const dx = `max(max(${R}-(X+0.5),(X+0.5)-${W - R}),0)`, dy = `max(max(${R}-(Y+0.5),(Y+0.5)-${H - R}),0)`;
+  const a = `255*clip(hypot(${dx},${dy})-${R}+0.5,0,1)`;
+  const tmp = f + '.tmp.png';
+  await runFfmpeg(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:d=1`, '-frames:v', '1',
+    '-vf', `format=rgba,geq=r='0':g='0':b='0':a='${a}'`, '-y', tmp]);
+  fs.renameSync(tmp, f);
+  return f;
 }
+
+function inputArgs(file, { isImage, fps, start, length, cornerFile }) {
+  const extra = cornerFile ? ['-i', cornerFile] : [];
+  if (isImage) return ['-loop', '1', '-framerate', String(fps), '-t', String(length), '-i', file, ...extra];
+  return ['-ss', String(start), '-t', String(length), '-i', file, ...extra];
+}
+
+// [m] (notch applied) -> [mc] (corners applied). The corner PNG is input 1; overlay repeats its single frame.
+const cornersGraph = cornerFile => (cornerFile ? '[m][1:v]overlay=0:0:format=auto,format=yuv420p[mc]' : '[m]null[mc]');
 
 function baseGraph(fps, frame) {
   return `[0:v]fps=${fps},${frameGraph(frame)},setsar=1,format=yuv420p[base]`;
 }
 
 function deviceArgs(file, src, o, q, out) {
-  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};[m]transpose=1,format=yuvj420p[out]`;
+  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};${cornersGraph(o.cornerFile)};[mc]transpose=1,format=yuvj420p[out]`;
   return [...inputArgs(file, { ...src, ...o }), '-filter_complex', g, '-map', '[out]', '-an',
     '-c:v', 'mjpeg', '-q:v', String(q), '-r', String(o.fps), '-movflags', '+faststart', '-y', out];
 }
@@ -152,7 +178,7 @@ async function encodeDevice(file, src, o, q, out, onTime) {
 
 // Landscape H.264 preview of a version (framing + mask applied) and its thumbnail.
 async function makePreview(file, src, o, dir, onTime) {
-  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};[m]scale=1200:540:flags=bicubic,format=yuv420p[out]`;
+  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};${cornersGraph(o.cornerFile)};[mc]scale=1200:540:flags=bicubic,format=yuv420p[out]`;
   await runFfmpeg([...inputArgs(file, { ...src, ...o }), '-filter_complex', g, '-map', '[out]', '-an',
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-movflags', '+faststart', '-y',
     path.join(dir, 'preview.mp4')], { onTime });
@@ -219,7 +245,7 @@ async function prepare(file, dir, opts) {
     file, dir, info, isImage, src: { isImage }, fps: DEVICE_FPS, start, length, manual,
     q: manual ? qFromQuality(opts.quality) : null,
     budget: opts.budgetBytes,
-    base: { start, length, mask: opts.mask, frame, fps: DEVICE_FPS },
+    base: { start, length, mask: opts.mask, frame, fps: DEVICE_FPS, cornerFile: await cornerMaskFile(opts.mask) },
   };
 }
 
@@ -352,6 +378,6 @@ async function makeSplash(out) {
 }
 
 module.exports = {
-  convert, estimate, probe, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
+  convert, estimate, probe, cornerMaskFile, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
   bandPx, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H, DEVICE_FPS, IMAGE_SECONDS, FRAME_DEFAULT, SPLASH,
 };

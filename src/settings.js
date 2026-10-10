@@ -7,6 +7,7 @@ const DEFAULTS = {
     mode: 'band', // 'circle' | 'band' | 'off'
     circle: { cx: 45, cy: 540, r: 45, feather: 0 },
     band: { edge: 'left', px: 92 }, // left | right | top | bottom
+    corners: { on: false, r: 80 }, // rounded corners: black outside a rounded rectangle of radius r (landscape px)
   },
   maxSeconds: 10,
   galleryDir: "", // empty = Documents\CoolerScreen\Gallery
@@ -35,6 +36,7 @@ function sanitize(s = {}) {
   const m = s.mask || {};
   const c = m.circle || {};
   const b = m.band || {};
+  const k = m.corners || {};
   const D = DEFAULTS;
   return {
     mask: {
@@ -49,6 +51,7 @@ function sanitize(s = {}) {
         edge: ['left', 'right', 'top', 'bottom'].includes(b.edge) ? b.edge : D.mask.band.edge,
         px: num(b.px, D.mask.band.px, 0, 1000),
       },
+      corners: { on: k.on === true, r: Math.round(num(k.r, D.mask.corners.r, 0, 300)) },
     },
     maxSeconds: num(s.maxSeconds, D.maxSeconds, 1, 120),
     galleryDir: typeof s.galleryDir === "string" ? s.galleryDir.trim().slice(0, 240) : "",

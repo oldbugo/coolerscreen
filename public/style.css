@@ -118,7 +118,8 @@ button, input, select { font: inherit; color: inherit; }
 .notice.info { background: var(--accent-soft); }
 
 /* screen frame (preview) */
-.screenframe { position: relative; width: 100%; aspect-ratio: 20 / 9; background: #000; border: 2px solid var(--border-strong); border-radius: var(--r-lg);
+/* Small radius on purpose: a large decorative rounding would hide picture corners the screen really shows. */
+.screenframe { position: relative; width: 100%; aspect-ratio: 20 / 9; background: #000; border: 2px solid var(--border-strong); border-radius: var(--r-sm);
   overflow: hidden; touch-action: none; }
 .preview-wrap { max-width: calc(40vh * 20 / 9); margin: 0 auto; }
 .screenframe .media { position: absolute; display: block; max-width: none; user-select: none; -webkit-user-drag: none; }
@@ -126,6 +127,8 @@ button, input, select { font: inherit; color: inherit; }
 .screenframe.pannable { cursor: grab; }
 .screenframe.pannable.dragging { cursor: grabbing; }
 .notch { position: absolute; background: var(--notch); pointer-events: none; }
+.corners { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+.small-frame .corners path { fill: rgba(120,0,0,.8); }
 .notch.circle { border-radius: 50%; }
 .screenframe.outline .notch { outline: 1px dashed rgba(255,255,255,.7); outline-offset: -1px; }
 .notch.edit { background-color: rgba(120,0,0,.8); outline: 1px solid #fff; outline-offset: -1px; }

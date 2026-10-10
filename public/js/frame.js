@@ -56,3 +56,34 @@ export function styleNotch(el, mask) {
   }
   el.hidden = false;
 }
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Path of the area outside a rounded rectangle covering the canvas (even-odd fill), radius r in canvas pixels. */
+export function cornersPath(r) {
+  const R = Math.round(r);
+  return `M0 0H${W}V${H}H0Z M${R} 0H${W - R}A${R} ${R} 0 0 1 ${W} ${R}V${H - R}A${R} ${R} 0 0 1 ${W - R} ${H}` +
+    `H${R}A${R} ${R} 0 0 1 0 ${H - R}V${R}A${R} ${R} 0 0 1 ${R} 0Z`;
+}
+
+/** An <svg> overlay (absolute, full frame) for the rounded-corner mask; update it with styleCorners(). */
+export function makeCornersOverlay() {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', 'corners');
+  const p = document.createElementNS(SVG_NS, 'path');
+  p.setAttribute('fill', '#000');
+  p.setAttribute('fill-rule', 'evenodd');
+  svg.append(p);
+  svg.style.display = 'none';
+  return svg;
+}
+
+/** Same shape as src/convert.js cornerMaskFile(): black outside a rounded rectangle of radius mask.corners.r. */
+export function styleCorners(svg, mask) {
+  const c = mask && mask.corners;
+  const on = !!(c && c.on && Math.round(c.r) > 0);
+  svg.style.display = on ? '' : 'none';
+  if (on) svg.firstChild.setAttribute('d', cornersPath(c.r));
+}

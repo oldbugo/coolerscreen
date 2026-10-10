@@ -135,8 +135,12 @@ function mediaPathV(vid, file) {
   return fs.existsSync(p) ? p : null;
 }
 
-// The notch as it is actually applied (band widths are rounded to the 16 px grid), so equal keys = equal pixels.
+// The screen mask (notch + rounded corners) as it is actually applied (band widths are rounded to the 16 px grid), so equal keys = equal pixels.
 function notchKey(mask) {
+  const k = mask && mask.corners && mask.corners.on && mask.corners.r > 0 ? `|corners:${Math.round(mask.corners.r)}` : '';
+  return notchOnlyKey(mask) + k;
+}
+function notchOnlyKey(mask) {
   if (!mask || mask.mode === 'off') return 'off';
   if (mask.mode === 'band') { const px = bandPx(mask.band); return px ? `band:${mask.band.edge}:${px}` : 'off'; }
   const c = mask.circle;

@@ -1,5 +1,5 @@
 // CoolerScreen UI: Library (originals) | Detail (preview, Tune, Versions) | Activity strip | Settings drawer.
-import { W, H, frameGeometry, fitZoom, bandPx, styleNotch } from './js/frame.js';
+import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, styleCorners } from './js/frame.js';
 import { openDialog } from './js/dialog.js';
 
 // ---------- small helpers ----------
@@ -347,6 +347,7 @@ function buildDetail(d) {
   // preview
   refs.stage = el('div', { class: 'screenframe', tabindex: '0', role: 'group', 'aria-label': 'Preview of the screen. Space plays or pauses.' });
   refs.notch = el('div', { class: 'notch', hidden: true, title: 'Your screen\'s camera hole is here. This area is kept black.' });
+  refs.corners = makeCornersOverlay();
   refs.playBtn = el('button', { class: 'iconbtn', 'aria-label': 'Pause', onclick: togglePlay }, '❚❚');
   refs.time = el('span', { class: 'num' });
   refs.showing = el('span', { class: 'grow' });
@@ -508,8 +509,9 @@ function showPreview(vid, force = false) {
   } else {
     refs.stage.prepend(el('div', { class: 'empty-msg', text: d.assets === 'error' ? 'No preview: this file can\'t be read.' : d.missing ? 'The original file is missing.' : 'Preparing the preview…' }));
   }
-  if (!v && S.app) styleNotch(refs.notch, S.app.mask);
-  refs.stage.append(refs.notch);
+  if (!v && S.app) { styleNotch(refs.notch, liveMask()); styleCorners(refs.corners, liveMask()); }
+  if (v) refs.corners.style.display = 'none';
+  refs.stage.append(refs.notch, refs.corners);
   if (refs.stage.classList.contains('outline')) refs.notch.classList.add('outline');
   refs.stage.classList.toggle('pannable', !v && !!d.canTune);
   refs.backToTune.hidden = !v || !d.canTune;
@@ -909,7 +911,7 @@ function renderVersions(d) {
     if (v.status === 'ready') {
       if (v.tooBig) chips.push(el('span', { class: 'chip danger', text: 'Too big for the screen' }));
       if (v.speed) chips.push(el('span', { class: 'chip warn', text: `Plays too ${v.speed.plays} – re-make`, title: `Made at ${v.speed.fps} frames per second; the screen always plays ${S.app.deviceFps}.` }));
-      if (v.oldNotch) chips.push(el('span', { class: 'chip warn', text: 'Made with an older notch setting' }));
+      if (v.oldNotch) chips.push(el('span', { class: 'chip warn', text: 'Made with older screen settings – re-make', title: 'The notch or rounded-corner setting has changed since this version was made.' }));
     }
     if (v.status === 'error') chips.push(el('span', { class: 'chip danger', text: 'Failed' }));
     const main = el('div', { class: 'vmain' }, el('div', { class: 'vtitle' }, el('b', { text: name }), el('span', { class: 'small muted', text: versionSummary(v) }), chips));
@@ -1193,6 +1195,8 @@ function openDrawer(section) {
 }
 function closeDrawer() {
   $('drawerBack').hidden = true;
+  draftMask = null; // unsaved notch/corner changes are dropped
+  applyLiveMask();
   if (drawerReturn && document.contains(drawerReturn)) drawerReturn.focus();
 }
 $('drawerClose').onclick = closeDrawer;
@@ -1243,11 +1247,21 @@ function formMask() {
     mode: $('nMode').value,
     band: { edge: $('nEdge').value, px: Number($('nPx').value) || 0 },
     circle: { cx: Number($('nCx').value) || 0, cy: Number($('nCy').value) || 0, r: Number($('nR').value) || 0, feather: Number($('nF').value) || 0 },
+    corners: { on: $('nCorners').checked, r: Math.round(Number($('nCrN').value) || 0) },
   };
 }
 function maskToForm(m) {
   $('nMode').value = m.mode; $('nEdge').value = m.band.edge; $('nPx').value = $('nPxR').value = m.band.px;
   $('nCx').value = m.circle.cx; $('nCy').value = m.circle.cy; $('nR').value = m.circle.r; $('nF').value = m.circle.feather;
+  const c = m.corners || { on: false, r: 80 };
+  $('nCorners').checked = !!c.on; $('nCrN').value = $('nCrR').value = c.r;
+}
+// While the Settings drawer is open, the main preview shows the unsaved notch/corner settings too.
+let draftMask = null;
+const liveMask = () => draftMask || (S.app && S.app.mask);
+function applyLiveMask() {
+  if (!refs.notch || S.showing) return;
+  styleNotch(refs.notch, liveMask()); styleCorners(refs.corners, liveMask());
 }
 function drawNotch() {
   const m = formMask();
@@ -1255,9 +1269,18 @@ function drawNotch() {
   $('nCircle').hidden = m.mode !== 'circle';
   styleNotch($('notchShape'), m);
   $('notchShape').classList.add('edit');
+  styleCorners(notchCorners, m);
+  $('nCrRow').hidden = !m.corners.on;
+  draftMask = m;
+  applyLiveMask();
   const eff = bandPx(m.band);
   $('nPxNote').textContent = m.mode === 'band' && eff && eff !== m.band.px ? `Applied as ${eff} px (rounded up to the screen's 16 px compression grid so the black area stays clean).` : '';
 }
+const notchCorners = makeCornersOverlay();
+$('cornersSlot').replaceWith(notchCorners);
+$('nCrR').oninput = () => { $('nCrN').value = $('nCrR').value; drawNotch(); };
+$('nCrN').oninput = () => { $('nCrR').value = $('nCrN').value; drawNotch(); };
+$('nCorners').onchange = drawNotch;
 $('nPxR').oninput = () => { $('nPx').value = $('nPxR').value; drawNotch(); };
 $('nPx').oninput = () => { $('nPxR').value = $('nPx').value; drawNotch(); };
 for (const id of ['nMode', 'nEdge', 'nCx', 'nCy', 'nR', 'nF']) $(id).addEventListener('input', drawNotch);
@@ -1265,8 +1288,9 @@ $('nSave').onclick = async () => {
   try {
     S.app = await api('/api/settings', 'PUT', { mask: formMask() });
     const n = S.app.oldNotchCount || 0;
-    $('nMsg').textContent = 'Saved. New versions use this notch.' + (n ? ` ${n} version${n > 1 ? 's were' : ' was'} made with the old notch. You can make updated copies from each clip's Versions list.` : '');
-    if (refs.notch && !S.showing) styleNotch(refs.notch, S.app.mask);
+    $('nMsg').textContent = 'Saved. New versions use these settings.' + (n ? ` ${n} version${n > 1 ? 's were' : ' was'} made with older settings. You can make updated copies from each clip's Versions list.` : '');
+    draftMask = formMask();
+    applyLiveMask();
     await loadDetail();
   } catch (e) { $('nMsg').textContent = e.message; }
 };

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Rounded corners (Settings > Notch and corners): optional, adjustable radius, live in the previews. Versions made with
+  different notch/corner settings are marked "Made with older screen settings – re-make".
+
 - New window layout: Library on the left; preview, Tune and Versions on the right; screen status and "On screen now" in the
   top bar; one Activity bar for preparing and sending; Settings drawer (screen, notch, Gallery folder, advanced, about).
 - Adding a clip no longer converts it. The preview plays immediately and matches the result (part, size and position,
