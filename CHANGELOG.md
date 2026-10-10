@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- New window layout: Library on the left; preview, Tune and Versions on the right; screen status and "On screen now" in the
+  top bar; one Activity bar for preparing and sending; Settings drawer (screen, notch, Gallery folder, advanced, about).
+- Adding a clip no longer converts it. The preview plays immediately and matches the result (part, size and position,
+  notch). New framing controls: zoom, left-right, up-down, drag to move, fill the screen or show the whole picture.
+- Several versions per clip ("Save as version"), each sendable; clip ids are permanent (renames keep versions). Libraries
+  from 1.1 are migrated automatically.
+- Every version is made at 18 fps, the rate the screen actually plays at (it ignores file timing). Auto quality only lowers
+  JPEG quality and says how long the part can be if it can't fit. The fps control is gone. Older versions made at other
+  rates are marked "plays too fast/slow – re-make".
+- The intro clip is no longer a user feature: the start-up slot holds a 1.5 s "CoolerScreen" logo (sent only when needed).
+- Delete moves the file to the Recycle Bin and deletes its versions (in-app confirmation). Files that vanish from the
+  Gallery folder are kept as "File missing" with their versions; after 30 days the app offers to delete those versions.
+- The screen is checked once at launch (status pill + banners with one action each). Closing the window during an upload
+  asks first. In-app dialogs replace all browser confirm/prompt boxes; keyboard and screen-reader basics.
+- CLI: `list` shows clips and versions; new `add`, `make`, `send <version>`; `upload` does all three.
+
 ## 1.1.0 - 2026-10-10
 
 - Desktop window (Electron) instead of a browser + .bat: `CoolerScreen.exe` is the unmodified official Electron runtime

@@ -1,4 +1,5 @@
-// Media -> device format. Landscape 2400x1080 (cover crop) -> mask -> rotate 90 deg CW -> 1080x2400 MJPEG mp4.
+// Media -> device format. Landscape 2400x1080 (framing, cover by default) -> notch mask -> rotate 90 deg CW ->
+// 1080x2400 MJPEG mp4 at the screen's fixed playback rate.
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -8,7 +9,10 @@ if (ffmpeg && ffmpeg.includes('app.asar')) ffmpeg = ffmpeg.replace('app.asar', '
 
 const W = 2400, H = 1080;
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tif', '.tiff']);
-const FPS_LADDER = [30, 25, 20, 15, 12, 10];
+// Measured on the SC70 (2026-10-10, two runs: 17.6 and 18.0 fps): the screen ignores the file's timing and always
+// plays at about 18 frames per second, so every version is encoded at exactly this rate to play at real speed.
+const DEVICE_FPS = 18;
+const IMAGE_SECONDS = 3; // a still image becomes a short clip of this length
 
 function runFfmpeg(args, { onTime } = {}) {
   return new Promise((resolve, reject) => {
@@ -45,10 +49,17 @@ function probe(file) {
     p.on('close', () => {
       const d = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(err);
       const v = /Video:.*?(\d{2,5})x(\d{2,5})/.exec(err);
+      const c = /Video:\s*([a-z0-9_]+)/i.exec(err);
+      const fr = /Video:.*?(\d+(?:\.\d+)?) fps/.exec(err);
+      const rot = /rotat(?:e|ion)[^\d-]*(-?\d+(?:\.\d+)?)/i.exec(err);
+      let width = v ? +v[1] : null, height = v ? +v[2] : null;
+      // Phone videos store a rotation; ffmpeg (and the browser) apply it, so report the displayed size.
+      if (rot && Math.abs(Math.round(+rot[1])) % 180 === 90) [width, height] = [height, width];
       resolve({
         duration: d ? +d[1] * 3600 + +d[2] * 60 + +d[3] : null,
-        width: v ? +v[1] : null,
-        height: v ? +v[2] : null,
+        width, height,
+        fps: fr ? +fr[1] : null,
+        codec: c ? c[1].toLowerCase() : null,
         hasVideo: /Video:/.test(err),
         isImage: IMAGE_EXT.has(path.extname(file).toLowerCase()),
       });
@@ -95,20 +106,43 @@ function maskGraph(mask) {
     `geq=${ge('r')}:${ge('g')}:${ge('b')},format=yuv420p[c];[a][c]overlay=${x0}:${y0},format=yuv420p[m]`;
 }
 
+// Framing of the source inside the 2400x1080 screen. zoom is relative to "cover" (1 = fills the screen exactly,
+// <1 leaves black bars, >1 crops more); x/y (0..1) align the picture: 0 = its left/top edge on the screen's
+// left/top edge, 0.5 = centred, 1 = right/bottom edges aligned. public/js/frame.js mirrors this arithmetic.
+const FRAME_DEFAULT = { zoom: 1, x: 0.5, y: 0.5 };
+function normFrame(f) {
+  f = f || {};
+  const n = (v, d, lo, hi) => (v !== null && v !== '' && Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Number(v))) : d);
+  return {
+    zoom: Math.round(n(f.zoom, 1, 0.2, 4) * 1000) / 1000,
+    x: Math.round(n(f.x, 0.5, 0, 1) * 1000) / 1000,
+    y: Math.round(n(f.y, 0.5, 0, 1) * 1000) / 1000,
+  };
+}
+const isDefaultFrame = f => f.zoom === 1 && f.x === 0.5 && f.y === 0.5;
+
+function frameGraph(frame) {
+  const f = normFrame(frame);
+  if (isDefaultFrame(f)) return `scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,crop=${W}:${H}`;
+  const S = `${f.zoom}*max(${W}/iw\\,${H}/ih)`;
+  return `scale=w='2*trunc(iw*${S}/2)':h='2*trunc(ih*${S}/2)':flags=lanczos,` +
+    `pad=w='max(iw\\,${W})':h='max(ih\\,${H})':x='2*trunc((ow-iw)*${f.x}/2)':y='2*trunc((oh-ih)*${f.y}/2)':color=black,` +
+    `crop=w=${W}:h=${H}:x='2*trunc((iw-${W})*${f.x}/2)':y='2*trunc((ih-${H})*${f.y}/2)'`;
+}
+
 function inputArgs(file, { isImage, fps, start, length }) {
   if (isImage) return ['-loop', '1', '-framerate', String(fps), '-t', String(length), '-i', file];
   return ['-ss', String(start), '-t', String(length), '-i', file];
 }
 
-function baseGraph(fps) {
-  return `[0:v]fps=${fps},scale=${W}:${H}:force_original_aspect_ratio=increase:flags=lanczos,` +
-    `crop=${W}:${H},setsar=1,format=yuv420p[base]`;
+function baseGraph(fps, frame) {
+  return `[0:v]fps=${fps},${frameGraph(frame)},setsar=1,format=yuv420p[base]`;
 }
 
 function deviceArgs(file, src, o, q, out) {
-  const g = `${baseGraph(o.fps)};${maskGraph(o.mask)};[m]transpose=1,format=yuvj420p[out]`;
+  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};[m]transpose=1,format=yuvj420p[out]`;
   return [...inputArgs(file, { ...src, ...o }), '-filter_complex', g, '-map', '[out]', '-an',
-    '-c:v', 'mjpeg', '-q:v', String(q), '-movflags', '+faststart', '-y', out];
+    '-c:v', 'mjpeg', '-q:v', String(q), '-r', String(o.fps), '-movflags', '+faststart', '-y', out];
 }
 
 async function encodeDevice(file, src, o, q, out, onTime) {
@@ -116,18 +150,49 @@ async function encodeDevice(file, src, o, q, out, onTime) {
   return fs.statSync(out).size;
 }
 
-// Landscape H.264 preview (mask applied), plus thumbnail and an unmasked frame for the settings canvas.
+// Landscape H.264 preview of a version (framing + mask applied) and its thumbnail.
 async function makePreview(file, src, o, dir, onTime) {
-  const g = `${baseGraph(o.fps)};${maskGraph(o.mask)};[m]scale=1200:540:flags=bicubic,format=yuv420p[out]`;
+  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};[m]scale=1200:540:flags=bicubic,format=yuv420p[out]`;
   await runFfmpeg([...inputArgs(file, { ...src, ...o }), '-filter_complex', g, '-map', '[out]', '-an',
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-movflags', '+faststart', '-y',
     path.join(dir, 'preview.mp4')], { onTime });
   const seek = String(Math.min(0.5, Math.max(0, o.length / 2)));
   await runFfmpeg(['-ss', seek, '-i', path.join(dir, 'preview.mp4'), '-frames:v', '1',
     '-vf', 'scale=400:-2', '-q:v', '4', '-y', path.join(dir, 'thumb.jpg')]);
-  const g2 = `${baseGraph(o.fps)};[base]scale=1200:540,format=yuv420p[out]`;
-  await runFfmpeg([...inputArgs(file, { ...src, ...o, length: Math.min(o.length, 1) }), '-filter_complex', g2,
-    '-map', '[out]', '-frames:v', '1', '-q:v', '4', '-y', path.join(dir, 'frame.jpg')]);
+}
+
+// Browser-playable formats shown without a proxy.
+const DIRECT_EXT = new Set(['.mp4', '.m4v', '.webm']);
+const DIRECT_CODECS = new Set(['h264', 'vp8', 'vp9', 'av1']);
+const DIRECT_IMAGE = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const canPlayDirect = (file, info) => info.isImage
+  ? DIRECT_IMAGE.has(path.extname(file).toLowerCase())
+  : DIRECT_EXT.has(path.extname(file).toLowerCase()) && DIRECT_CODECS.has(info.codec);
+const PROXY_MAX_SECONDS = 600;
+
+/**
+ * App-only assets of an original (never sent to the screen): thumb.jpg (20:9 cover), frame.jpg (unmasked 1200x540
+ * cover, for the notch editor) and, when the browser can't show the source itself, a proxy (proxy.mp4 / proxy.jpg)
+ * that keeps the source's aspect ratio and timing so trim and framing in the browser match the converter.
+ */
+async function makeSourceAssets(file, dir, info, onTime) {
+  fs.mkdirSync(dir, { recursive: true });
+  const seekArgs = info.isImage || !info.duration ? [] : ['-ss', String(Math.min(info.duration / 2, 1))];
+  const cover = (w, h) => `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1`;
+  await runFfmpeg([...seekArgs, '-i', file, '-frames:v', '1', '-vf', cover(240, 108), '-q:v', '4', '-y', path.join(dir, 'thumb.jpg')]);
+  await runFfmpeg([...seekArgs, '-i', file, '-frames:v', '1', '-vf', cover(1200, 540), '-q:v', '4', '-y', path.join(dir, 'frame.jpg')]);
+  if (canPlayDirect(file, info)) return { proxy: null };
+  if (info.isImage) {
+    await runFfmpeg(['-i', file, '-frames:v', '1', '-vf', "scale=w='min(2400,iw)':h='min(2400,ih)':force_original_aspect_ratio=decrease",
+      '-q:v', '3', '-y', path.join(dir, 'proxy.jpg')]);
+    return { proxy: 'proxy.jpg' };
+  }
+  const tmp = path.join(dir, 'proxy.tmp.mp4');
+  await runFfmpeg(['-i', file, '-t', String(PROXY_MAX_SECONDS), '-an', '-vf',
+    "scale=w='min(1600,iw)':h='min(1600,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p",
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-movflags', '+faststart', '-y', tmp], { onTime });
+  fs.renameSync(tmp, path.join(dir, 'proxy.mp4'));
+  return { proxy: 'proxy.mp4' };
 }
 
 // Friendly quality 1-100 (higher = better) <-> ffmpeg mjpeg -q:v 31..3
@@ -140,77 +205,77 @@ async function prepare(file, dir, opts) {
   const info = await probe(file);
   if (!info.hasVideo) throw new Error('No video/image stream found in this file.');
   const isImage = info.isImage;
-  const maxFps = Math.min(30, Math.max(10, Math.round(opts.fps || 20)));
-  const startFps = isImage ? Math.min(maxFps, 10) : maxFps;
   const start = isImage ? 0 : Math.max(0, Number(opts.start) || 0);
-  const avail = info.duration != null ? Math.max(0.1, info.duration - start) : Infinity;
+  const avail = info.duration != null && !isImage ? Math.max(0.1, info.duration - start) : Infinity;
   let length = Number(opts.length);
-  if (!(length > 0)) length = isImage ? 3 : Math.min(opts.maxSeconds || 10, avail);
+  if (!(length > 0)) length = isImage ? IMAGE_SECONDS : Math.min(opts.maxSeconds || 10, avail);
   length = Math.max(0.1, Math.min(length, avail));
   length = Math.round(length * 100) / 100;
   if (!Number.isFinite(length)) length = 10;
   const manual = opts.quality != null && opts.quality !== 'auto';
   fs.mkdirSync(dir, { recursive: true });
+  const frame = normFrame(opts.frame);
   return {
-    file, dir, info, isImage, src: { isImage }, startFps, start, length, manual,
+    file, dir, info, isImage, src: { isImage }, fps: DEVICE_FPS, start, length, manual,
     q: manual ? qFromQuality(opts.quality) : null,
-    budget: opts.budgetBytes, mask: opts.mask,
-    base: { start, length, mask: opts.mask },
+    budget: opts.budgetBytes,
+    base: { start, length, mask: opts.mask, frame, fps: DEVICE_FPS },
   };
 }
 
 // Estimated full-length size from a short sample encode.
-async function sampleEstimate(c, fps, q) {
+async function sampleEstimate(c, q) {
   const sLen = Math.min(2, c.length);
   const sStart = c.start + Math.max(0, c.length / 2 - sLen / 2);
   const out = path.join(c.dir, `sample.${rnd()}.tmp.mp4`);
   try {
-    const bytes = await encodeDevice(c.file, c.src, { ...c.base, fps, start: c.isImage ? 0 : sStart, length: sLen }, q, out);
+    const bytes = await encodeDevice(c.file, c.src, { ...c.base, start: c.isImage ? 0 : sStart, length: sLen }, q, out);
     return (bytes * c.length) / sLen;
   } finally { try { fs.unlinkSync(out); } catch {} }
 }
 
-function fpsLadder(startFps) {
-  const l = FPS_LADDER.filter(f => f <= startFps);
-  if (!l.includes(startFps)) l.push(startFps);
-  return l.sort((a, b) => b - a);
+// Longest length (seconds, rounded down to 0.5 s) that should fit at the lowest quality, from the q=31 estimate.
+function maxFitLength(c, bytesAtWorst) {
+  const perSec = bytesAtWorst / c.length;
+  if (!(perSec > 0)) return null;
+  return Math.max(0.5, Math.floor(((c.budget * 0.94) / perSec) * 2) / 2);
 }
 
-// Smallest q (best quality) whose estimate fits, or null if even q=31 does not.
-async function findQ(c, fps) {
-  if ((await sampleEstimate(c, fps, 31)) > c.budget * 1.15) return null;
+// Smallest q (best quality) whose estimate fits, or null if even q=31 does not; also the q=31 estimate.
+async function findQ(c) {
+  const worst = await sampleEstimate(c, 31);
+  if (worst > c.budget * 1.15) return { q: null, worst };
   let lo = 3, hi = 31;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if ((await sampleEstimate(c, fps, mid)) <= c.budget * 0.96) hi = mid; else lo = mid + 1;
+    if ((await sampleEstimate(c, mid)) <= c.budget * 0.96) hi = mid; else lo = mid + 1;
   }
-  return lo;
+  return { q: lo, worst };
 }
 
 /** Predict the result without writing output. opts as convert(). */
 async function estimate(file, dir, opts) {
   const c = await prepare(file, dir, opts);
-  const common = { length: c.length, start: c.start, budget: c.budget, duration: c.info.duration };
+  const common = { length: c.length, start: c.start, budget: c.budget, duration: c.info.duration, fps: c.fps };
   if (c.manual) {
-    const bytes = await sampleEstimate(c, c.startFps, c.q);
-    return { ...common, mode: 'manual', fps: c.startFps, q: c.q, bytes: Math.round(bytes), fits: bytes <= c.budget };
+    const bytes = await sampleEstimate(c, c.q);
+    const r = { ...common, mode: 'manual', q: c.q, bytes: Math.round(bytes), fits: bytes <= c.budget };
+    if (!r.fits) r.maxFitLength = maxFitLength(c, bytes); // at the chosen quality
+    return r;
   }
-  for (const fps of fpsLadder(c.startFps)) {
-    const q = await findQ(c, fps);
-    if (q != null) {
-      const bytes = await sampleEstimate(c, fps, q);
-      return { ...common, mode: 'auto', fps, q, bytes: Math.round(bytes), fits: true };
-    }
+  const { q, worst } = await findQ(c);
+  if (q != null) {
+    const bytes = await sampleEstimate(c, q);
+    return { ...common, mode: 'auto', q, bytes: Math.round(bytes), fits: true };
   }
-  const fps = Math.min(10, c.startFps);
-  const bytes = await sampleEstimate(c, fps, 31);
-  return { ...common, mode: 'auto', fps, q: 31, bytes: Math.round(bytes), fits: false };
+  return { ...common, mode: 'auto', q: 31, bytes: Math.round(worst), fits: false, maxFitLength: maxFitLength(c, worst) };
 }
 
 /**
- * Convert `file` into dir/device.mp4 (+ preview/thumb).
- * opts: { start, length, fps, quality: 'auto'|1..100, mask, budgetBytes, maxSeconds, onProgress(frac, msg) }
- * Auto: fits budget (throws if impossible). Manual: keeps the file even if over budget (tooBig: true).
+ * Convert `file` into dir/device.mp4 (+ preview.mp4, thumb.jpg), always at DEVICE_FPS.
+ * opts: { start, length, quality: 'auto'|1..100, frame, mask, budgetBytes, maxSeconds, onProgress(frac, msg) }
+ * Auto lowers only the JPEG quality until it fits (error code 'tooLong' with maxFitLength if impossible).
+ * Manual keeps the file even if over budget (tooBig: true).
  */
 async function convert(file, dir, opts) {
   const report = opts.onProgress || (() => {});
@@ -218,48 +283,75 @@ async function convert(file, dir, opts) {
   const out = path.join(dir, 'device.mp4');
   const tmp = path.join(dir, 'device.tmp.mp4');
 
-  report(0.02, 'Rendering preview');
-  await makePreview(file, c.src, { ...c.base, fps: c.startFps }, dir,
-    t => report(0.02 + 0.2 * Math.min(1, t / c.length), 'Rendering preview'));
+  report(0.02, 'Making the preview');
+  await makePreview(file, c.src, c.base, dir, t => report(0.02 + 0.2 * Math.min(1, t / c.length), 'Making the preview'));
 
-  let result = null;
+  let result = null, worst = null;
   try {
     if (c.manual) {
-      report(0.3, `Encoding ${c.startFps} fps, q=${c.q}`);
-      const size = await encodeDevice(file, c.src, { ...c.base, fps: c.startFps }, c.q, tmp,
-        t => report(0.3 + 0.68 * Math.min(1, t / c.length), `Encoding ${c.startFps} fps, q=${c.q}`));
+      const size = await encodeDevice(file, c.src, c.base, c.q, tmp, t => report(0.3 + 0.68 * Math.min(1, t / c.length), 'Preparing'));
       fs.renameSync(tmp, out);
-      result = { size, fps: c.startFps, q: c.q, tooBig: size > c.budget };
+      result = { size, q: c.q, tooBig: size > c.budget };
     } else {
-      const ladder = fpsLadder(c.startFps);
-      for (let li = 0; li < ladder.length && !result; li++) {
-        const fps = ladder[li];
-        report(0.25 + 0.03 * li, `Estimating size at ${fps} fps`);
-        let q = await findQ(c, fps);
-        if (q == null) continue;
-        for (;;) {
-          report(0.4, `Encoding ${fps} fps, q=${q}`);
-          const size = await encodeDevice(file, c.src, { ...c.base, fps }, q, tmp,
-            t => report(0.4 + 0.58 * Math.min(1, t / c.length), `Encoding ${fps} fps, q=${q}`));
-          if (size <= c.budget) { fs.renameSync(tmp, out); result = { size, fps, q, tooBig: false }; break; }
-          if (q >= 31) break;
-          q++;
-        }
+      report(0.25, 'Finding the best quality that fits');
+      const f = await findQ(c);
+      worst = f.worst;
+      let q = f.q;
+      while (q != null) {
+        const size = await encodeDevice(file, c.src, c.base, q, tmp, t => report(0.4 + 0.58 * Math.min(1, t / c.length), 'Preparing'));
+        if (size <= c.budget) { fs.renameSync(tmp, out); result = { size, q, tooBig: false }; break; }
+        if (q >= 31) break;
+        q++;
       }
     }
   } finally {
     try { fs.unlinkSync(tmp); } catch {}
   }
-  if (!result) throw new Error('Could not fit this clip into the available space even at 10 fps and lowest quality. Try a shorter length, or free the other slot.');
+  if (!result) {
+    const n = worst != null ? maxFitLength(c, worst) : null;
+    const e = new Error('This part is too long to fit even at the lowest quality.' + (n ? ` Try about ${n} s or less.` : ' Try a shorter length.'));
+    e.code = 'tooLong'; e.maxFitLength = n;
+    throw e;
+  }
   report(1, 'Done');
-  return { ...result, quality: qualityFromQ(result.q), start: c.start, length: c.length, duration: c.info.duration, isImage: c.isImage };
+  return { ...result, fps: c.fps, quality: qualityFromQ(result.q), start: c.start, length: c.length, frame: c.base.frame,
+    duration: c.info.duration, isImage: c.isImage };
 }
 
-// Tiny 1-frame black 1080x2400 MJPEG mp4, used to "clear" a slot.
+// Tiny 1-frame black 1080x2400 MJPEG mp4 (CLI "clear").
 async function makeBlank(out) {
   await runFfmpeg(['-f', 'lavfi', '-i', 'color=black:s=1080x2400:r=1', '-frames:v', '1', '-c:v', 'mjpeg',
     '-pix_fmt', 'yuvj420p', '-q:v', '31', '-movflags', '+faststart', '-y', out]);
   return fs.statSync(out).size;
 }
 
-module.exports = { convert, estimate, probe, makeBlank, maskGraph, bandPx, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H };
+// The built-in intro (startup slot): a short boot splash, black with a small centred "CoolerScreen" wordmark that
+// fades in and out. Centred on the 2400x1080 canvas, far from the notch band on the left edge.
+const SPLASH = { version: 1, seconds: 1.5, text: 'CoolerScreen' };
+function splashFont() {
+  const dir = path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts');
+  for (const f of ['segoeuisl.ttf', 'segoeui.ttf', 'arial.ttf']) {
+    const p = path.join(dir, f);
+    if (fs.existsSync(p)) return p;
+  }
+  return null; // let ffmpeg/fontconfig pick a default
+}
+
+async function makeSplash(out) {
+  const font = splashFont();
+  // drawtext option escaping: the font path's drive colon and backslashes must be escaped.
+  const fontOpt = font ? `fontfile='${font.replace(/\\/g, '/').replace(/:/g, '\\:')}':` : '';
+  const T = SPLASH.seconds, fade = 0.4;
+  const alpha = `if(lt(t\\,${fade})\\,t/${fade}\\,if(gt(t\\,${T - fade})\\,max(0\\,(${T}-t)/${fade})\\,1))`;
+  const g = `color=black:s=${W}x${H}:r=${DEVICE_FPS}:d=${T},` +
+    `drawtext=${fontOpt}text='${SPLASH.text}':fontsize=84:fontcolor=0xE6E8EC:alpha='${alpha}':x=(w-text_w)/2:y=(h-text_h)/2,` +
+    'transpose=1,format=yuvj420p';
+  await runFfmpeg(['-f', 'lavfi', '-i', g, '-an', '-c:v', 'mjpeg', '-q:v', '8', '-r', String(DEVICE_FPS),
+    '-movflags', '+faststart', '-y', out]);
+  return fs.statSync(out).size;
+}
+
+module.exports = {
+  convert, estimate, probe, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
+  bandPx, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H, DEVICE_FPS, IMAGE_SECONDS, FRAME_DEFAULT, SPLASH,
+};

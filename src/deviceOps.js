@@ -2,14 +2,37 @@
 // Prefers WinUSB (no watchdog); falls back to the COM port with a warning.
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Test hook: COOLERSCREEN_FAKE_DEVICE=1 (or winusb | serial | none | failedusb | busy) never touches USB, the COM port or
+// PowerShell; it simulates a screen in that state. COOLERSCREEN_FAKE_FAIL=1 makes fake uploads fail halfway.
+const FAKE_ENV = process.env.COOLERSCREEN_FAKE_DEVICE;
+const FAKE = FAKE_ENV ? (FAKE_ENV === '1' ? 'winusb' : FAKE_ENV.toLowerCase()) : null;
+const fake = { transport: FAKE };
+function fakeError() {
+  const t = fake.transport;
+  let e = null;
+  if (t === 'none') { e = new Error('Screen not found. Check the USB cable and that the cooler is powered.'); e.code = 'notFound'; }
+  if (t === 'failedusb') { e = new Error('Windows could not connect to the screen at startup (a known quirk). Click Reconnect (needs one administrator approval).'); e.failedUsb = true; e.code = 'failedUsb'; }
+  if (t === 'busy') { e = new Error('Could not open the screen. Close "LOVINGCOOL MONITOR" (and any other program using the screen), then try again.'); e.code = 'busy'; }
+  return e;
+}
+
 function friendly(e) {
   if (e && e.failedUsb) return e;
   const m = (e && e.message) || String(e);
   if (/not found/i.test(m)) {
-    return new Error('Screen not found. Check the USB cable and that the cooler is powered.');
+    const n = new Error('Screen not found. Check the USB cable and that the cooler is powered.');
+    n.code = 'notFound';
+    return n;
   }
   if (/access denied|busy|in use|EBUSY|EACCES|cannot open|cannot claim|Opening/i.test(m)) {
-    return new Error('Could not open the screen. Close "LOVINGCOOL MONITOR" (and any other program using the screen), then try again. (' + m + ')');
+    const n = new Error('Could not open the screen. Close "LOVINGCOOL MONITOR" (and any other program using the screen), then try again. (' + m + ')');
+    n.code = 'busy';
+    return n;
+  }
+  if (/timed? ?out|stalled/i.test(m)) {
+    const n = new Error('The screen stopped responding. Press Reconnect (or unplug and replug its USB cable), then send again. (' + m + ')');
+    n.code = 'stalled';
+    return n;
   }
   return e instanceof Error ? e : new Error(m);
 }
@@ -18,6 +41,7 @@ const SERIAL_WARNING = 'The screen is still on the standard serial (COM) driver,
 
 /** Returns { screen, transport: 'winusb'|'serial' }. */
 async function openAny() {
+  if (FAKE) throw fakeError() || new Error('Fake device: no real screen access.');
   let usbErr;
   try {
     const { UsbScreen } = require('./usbScreen');
@@ -37,6 +61,11 @@ async function openAny() {
 
 /** What is reachable right now, without sending anything to the screen. */
 async function state() {
+  if (FAKE) {
+    if (fake.transport === 'winusb') return { transport: 'winusb', needsSetup: false, fake: true };
+    if (fake.transport === 'serial') return { transport: 'serial', needsSetup: true, warning: SERIAL_WARNING, fake: true };
+    return { transport: 'none', needsSetup: false, failedUsb: fake.transport === 'failedusb', fake: true };
+  }
   try {
     const { probe } = require('./usbScreen');
     if ((await probe()) === 'winusb') return { transport: 'winusb', needsSetup: false };
@@ -50,6 +79,7 @@ async function state() {
 
 // Windows sometimes fails to enumerate the screen at boot: "Unknown USB Device (Device Descriptor Request Failed)".
 function failedUsbPresent() {
+  if (FAKE) return Promise.resolve(fake.transport === 'failedusb');
   if (process.platform !== 'win32') return Promise.resolve(false);
   return new Promise(resolve => {
     const cmd = "@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\\\VID_0000&PID_000' }).Count";
@@ -59,6 +89,14 @@ function failedUsbPresent() {
 }
 
 async function checkScreen() {
+  if (FAKE) {
+    await sleep(600);
+    const err = fakeError();
+    if (err) throw err;
+    const transport = fake.transport === 'serial' ? 'serial' : 'winusb';
+    return { model: 'D215-NOR-JD9365-6.67inch-hor (fake)', version: '3.6', _transport: transport, _needsSetup: transport === 'serial',
+      _warning: transport === 'serial' ? SERIAL_WARNING : undefined, _fake: true };
+  }
   const { screen, transport } = await openAny();
   try {
     const info = await screen.info();
@@ -83,9 +121,22 @@ async function openRetry(seconds) {
  * onProgress(0..1 overall, text)
  */
 async function sendFiles(items, onProgress, opts = {}) {
-  if (process.env.COOLERSCREEN_FAKE_DEVICE) { // test hook: pretend to upload for 10 s, never touch USB
-    for (let i = 1; i <= 10; i++) { onProgress && onProgress(i / 10, 'Uploading (fake device)'); await sleep(1000); }
-    return { ok: true, transport: 'fake' };
+  if (FAKE) { // test hook: pretend to upload (about 10 s for the loop clip), never touch USB
+    const err = fakeError();
+    if (err) throw err;
+    const total = items.length + (opts.playLoop ? 0.1 : 0);
+    for (let i = 0; i < items.length; i++) {
+      onProgress && onProgress(i / total, i === 0 ? 'Connecting to screen' : 'Waiting for screen to come back');
+      await sleep(500);
+      const steps = items[i].slot === 'standby' ? 20 : 4;
+      for (let k = 1; k <= steps; k++) {
+        if (process.env.COOLERSCREEN_FAKE_FAIL && items[i].slot === 'standby' && k > steps / 2) throw friendly(new Error('USB write timed out after 20 s (fake)'));
+        onProgress && onProgress((i + k / steps) / total, 'Uploading ' + (items[i].slot === 'standby' ? 'loop' : 'intro') + ' clip');
+        await sleep(500);
+      }
+    }
+    if (opts.playLoop) { onProgress && onProgress(items.length / total, 'Starting playback'); await sleep(500); }
+    return { ok: true, transport: 'fake', serialWarning: fake.transport === 'serial' ? SERIAL_WARNING : undefined };
   }
   let warning, transport;
   const total = items.length + (opts.playLoop ? 0.1 : 0);
@@ -121,4 +172,4 @@ async function sendFiles(items, onProgress, opts = {}) {
   return { ok: true, warning, transport, serialWarning: transport === 'serial' ? SERIAL_WARNING : undefined };
 }
 
-module.exports = { failedUsbPresent, checkScreen, sendFiles, state, openAny, openRetry, SERIAL_WARNING };
+module.exports = { FAKE, fake, failedUsbPresent, checkScreen, sendFiles, state, openAny, openRetry, SERIAL_WARNING };

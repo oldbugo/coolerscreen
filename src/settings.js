@@ -8,12 +8,12 @@ const DEFAULTS = {
     circle: { cx: 45, cy: 540, r: 45, feather: 0 },
     band: { edge: 'left', px: 92 }, // left | right | top | bottom
   },
-  fps: 20,
   maxSeconds: 10,
   galleryDir: "", // empty = Documents\CoolerScreen\Gallery
-  quality: "auto", // "auto" or 1-100
-  totalBudgetMB: 9.5, // shared by startup + standby
-  slots: { startup: null, standby: null }, // last sent: { name, size, at }
+  totalBudgetMB: 9.5, // shared by startup (intro) + standby (loop)
+  uploadRate: null, // bytes per second measured on the last upload (for time estimates)
+  // What this app last wrote to each slot: { name, size, at, originalId, versionId, label, splash, incomplete }
+  slots: { startup: null, standby: null },
 };
 
 const num = (v, d, lo, hi) => {
@@ -21,10 +21,14 @@ const num = (v, d, lo, hi) => {
   if (!Number.isFinite(v)) return d;
   return Math.min(hi, Math.max(lo, v));
 };
+const str = (v, n = 80) => (typeof v === 'string' && v ? v.slice(0, n) : undefined);
 
 function slot(v) {
   if (!v || !Number.isFinite(Number(v.size)) || v.size < 0) return null;
-  return { name: String(v.name || "").slice(0, 80), size: Number(v.size), at: String(v.at || "") };
+  const r = { name: String(v.name || "").slice(0, 80), size: Number(v.size), at: String(v.at || "") };
+  for (const k of ['originalId', 'versionId', 'label', 'splash']) if (str(v[k])) r[k] = str(v[k]);
+  if (v.incomplete) r.incomplete = true;
+  return r;
 }
 
 function sanitize(s = {}) {
@@ -46,11 +50,10 @@ function sanitize(s = {}) {
         px: num(b.px, D.mask.band.px, 0, 1000),
       },
     },
-    fps: Math.round(num(s.fps, D.fps, 5, 30)),
     maxSeconds: num(s.maxSeconds, D.maxSeconds, 1, 120),
     galleryDir: typeof s.galleryDir === "string" ? s.galleryDir.trim().slice(0, 240) : "",
-    quality: s.quality === "auto" || s.quality == null ? "auto" : Math.round(num(s.quality, 90, 1, 100)),
     totalBudgetMB: num(s.totalBudgetMB, D.totalBudgetMB, 1, 10),
+    uploadRate: s.uploadRate == null ? null : num(s.uploadRate, null, 5000, 5e6),
     slots: { startup: slot(s.slots && s.slots.startup), standby: slot(s.slots && s.slots.standby) },
   };
 }
@@ -72,8 +75,16 @@ function save(s) {
 
 function recordSlot(slotName, v) {
   const s = load();
-  s.slots[slotName] = v ? { name: v.name, size: v.size, at: new Date().toISOString() } : null;
+  s.slots[slotName] = v ? { ...v, at: new Date().toISOString() } : null;
   return save(s);
 }
 
-module.exports = { recordSlot, load, save, sanitize, DEFAULTS };
+/** Change fields of the slot record without touching the others (used by migration and deletes). */
+function patchSlot(slotName, patch) {
+  const s = load();
+  if (!s.slots[slotName]) return s;
+  s.slots[slotName] = { ...s.slots[slotName], ...patch };
+  return save(s);
+}
+
+module.exports = { recordSlot, patchSlot, load, save, sanitize, DEFAULTS };

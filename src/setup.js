@@ -10,6 +10,12 @@ const SCRIPTS = path.join(__dirname, '..', 'scripts');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function runElevated(script) {
+  if (deviceOps.FAKE) { // test hook: never elevate or change drivers; just switch the simulated state
+    return sleep(1500).then(() => {
+      deviceOps.fake.transport = script === 'restore-serial.ps1' ? 'serial' : 'winusb';
+      return 'RESULT: OK (fake)';
+    });
+  }
   if (process.platform !== 'win32') return Promise.reject(new Error('Driver setup is only needed (and supported) on Windows.'));
   const file = path.join(SCRIPTS, script);
   try { fs.rmSync(LOG, { force: true }); } catch {}
@@ -48,6 +54,7 @@ async function setupWinUsb(onProgress = () => {}) {
     throw new Error(`Driver was installed but the screen is not reachable over WinUSB yet. Unplug and replug the screen's USB cable and try "Check screen". (log: ${LOG})`);
   }
   onProgress(0.85, 'Verifying (restarting the screen)');
+  if (deviceOps.FAKE) { onProgress(1, 'Done'); return { already: false }; }
   const { screen } = await deviceOps.openAny();
   try { await screen.info(); await screen.cmd(0x01, [], { wait: false }); await sleep(500); } finally { await screen.close(); }
   onProgress(1, 'Done');

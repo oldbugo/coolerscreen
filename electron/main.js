@@ -1,5 +1,5 @@
 // Desktop window around the local server. Nothing keeps running after the window is closed.
-const { app, BrowserWindow, shell, Menu } = require('electron');
+const { app, BrowserWindow, shell, Menu, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -14,7 +14,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(null);
-    const { start } = require('../src/server');
+    const { start, uploading } = require('../src/server');
     const started = await start({ open: false, port: 0 });
     server = started.server;
     const url = started.url;
@@ -31,11 +31,12 @@ if (!app.requestSingleInstanceLock()) {
     win.webContents.on('did-finish-load', async () => {
       if (DEBUG_READY) {
         let native = '';
-        try { const usb = require('usb'); native += 'usb(' + usb.getDeviceList().length + ' devices) '; } catch (e) { native += 'usb FAILED ' + e.message + ' '; }
+        // Only checks that the native module loads; with the fake device it does not even enumerate USB.
+        try { const usb = require('usb'); native += process.env.COOLERSCREEN_FAKE_DEVICE ? 'usb loaded ' : 'usb(' + usb.getDeviceList().length + ' devices) '; } catch (e) { native += 'usb FAILED ' + e.message + ' '; }
         try { require('@serialport/bindings-cpp'); native += 'serialport ok '; } catch (e) { native += 'serialport FAILED ' + e.message + ' '; }
         try { native += 'ffmpeg=' + require('ffmpeg-static') + ' exists=' + fs.existsSync(require('ffmpeg-static')); } catch (e) { native += 'ffmpeg FAILED ' + e.message; }
         let http = '';
-        try { http = 'http=' + (await fetch(url)).status + ' slots=' + (await fetch(url + 'api/slots')).status + ' title=' + win.getTitle() + ' exe=' + process.execPath; } catch (e) { http = 'http FAILED ' + e.message; }
+        try { http = 'http=' + (await fetch(url)).status + ' state=' + (await fetch(url + 'api/state')).status + ' title=' + win.getTitle() + ' exe=' + process.execPath; } catch (e) { http = 'http FAILED ' + e.message; }
         fs.writeFileSync(DEBUG_READY, url + '\n' + native + '\n' + http + '\n');
         if (process.env.COOLERSCREEN_TEST_DROP) {
           // Test hook: simulate dropping a real file onto the window (Chrome DevTools Protocol drag events).
@@ -47,15 +48,27 @@ if (!app.requestSingleInstanceLock()) {
             for (const type of ['dragEnter', 'dragOver', 'drop']) await dbg.sendCommand('Input.dispatchDragEvent', { type, x: 300, y: 250, data });
             for (let i = 0; i < 30; i++) {
               await new Promise(r => setTimeout(r, 500));
-              const s = await win.webContents.executeJavaScript("(document.getElementById('dlg').classList.contains('hidden') ? 'dialog-hidden' : 'dialog-open:' + document.getElementById('dlgTitle').textContent) + ' | items=' + document.querySelectorAll('.item').length + ' | pathFor=' + (window.cs ? 'yes' : 'no')");
+              const s = await win.webContents.executeJavaScript("'title=' + (document.querySelector('.detail-title') || {}).textContent + ' | originals=' + document.querySelectorAll('.librow[data-id]').length + ' | dialog=' + !!document.querySelector('.dialog') + ' | pathFor=' + (window.cs ? 'yes' : 'no')");
               result = s;
-              if (s.startsWith('dialog-open')) break;
+              if (!/originals=0/.test(s)) break;
             }
           } catch (e) { result = 'drop test FAILED ' + e.message; }
           fs.appendFileSync(DEBUG_READY, 'drop: ' + result + '\n');
         }
         if (EXIT_AFTER_LOAD) setTimeout(() => app.quit(), 500);
       }
+    });
+    // Closing during an upload would leave a broken picture on the screen: ask first (spec 5.9).
+    let closeAnyway = false;
+    win.on('close', e => {
+      if (closeAnyway || !uploading()) return;
+      e.preventDefault();
+      const r = dialog.showMessageBoxSync(win, {
+        type: 'warning', buttons: ['Keep open', 'Close anyway'], defaultId: 0, cancelId: 0, noLink: true, title: 'CoolerScreen',
+        message: 'An upload is in progress.',
+        detail: 'If you close now, the screen may show a broken picture until you send again.',
+      });
+      if (r === 1) { closeAnyway = true; win.close(); }
     });
     win.on('closed', () => { win = null; });
     await win.loadURL(url);

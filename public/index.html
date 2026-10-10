@@ -7,99 +7,124 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>CoolerScreen</h1>
-  <span class="sub">Unofficial tool for the Lovingcool SC70 USB screen</span>
+<header class="topbar">
+  <span class="appname">CoolerScreen</span>
+  <button type="button" id="pill" class="pill" data-state="checking" aria-describedby="pillHint"><span class="dot" aria-hidden="true"></span><span id="pillText">Checking screen…</span></button>
+  <span id="pillHint" class="sr-only">Opens the screen settings</span>
   <span class="spacer"></span>
-  <span id="deviceStatus" class="status">Screen: not checked</span>
-  <button id="checkBtn">Check screen</button>
-  <button id="setupBtn" title="One-time driver setup">Set up screen (one-time)</button>
+  <button type="button" id="onScreen" class="onscreen" hidden>
+    <span class="onscreen-label">On screen now</span>
+    <img id="onScreenThumb" alt="" width="48" height="22">
+    <span id="onScreenName"></span>
+  </button>
+  <button type="button" id="gear" class="iconbtn" aria-label="Settings">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
+  </button>
 </header>
 
-<div id="setupBanner" class="banner hidden">The screen is on the standard serial driver, so it will turn its display off about 30 seconds after any program closes its port. Click <b>Set up screen (one-time)</b> to fix this permanently.</div>
-<div id="reconnectBanner" class="banner hidden">Windows couldn't connect to the screen at startup (a known quirk). Click <b>Reconnect</b> (needs one administrator approval). <button id="reconnectBtn" class="small">Reconnect</button>
-  <div id="reconnectProg" class="progress hidden"><div class="bar"></div><span></span></div></div>
-<main>
-  <section class="card" id="importCard">
-    <h2>Import</h2>
-    <div id="drop" class="drop" tabindex="0">Drop a video, GIF, image or vendor theme (.ht) here, or click to choose a file
-      <input type="file" id="file" accept="video/*,image/*,.gif,.mkv,.webm,.mov,.ht,.zip" hidden>
+<div id="banners" class="banners"></div>
+
+<div class="panes">
+  <aside class="library" aria-labelledby="libHead">
+    <div class="pane-head">
+      <h2 id="libHead">Library</h2>
+      <button type="button" id="addBtn" class="btn outline">+ Add clip</button>
+      <input type="file" id="fileInput" multiple accept="video/*,image/*,.gif,.mkv,.webm,.mov,.avi,.ht,.zip" hidden>
     </div>
-    <div id="importProgress" class="progress hidden"><div class="bar"></div><span></span></div>
-    <p class="hint">After the file is added you pick loop length, fps and quality, see the estimated size, and convert. The clip is cropped to fill 2400x1080, the notch mask is applied, then it is rotated and compressed to fit the screen.</p>
-  </section>
-
-  <section class="card" id="slotsCard">
-    <h2>Screen slots (Intro plays once at power-on, then Loop shows forever)</h2>
-    <div id="slots" class="slots"></div>
-    <p class="hint">Startup and standby animations share about 10 MB on the screen. Sending a big file to one slot leaves less room for the other. Clearing a slot uploads a 1-frame black clip.</p>
-  </section>
-
-  <section class="card">
-    <h2>Gallery <button id="reconvertAll" class="small">Re-convert all with current mask</button>
-      <button id="openGallery" class="small">Open gallery folder</button></h2>
-    <div id="gallery" class="grid"></div>
-    <p id="empty" class="hint hidden">Nothing here yet. Drop a file above, or put videos/GIFs/images/.ht files into the gallery folder (button above).</p>
-  </section>
-
-  <section class="card">
-    <h2>Notch mask</h2>
-    <div class="maskwrap">
-      <div class="canvaswrap"><canvas id="maskCanvas" width="1200" height="540"></canvas>
-        <div class="hint">Landscape view (2400x1080). Red = area that will be blacked out. Background is a frame from the selected gallery item.</div></div>
-      <div class="maskform">
-        <label>Mode
-          <select id="mMode"><option value="band">Band (strip along an edge)</option><option value="circle">Circle</option><option value="off">Off</option></select>
-        </label>
-        <fieldset id="fsBand"><legend>Band</legend>
-          <label>Edge <select id="bEdge"><option>left</option><option>right</option><option>top</option><option>bottom</option></select></label>
-          <label>Width (px) <input type="number" id="bPx" min="0" max="1000"></label>
-          <small id="bPxNote" class="hint"></small>
-        </fieldset>
-        <fieldset id="fsCircle"><legend>Circle</legend>
-          <label>Center X <input type="number" id="cX" min="0" max="2400"></label>
-          <label>Center Y <input type="number" id="cY" min="0" max="1080"></label>
-          <label>Radius <input type="number" id="cR" min="0" max="600"></label>
-          <label>Feather <input type="number" id="cF" min="0" max="200"></label>
-        </fieldset>
-        <button id="saveMask">Save mask</button>
-        <span id="maskMsg" class="hint"></span>
-        <p class="hint">After saving, use "Re-convert" on an item (or "Re-convert all") to apply it.</p>
-      </div>
+    <ul id="libList" class="liblist" role="listbox" aria-labelledby="libHead" tabindex="0"></ul>
+    <div class="lib-foot">
+      <button type="button" id="openFolder" class="btn ghost">Open Gallery folder</button>
+      <p class="muted small">Files you put there appear here automatically.</p>
     </div>
-  </section>
-  <section class="card">
-    <h2>Advanced</h2>
-    <label><input type="checkbox" id="advToggle"> Show slot choice when sending (set a separate Intro clip, or the same clip in both)</label>
-    <p class="hint">By default "Send to screen" puts your clip in the Loop slot, makes the Intro slot black, and starts playback.</p>
-    <div class="row">
-      <button id="setupBtn2" class="small" onclick="document.getElementById('setupBtn').click()">Set up screen (one-time)</button>
-      <button id="restoreBtn" class="small danger">Restore original driver</button>
-    </div>
-    <div class="row"><label>Gallery folder <input type="text" id="galleryDir" size="48"></label> <button id="galleryDirSave" class="small">Save</button></div>
-    <p class="hint">Files you put in this folder appear in the gallery automatically (and disappear when you delete them). Leave empty for the default: DocumentsCoolerScreenGallery.</p>
-    <div id="setupProg" class="progress hidden"><div class="bar"></div><span></span></div>
-    <p class="hint">Set up switches the screen to Microsoft's WinUSB driver (no background program needed). Restore puts the standard COM-port driver back; the vendor app can then see the screen again.</p>
-  </section>
-</main>
+    <div id="dropHint" class="drop-hint" hidden>Drop to add</div>
+  </aside>
 
-<div id="dlg" class="modalbg hidden"><div class="modal">
-  <h2 id="dlgTitle">Convert</h2>
-  <div class="hint" id="dlgSrc"></div>
-  <div class="frow"><label>Start (s)</label><input type="range" id="dStartR" min="0" max="10" step="0.1"><input type="number" id="dStart" min="0" step="0.1"></div>
-  <div class="frow"><label>Loop length (s)</label><input type="range" id="dLenR" min="0.5" max="10" step="0.1"><input type="number" id="dLen" min="0.1" step="0.1"></div>
-  <div class="frow"><label>FPS</label><input type="range" id="dFpsR" min="10" max="30" step="1"><input type="number" id="dFps" min="10" max="30"></div>
-  <div class="frow"><label>Quality</label>
-    <select id="dQMode"><option value="auto">Auto (fit to space)</option><option value="manual">Manual</option></select></div>
-  <div class="frow" id="dQRow"><label>Manual quality</label><input type="range" id="dQR" min="1" max="100" step="1"><input type="number" id="dQ" min="1" max="100"></div>
-  <div class="frow" id="dSlotRow"><label>Send to</label><select id="dSlot"><option value="loop">Loop (always shown)</option><option value="startup">Intro (plays once at power-on)</option><option value="both">Both</option></select></div>
-  <div class="hint" id="dBudget"></div>
-  <div id="dEst" class="est">&nbsp;</div>
-  <div id="dProg" class="progress hidden"><div class="bar"></div><span></span></div>
-  <div class="actions"><button id="dGo" class="primary">Convert</button><button id="dCancel">Close</button></div>
-</div></div>
-<div id="toast"></div>
-<div id="player" class="hidden"><video id="playerVideo" controls loop autoplay muted></video><div id="playerTitle"></div></div>
-<script src="app.js"></script>
+  <main id="detail" class="detail" aria-live="off"></main>
+</div>
+
+<div id="activity" class="activity" role="status" aria-live="polite" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div id="drawerBack" class="drawer-back" hidden>
+  <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1">
+    <div class="drawer-head">
+      <h2 id="drawerTitle">Settings</h2>
+      <button type="button" id="drawerClose" class="iconbtn" aria-label="Close settings">✕</button>
+    </div>
+    <div class="drawer-body">
+      <section id="setScreen" aria-labelledby="hScreen">
+        <h3 id="hScreen">Screen</h3>
+        <p id="scrStatus" class="status-line"></p>
+        <div class="row">
+          <button type="button" id="scrCheck" class="btn secondary">Check again</button>
+          <button type="button" id="scrSetup" class="btn primary" hidden>Set up screen</button>
+          <button type="button" id="scrSetupAgain" class="btn ghost" hidden>Run setup again</button>
+        </div>
+        <details><summary>Details</summary><pre id="scrInfo" class="small"></pre></details>
+      </section>
+
+      <section id="setNotch" aria-labelledby="hNotch">
+        <h3 id="hNotch">Notch</h3>
+        <p class="muted small">Your screen's camera hole is on the left edge. This area is kept black in every new version.</p>
+        <div class="screenframe small-frame" id="notchFrame">
+          <img id="notchBg" alt="">
+          <div id="notchShape" class="notch edit" hidden></div>
+        </div>
+        <div class="field">
+          <label for="nMode">Shape</label>
+          <select id="nMode">
+            <option value="band">Band on the left edge</option>
+            <option value="circle">Circle</option>
+            <option value="off">Off</option>
+          </select>
+        </div>
+        <div id="nBand">
+          <div class="field">
+            <label for="nPx">Width (pixels)</label>
+            <div class="slider-row"><input type="range" id="nPxR" min="0" max="300" step="1" aria-label="Width (pixels)"><input type="number" id="nPx" min="0" max="300" step="1"></div>
+            <p id="nPxNote" class="muted small"></p>
+          </div>
+          <details><summary>More</summary>
+            <div class="field"><label for="nEdge">Edge</label>
+              <select id="nEdge"><option value="left">Left</option><option value="right">Right</option><option value="top">Top</option><option value="bottom">Bottom</option></select></div>
+          </details>
+        </div>
+        <div id="nCircle" class="grid2">
+          <div class="field"><label for="nCx">Centre X</label><input type="number" id="nCx" min="0" max="2400"></div>
+          <div class="field"><label for="nCy">Centre Y</label><input type="number" id="nCy" min="0" max="1080"></div>
+          <div class="field"><label for="nR">Size (radius)</label><input type="number" id="nR" min="0" max="600"></div>
+          <div class="field"><label for="nF">Soft edge</label><input type="number" id="nF" min="0" max="200"></div>
+        </div>
+        <div class="row"><button type="button" id="nSave" class="btn primary">Save notch</button></div>
+        <p id="nMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setGallery" aria-labelledby="hGallery">
+        <h3 id="hGallery">Gallery folder</h3>
+        <div class="field"><label for="gDir">Folder (leave empty for Documents\CoolerScreen\Gallery)</label><input type="text" id="gDir" spellcheck="false"></div>
+        <div class="row"><button type="button" id="gSave" class="btn secondary">Save</button><button type="button" id="gOpen" class="btn ghost">Open folder</button></div>
+        <p id="gMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setAdvanced" aria-labelledby="hAdv">
+        <details>
+          <summary><h3 id="hAdv">Advanced</h3></summary>
+          <div class="field"><label for="aMax">Longest clip (seconds)</label><input type="number" id="aMax" min="1" max="120" step="1"></div>
+          <div class="row"><button type="button" id="aSave" class="btn secondary">Save</button></div>
+          <p class="muted small">Restoring the original driver lets the vendor app (LOVINGCOOL MONITOR) see the screen again. The screen then switches its display off 30 seconds after any program closes its connection.</p>
+          <div class="row"><button type="button" id="aRestore" class="btn danger">Restore original driver…</button></div>
+        </details>
+      </section>
+
+      <section id="setAbout" aria-labelledby="hAbout">
+        <h3 id="hAbout">About</h3>
+        <p class="muted small">CoolerScreen <span id="appVer"></span>. Unofficial tool for the Lovingcool SC70 USB screen. Nothing runs in the background: close the app and the screen keeps playing.
+          <a href="https://github.com/oldbugo/coolerscreen#readme" target="_blank" rel="noopener">Help and troubleshooting</a></p>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<script type="module" src="app.js"></script>
 </body>
 </html>

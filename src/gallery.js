@@ -1,20 +1,21 @@
-// The Gallery folder (default Documents\CoolerScreen\Gallery): every video/GIF/image/.ht/.zip placed there is a
-// gallery item. Conversions are cached under %APPDATA%\CoolerScreen\library\<id>\ where id = hash(path|size|mtime).
+// The Gallery folder (default Documents\CoolerScreen\Gallery): every video/GIF/image/.ht/.zip placed there is an
+// original. The app keeps a permanent id per original (src/library.js) and matches files by path; a file renamed in
+// Explorer is recognised by its unchanged size and modification time. A file that disappears is marked "missing"
+// (its versions stay); the UI offers to delete originals missing for more than 30 days and never deletes them itself.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
-const { execFileSync } = require('child_process');
-const paths = require('./paths');
+const { execFileSync, execFile } = require('child_process');
 const settings = require('./settings');
+const paths = require('./paths');
 const lib = require('./library');
 const gate = require('./gate');
-const { probe } = require('./convert');
+const { probe, makeSourceAssets } = require('./convert');
 const { isThemeFile, extractTheme } = require('./htTheme');
 
 const MEDIA_EXT = new Set(['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.gif', '.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tif', '.tiff', '.ht', '.zip']);
 const STABLE_MS = 1500;
-const DELETED_DIR = '_Deleted';
+const MISSING_NOTICE_DAYS = 30;
 
 let docsDir = null;
 function documentsDir() {
@@ -37,8 +38,8 @@ function galleryDir() {
 }
 
 const isMedia = f => MEDIA_EXT.has(path.extname(f).toLowerCase());
-const idFor = (file, st) =>
-  crypto.createHash('sha1').update(`${path.resolve(file).toLowerCase()}|${st.size}|${Math.round(st.mtimeMs)}`).digest('hex').slice(0, 16);
+const samePath = (a, b) => !!a && !!b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+const fileKey = (f, st) => `${path.resolve(f).toLowerCase()}|${st.size}|${Math.round(st.mtimeMs)}`;
 
 function sanitizeName(n) {
   n = String(n || '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim().slice(0, 100);
@@ -51,21 +52,22 @@ function uniquePath(dir, base, ext) {
   return p;
 }
 
-const bad = new Set(); // ids of files we could not read as media
+const bad = new Map(); // fileKey -> reason, for files ffmpeg cannot read (retried when the file changes)
 let chain = Promise.resolve();
 let timer = null, watcher = null, watchedDir = null;
+let assetsEnabled = false;
+const assetsTried = new Set();
 
 function isStable(file, st) {
   if (Date.now() - st.mtimeMs < STABLE_MS) return false;
   try { fs.closeSync(fs.openSync(file, 'r')); return true; } catch { return false; }
 }
 
-/** Create the cache entry for a gallery file. Throws if ffmpeg can't read it. */
-async function registerFile(file) {
+/** Read a gallery file into an original (new id, or `existing` to refresh one whose file changed). Throws if unreadable. */
+async function registerFile(file, existing = null) {
   const st = fs.statSync(file);
-  const id = idFor(file, st);
-  if (lib.get(id)) return id;
-  const d = lib.dirOf(id);
+  const id = existing ? existing.id : lib.newId();
+  const d = lib.oDir(id);
   fs.mkdirSync(d, { recursive: true });
   try {
     const ext = path.extname(file).toLowerCase();
@@ -73,6 +75,7 @@ async function registerFile(file) {
     let extracted = false;
     let orig = file;
     if (ext === '.ht' || ext === '.zip' || isThemeFile(file)) {
+      for (const n of fs.readdirSync(d)) if (lib.isSourceName(n)) fs.rmSync(path.join(d, n), { force: true });
       const t = extractTheme(file, d);
       orig = path.join(d, 'original' + path.extname(t.path).toLowerCase());
       fs.renameSync(t.path, orig);
@@ -80,16 +83,43 @@ async function registerFile(file) {
       if (ext === '.ht' && t.name) name = t.name;
     }
     const info = await probe(orig);
-    if (!info.hasVideo) throw new Error('No video or image stream ffmpeg can read in ' + path.basename(file));
-    lib.writeMeta(id, {
-      id, name, source: path.basename(file), file, extracted, fileSize: st.size, fileMtime: Math.round(st.mtimeMs),
-      created: new Date().toISOString(), status: 'new',
-      sourceDuration: info.duration, isImage: info.isImage, srcWidth: info.width, srcHeight: info.height,
+    if (!info.hasVideo) throw new Error(`CoolerScreen can't read "${path.basename(file)}". It may be damaged or in a format that isn't supported.`);
+    for (const n of ['thumb.jpg', 'frame.jpg', 'proxy.mp4', 'proxy.jpg']) fs.rmSync(path.join(d, n), { force: true });
+    lib.writeOriginal({
+      ...(existing || {}),
+      id, name: existing ? existing.name : name, file, fileName: path.basename(file), extracted,
+      fileSize: st.size, fileMtime: Math.round(st.mtimeMs), created: existing ? existing.created : new Date().toISOString(),
+      duration: info.isImage ? null : info.duration, isImage: info.isImage, width: info.width, height: info.height, codec: info.codec,
+      assets: 'pending', assetsError: null, proxy: null, missing: null,
+      sourceChanged: !!existing && (lib.versions(id).length > 0),
     });
     return id;
   } catch (e) {
-    fs.rmSync(d, { recursive: true, force: true });
+    if (!existing) fs.rmSync(d, { recursive: true, force: true });
     throw e;
+  }
+}
+
+/** Thumbnail, notch frame and browser proxy for originals that don't have them yet (one at a time, in the queue). */
+async function makeMissingAssets() {
+  if (!assetsEnabled) return;
+  for (const o of lib.listOriginals()) {
+    // A failed attempt is retried once per app session (the next launch), never in a loop.
+    if (o.assets === 'ready' || assetsTried.has(o.id + '|' + o.fileMtime)) continue;
+    const src = lib.sourcePath(o);
+    if (!src) continue;
+    assetsTried.add(o.id + '|' + o.fileMtime);
+    await gate.run('convert', async () => {
+      const cur = lib.readOriginal(o.id);
+      if (!cur || cur.assets === 'ready') return;
+      try {
+        const info = await probe(src);
+        const r = await makeSourceAssets(src, lib.oDir(o.id), info);
+        lib.patchOriginal(o.id, { assets: 'ready', proxy: r.proxy, assetsError: null });
+      } catch (e) {
+        lib.patchOriginal(o.id, { assets: 'error', assetsError: e.message });
+      }
+    }).catch(() => {});
   }
 }
 
@@ -99,26 +129,55 @@ function doSync() {
   return (async () => {
     let files = [];
     try { files = fs.readdirSync(dir, { withFileTypes: true }).filter(e => e.isFile() && isMedia(e.name) && !e.name.startsWith('~$')).map(e => path.join(dir, e.name)); } catch {}
-    const present = new Set();
     let pending = false;
+    const originals = lib.listOriginals();
+    const claimed = new Set();
+    // 1. Known paths: back from missing, or changed content.
+    const unknown = [];
     for (const f of files) {
       let st;
       try { st = fs.statSync(f); } catch { continue; }
-      const id = idFor(f, st);
-      present.add(id);
-      if (lib.get(id) || bad.has(id)) continue;
-      if (!isStable(f, st)) { pending = true; continue; }
-      try { await registerFile(f); } catch (e) { bad.add(id); console.log('Gallery: skipped ' + path.basename(f) + ': ' + e.message); }
+      const o = originals.find(x => samePath(x.file, f));
+      if (!o) { unknown.push([f, st]); continue; }
+      claimed.add(o.id);
+      if (o.missing) lib.patchOriginal(o.id, { missing: null });
+      if (o.fileSize == null || o.fileMtime == null) { // migrated entry without a recorded size/time: just record them
+        lib.patchOriginal(o.id, { fileSize: st.size, fileMtime: Math.round(st.mtimeMs) });
+        continue;
+      }
+      if (o.fileSize !== st.size || o.fileMtime !== Math.round(st.mtimeMs)) {
+        if (bad.has(fileKey(f, st))) continue;
+        if (!isStable(f, st)) { pending = true; continue; }
+        try { await registerFile(f, lib.readOriginal(o.id)); } catch (e) { bad.set(fileKey(f, st), e.message); console.log('Gallery: ' + e.message); }
+      }
     }
-    // Items whose file is gone (or was replaced by a different version) leave the gallery.
-    for (const m of lib.list()) if (m.file && !present.has(m.id)) lib.remove(m.id);
+    // 2. Originals whose file is gone: missing (kept), unless the file was renamed (same size and time).
+    // (A file outside the current Gallery folder counts as gone too: the folder defines the library.)
+    const gone = originals.filter(o => !claimed.has(o.id) && o.file);
+    for (const [f, st] of unknown) {
+      const twin = gone.find(o => !claimed.has(o.id) && o.fileSize === st.size && o.fileMtime === Math.round(st.mtimeMs));
+      if (twin) {
+        claimed.add(twin.id);
+        const ht = /\.(ht|zip)$/i.test(f);
+        lib.patchOriginal(twin.id, { file: f, fileName: path.basename(f), missing: null, ...(ht ? {} : { name: path.basename(f, path.extname(f)) }) });
+        continue;
+      }
+      if (bad.has(fileKey(f, st))) continue;
+      if (!isStable(f, st)) { pending = true; continue; }
+      try { await registerFile(f); } catch (e) { bad.set(fileKey(f, st), e.message); console.log('Gallery: skipped ' + path.basename(f) + ': ' + e.message); }
+    }
+    for (const o of gone) {
+      if (!claimed.has(o.id) && !o.missing) lib.patchOriginal(o.id, { missing: { since: new Date().toISOString() } });
+    }
     if (pending) schedule(2000);
   })();
 }
 
-/** Serialised scan of the gallery folder. */
+/** Serialised scan of the gallery folder; afterwards makes any missing previews. */
 function sync() {
-  chain = chain.then(() => gate.run('convert', doSync), () => gate.run('convert', doSync)).catch(e => console.log('Gallery sync error: ' + e.message));
+  chain = chain.then(() => gate.run('convert', doSync), () => gate.run('convert', doSync))
+    .catch(e => console.log('Gallery sync error: ' + e.message));
+  chain.then(() => makeMissingAssets());
   return chain;
 }
 
@@ -138,65 +197,54 @@ function watch() {
   } catch (e) { console.log('Gallery: cannot watch folder: ' + e.message); }
 }
 
-/** One-time move of pre-gallery library items (originals inside the cache) into the Gallery folder. */
-function migrate() {
+/** Originals from before the Gallery folder existed (their only copy is in the cache): copy them into the folder. */
+function adoptCacheOnly() {
   const dir = galleryDir();
-  for (const m of lib.list()) {
-    if (m.file) continue;
+  for (const o of lib.listOriginals()) {
+    if (o.file) continue;
     try {
-      const d = lib.dirOf(m.id);
-      const f = fs.readdirSync(d).find(n => n.startsWith('original.'));
-      if (!f) { lib.remove(m.id); continue; }
-      const ext = path.extname(f).toLowerCase();
-      const target = uniquePath(dir, sanitizeName(m.name), ext);
+      const d = lib.oDir(o.id);
+      const f = fs.readdirSync(d).find(n => lib.isSourceName(n));
+      if (!f) continue;
+      const target = uniquePath(dir, sanitizeName(o.name), path.extname(f).toLowerCase());
       fs.copyFileSync(path.join(d, f), target);
-      rekey(m.id, target, { name: m.name, extracted: false });
-      fs.rmSync(path.join(lib.dirOf(idFor(target, fs.statSync(target))), f), { force: true });
-    } catch (e) { console.log('Gallery: could not migrate ' + m.name + ': ' + e.message); }
+      const st = fs.statSync(target);
+      lib.patchOriginal(o.id, { file: target, fileName: path.basename(target), extracted: false, fileSize: st.size, fileMtime: Math.round(st.mtimeMs) });
+      fs.rmSync(path.join(d, f), { force: true });
+    } catch (e) { console.log('Gallery: could not copy ' + o.name + ' into the gallery folder: ' + e.message); }
   }
 }
 
-/** Point an existing cache entry at a (new) gallery file, moving it to the id that file now has. */
-function rekey(oldId, file, patch = {}) {
-  const st = fs.statSync(file);
-  const newId = idFor(file, st);
-  const meta = lib.readMeta(oldId);
-  const next = {
-    ...meta, ...patch, id: newId, file, source: path.basename(file), fileSize: st.size, fileMtime: Math.round(st.mtimeMs),
-  };
-  if (newId !== oldId) {
-    const nd = lib.dirOf(newId);
-    if (fs.existsSync(nd)) fs.rmSync(nd, { recursive: true, force: true });
-    fs.renameSync(lib.dirOf(oldId), nd);
-  }
-  lib.writeMeta(newId, next);
-  return newId;
-}
-
-async function init() {
+/** opts.assets: also make thumbnails/previews (the app does; the CLI skips it). */
+async function init(opts = {}) {
+  if (opts.assets) assetsEnabled = true;
   fs.mkdirSync(paths.library, { recursive: true });
   fs.mkdirSync(galleryDir(), { recursive: true });
-  migrate();
+  const n = lib.migrate();
+  if (n) console.log(`Library: migrated ${n} item(s) to originals + versions.`);
+  adoptCacheOnly();
   await sync();
   watch();
 }
 
-/** Copy a file into the Gallery (keeping its name, "name (2)" on clashes) and register it. Returns the item id. */
+/** Copy a file into the Gallery (keeping its name, "name (2)" on clashes) and register it. Returns the original id. */
 async function addFile(src, displayFileName) {
   const dir = galleryDir();
   fs.mkdirSync(dir, { recursive: true });
   const orig = displayFileName || path.basename(src);
   const ext = path.extname(orig).toLowerCase();
-  if (!isMedia(orig) && !isThemeFile(src)) {
-    // Unknown extension: still accept if ffmpeg can read it, keep the given extension.
-  }
   const base = sanitizeName(path.basename(orig, path.extname(orig)));
-  const inside = path.resolve(path.dirname(src)).toLowerCase() === path.resolve(dir).toLowerCase();
+  const inside = samePath(path.dirname(src), dir);
+  if (inside) {
+    const known = lib.listOriginals().find(o => samePath(o.file, src));
+    if (known) return known.id;
+  }
   const target = inside ? src : uniquePath(dir, base, ext || '.bin');
   if (!inside) fs.copyFileSync(src, target);
   try {
     const id = await gate.run('convert', () => registerFile(target));
     watch();
+    makeMissingAssets();
     return id;
   } catch (e) {
     if (!inside) fs.rmSync(target, { force: true });
@@ -204,29 +252,52 @@ async function addFile(src, displayFileName) {
   }
 }
 
-function renameItem(id, newName) {
-  const m = lib.get(id);
-  if (!m || !m.file) throw new Error('Unknown item');
-  const base = sanitizeName(newName);
-  const ext = path.extname(m.file);
-  const target = path.join(path.dirname(m.file), base + ext);
-  if (target.toLowerCase() !== m.file.toLowerCase() && fs.existsSync(target)) throw new Error('A file named "' + base + ext + '" already exists in the gallery folder.');
-  if (target !== m.file) fs.renameSync(m.file, target);
-  const nid = rekey(id, target, { name: String(newName).trim().slice(0, 80) || base });
-  return lib.get(nid);
+function renameOriginal(id, newName) {
+  const o = lib.readOriginal(id);
+  if (!o) throw new Error('Unknown clip');
+  const label = String(newName || '').trim().slice(0, 80);
+  if (!label) throw new Error('Enter a name.');
+  if (!o.file || o.missing || !fs.existsSync(o.file)) return lib.patchOriginal(id, { name: label });
+  const base = sanitizeName(label);
+  const ext = path.extname(o.file);
+  const target = path.join(path.dirname(o.file), base + ext);
+  if (!samePath(target, o.file) && fs.existsSync(target)) throw new Error('A file with this name already exists in the Gallery folder.');
+  if (target !== o.file) fs.renameSync(o.file, target);
+  return lib.patchOriginal(id, { name: label, file: target, fileName: path.basename(target) });
 }
 
-/** Remove an item: the file moves to Gallery\_Deleted (never permanently deleted by the app). */
-function removeItem(id) {
-  const m = lib.get(id);
-  if (!m) return;
-  if (m.file && fs.existsSync(m.file)) {
-    const trash = path.join(path.dirname(m.file), DELETED_DIR);
-    fs.mkdirSync(trash, { recursive: true });
-    const ext = path.extname(m.file);
-    fs.renameSync(m.file, uniquePath(trash, path.basename(m.file, ext), ext));
+// Windows: send to the Recycle Bin (recoverable). Elsewhere: delete.
+function recycle(file) {
+  if (process.platform !== 'win32') { fs.rmSync(file, { force: true }); return Promise.resolve(); }
+  return new Promise((resolve, reject) => {
+    const cmd = "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($env:CS_DEL_FILE, 'OnlyErrorDialogs', 'SendToRecycleBin')";
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd], { windowsHide: true, timeout: 30000, env: { ...process.env, CS_DEL_FILE: file } },
+      e => (e || fs.existsSync(file) ? reject(new Error('Could not move the file to the Recycle Bin' + (e ? ': ' + e.message.split('\n')[0] : '.'))) : resolve()));
+  });
+}
+
+/** Delete an original from the UI: its file goes to the Recycle Bin and all its versions are deleted. */
+async function deleteOriginal(id) {
+  const o = lib.readOriginal(id);
+  if (!o) return;
+  // A "missing" original's file is not in the Gallery folder (maybe moved elsewhere on purpose): never touch it.
+  if (o.file && !o.missing && fs.existsSync(o.file)) await recycle(o.file);
+  lib.removeOriginalCache(id);
+}
+
+/** Originals missing from the folder for longer than the notice period. */
+function longMissing(now = Date.now()) {
+  return lib.listOriginals().filter(o => o.missing && now - Date.parse(o.missing.since) > MISSING_NOTICE_DAYS * 864e5);
+}
+
+/** Delete the versions of originals whose file is missing (user-confirmed in the UI). */
+function deleteMissing(ids) {
+  let n = 0;
+  for (const id of ids || []) {
+    const o = lib.readOriginal(id);
+    if (o && o.missing) { lib.removeOriginalCache(id); n++; }
   }
-  lib.remove(id);
+  return n;
 }
 
 function setDir(dir) {
@@ -237,4 +308,7 @@ function setDir(dir) {
   return init();
 }
 
-module.exports = { init, sync, addFile, renameItem, removeItem, setDir, galleryDir, sanitizeName, isMedia };
+module.exports = {
+  init, sync, addFile, renameOriginal, deleteOriginal, deleteMissing, longMissing, setDir, galleryDir, sanitizeName, isMedia,
+  MISSING_NOTICE_DAYS,
+};
