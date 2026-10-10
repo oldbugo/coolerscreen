@@ -52,7 +52,7 @@ async function state() {
 function failedUsbPresent() {
   if (process.platform !== 'win32') return Promise.resolve(false);
   return new Promise(resolve => {
-    const cmd = "@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\VID_0000&PID_000' }).Count";
+    const cmd = "@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\\\VID_0000&PID_000' }).Count";
     require('child_process').execFile('powershell', ['-NoProfile', '-Command', cmd], { windowsHide: true, timeout: 15000 },
       (e, out) => resolve(!e && parseInt(out, 10) > 0));
   });

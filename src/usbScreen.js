@@ -7,6 +7,18 @@ const VID = 0x33c3;
 const PIDS = [0x7791, 0x7788];
 const CHUNK = 40 * 1024;
 const STATUS_KEY = 0x22; // unsolicited status frames every ~2 s; never a reply
+const WRITE_TIMEOUT_MS = 20000;
+
+// Append-only diagnostic log next to the library (device.log), capped at ~1 MB.
+const fs = require('fs');
+const path = require('path');
+function log(msg) {
+  try {
+    const file = path.join(require('./paths').base, 'device.log');
+    try { if (fs.statSync(file).size > 1e6) fs.renameSync(file, file + '.old'); } catch {}
+    fs.appendFileSync(file, `${new Date().toISOString()} ${msg}\n`);
+  } catch {}
+}
 
 let usbLib = null;
 function usb() {
@@ -51,6 +63,8 @@ class UsbScreen extends Screen {
       throw new Error('Cannot claim the screen interface (is another program using it?): ' + e.message);
     }
     const s = new UsbScreen(dev, found.i, found.inn, found.out);
+    log('opened over WinUSB');
+    s.sentBytes = 0;
     s.epIn.on('data', d => s._onData(d));
     s.epIn.on('error', () => {});
     s.epIn.startPoll(3, 4096);
@@ -81,15 +95,36 @@ class UsbScreen extends Screen {
     }
   }
 
+  // A 40 KB chunk normally takes well under a second (the screen's flash writes ~50 KB/s at worst).
+  // libusb's default timeout is "forever", which turned a stalled screen into a silent hang.
   _write(buf) {
-    return new Promise((res, rej) => this.epOut.transfer(buf, e => (e ? rej(e) : res())));
+    this.epOut.timeout = WRITE_TIMEOUT_MS;
+    return new Promise((res, rej) => this.epOut.transfer(buf, e => {
+      if (!e) return res();
+      log(`write of ${buf.length} bytes failed: ${e.message}`);
+      rej(new Error(e.errno === usb().usb.LIBUSB_ERROR_TIMEOUT || /TIMEOUT/i.test(e.message)
+        ? 'The screen stopped accepting data (USB write timed out). Unplug power to the PC for 15 s to reset it, then try again.'
+        : 'USB write failed: ' + e.message));
+    }));
   }
 
   async raw(buf) {
-    for (let off = 0; off < buf.length; off += CHUNK) await this._write(buf.subarray(off, off + CHUNK));
+    for (let off = 0; off < buf.length; off += CHUNK) {
+      await this._write(buf.subarray(off, off + CHUNK));
+      const before = this.sentBytes;
+      this.sentBytes += Math.min(CHUNK, buf.length - off);
+      if (Math.floor(before / 1048576) !== Math.floor(this.sentBytes / 1048576)) log(`sent ${(this.sentBytes / 1048576).toFixed(1)} MB`);
+    }
+  }
+
+  async cmd(key, payload, opts) {
+    log(`cmd 0x${key.toString(16)} ${payload ? Buffer.from(payload).length + ' bytes' : ''}`);
+    try { const r = await super.cmd(key, payload, opts); log(`cmd 0x${key.toString(16)} -> ${JSON.stringify(r)}`); return r; }
+    catch (e) { log(`cmd 0x${key.toString(16)} failed: ${e.message}`); throw e; }
   }
 
   async close() {
+    log(`close (sent ${this.sentBytes} bytes total)`);
     try { await new Promise(r => this.epIn.stopPoll(() => r())); } catch {}
     try { await new Promise(r => this.iface.release(true, () => r())); } catch {}
     try { this.dev.close(); } catch {}
