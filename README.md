@@ -12,7 +12,9 @@ keeps playing on its own, even after you restart or shut down the PC.
 1. **Close and uninstall LOVINGCOOL MONITOR.** (Only one program can talk to the screen at a time, and after step 4 the
    vendor app can no longer see the screen at all. You can undo this later, see "Undo".)
 2. **Download** `CoolerScreen-<version>-win-x64.zip` from the [Releases page](https://github.com/oldbugo/coolerscreen/releases)
-   and **extract** it (right click > Extract All) somewhere you will find it again, for example your Documents folder.
+   **Before extracting:** right-click the zip > **Properties** > tick **Unblock** > OK. (Windows tags downloaded files;
+   with *Smart App Control* switched on it refuses to run the launcher from a tagged zip.) Then **extract** it (right click >
+   Extract All) somewhere you will find it again, for example your Documents folder.
 3. **Double-click `Start CoolerScreen.bat`.** A black window opens (keep it open while you use the app) and your web
    browser opens the CoolerScreen page. Windows may warn that the file came from the internet ("Windows protected your
    PC" / "Open File - Security Warning"): choose **More info > Run anyway** / **Run**. The app is not code-signed.

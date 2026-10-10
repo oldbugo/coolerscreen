@@ -58,11 +58,22 @@ function probe(file) {
 
 const even = n => n - (n % 2);
 
+// MJPEG 4:2:0 compresses in 16x16 blocks of the stored (portrait, transposed) frame. A band edge that
+// falls inside a block leaves faint compression specks in the black area, which are visible on AMOLED.
+// Round the band up so its edge lands on a block boundary. Landscape left/right/bottom map to portrait
+// rows/columns starting at a block boundary; the top edge maps to the last columns of the 1080 px width.
+function bandPx(band) {
+  const px = Math.round(band.px);
+  if (px <= 0) return 0;
+  const offset = band.edge === 'top' ? (1080 % 16) : 0;
+  return Math.ceil((px - offset) / 16) * 16 + offset;
+}
+
 // Returns filtergraph pieces that take [base] and produce [m] (masked landscape).
 function maskGraph(mask) {
   if (!mask || mask.mode === 'off') return '[base]null[m]';
   if (mask.mode === 'band') {
-    const px = Math.round(mask.band.px);
+    const px = bandPx(mask.band);
     if (px <= 0) return '[base]null[m]';
     const box = {
       left: [0, 0, px, H], right: [W - px, 0, px, H], top: [0, 0, W, px], bottom: [0, H - px, W, px],
@@ -251,4 +262,4 @@ async function makeBlank(out) {
   return fs.statSync(out).size;
 }
 
-module.exports = { convert, estimate, probe, makeBlank, maskGraph, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H };
+module.exports = { convert, estimate, probe, makeBlank, maskGraph, bandPx, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H };

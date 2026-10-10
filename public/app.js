@@ -304,6 +304,13 @@ $('checkBtn').onclick = async () => {
 };
 
 // ---------- mask ----------
+// Same rounding as src/convert.js bandPx(): keep the band edge on the 16 px MJPEG block grid.
+function bandPx(band) {
+  const px = Math.round(band.px);
+  if (px <= 0) return 0;
+  const offset = band.edge === 'top' ? (1080 % 16) : 0;
+  return Math.ceil((px - offset) / 16) * 16 + offset;
+}
 const F = ['mMode', 'bEdge', 'bPx', 'cX', 'cY', 'cR', 'cF'];
 function formToMask() {
   return {
@@ -335,7 +342,8 @@ function drawMask() {
     for (let gy = 0; gy <= 1080; gy += 200) { x.beginPath(); x.moveTo(0, gy / 2); x.lineTo(1200, gy / 2); x.stroke(); }
     x.fillStyle = 'rgba(255,40,40,.65)';
     if (m.mode === 'band') {
-      const p = m.band.px / 2;
+      const eff = bandPx(m.band), p = eff / 2;
+      $('bPxNote').textContent = eff && eff !== m.band.px ? `Applied as ${eff} px (rounded up to the screen's 16 px compression grid so the black area stays clean)` : '';
       ({ left: () => x.fillRect(0, 0, p, 540), right: () => x.fillRect(1200 - p, 0, p, 540), top: () => x.fillRect(0, 0, 1200, p), bottom: () => x.fillRect(0, 540 - p, 1200, p) })[m.band.edge]();
     } else if (m.mode === 'circle') {
       const { cx, cy, r, feather } = m.circle;
