@@ -28,6 +28,7 @@ const usage = `CoolerScreen CLI
       --name <text>  --no-send      (convert only)
   coolerscreen setup     One-time: switch the screen to the WinUSB driver (asks for administrator approval).
                          Without it the screen turns its display off ~30 s after any program closes its COM port.
+  coolerscreen reconnect Fix "screen not found" after boot (Windows failed to enumerate it): resets its USB port (admin prompt).
   coolerscreen restore   Undo setup (back to the standard COM-port driver).
   coolerscreen transport Show how the screen is reachable (winusb / serial / none).
   coolerscreen clear startup|standby   Upload a 1-frame black clip to free that slot's space.
@@ -40,8 +41,8 @@ const mb = b => (b / 1e6).toFixed(2) + ' MB';
 const bar = label => f => process.stdout.write(`\r${label} ${Math.round(f * 100)}%      `);
 
 (async () => {
-  if (cmd === 'setup' || cmd === 'restore') {
-    const r = await (cmd === 'setup' ? setup.setupWinUsb : setup.restoreSerial)((f, msg) => bar(msg)(f));
+  if (cmd === 'setup' || cmd === 'restore' || cmd === 'reconnect') {
+    const r = await (cmd === 'setup' ? setup.setupWinUsb : cmd === 'reconnect' ? setup.reconnect : setup.restoreSerial)((f, msg) => bar(msg)(f));
     console.log('\n' + (r.warning || (r.already ? 'Already set up.' : 'Done.')));
   } else if (cmd === 'transport') {
     console.log(JSON.stringify(await deviceOps.state(), null, 2));

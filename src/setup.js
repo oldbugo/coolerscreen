@@ -64,4 +64,18 @@ async function restoreSerial(onProgress = () => {}) {
   return {};
 }
 
-module.exports = { setupWinUsb, restoreSerial, LOG };
+/** Power-cycle the USB hub port of a screen that failed to enumerate at boot. */
+async function reconnect(onProgress = () => {}) {
+  const st = await deviceOps.state();
+  if (st.transport !== 'none') { onProgress(1, 'Screen is already connected'); return { already: true }; }
+  if (!st.failedUsb) throw new Error('Screen not found and no failed USB device was detected. Check the USB cable and that the cooler has power.');
+  onProgress(0.1, 'Waiting for administrator approval');
+  await runElevated('reconnect.ps1');
+  onProgress(0.6, 'Waiting for the screen to appear');
+  const ok = await waitFor(async () => (await deviceOps.state()).transport !== 'none', 25);
+  onProgress(1, 'Done');
+  if (!ok) throw new Error('The USB port was reset but the screen did not appear. Try unplugging and replugging the screen USB cable.');
+  return { already: false };
+}
+
+module.exports = { setupWinUsb, restoreSerial, reconnect, LOG };

@@ -60,6 +60,7 @@ Command line equivalent: `node.exe bin\coolerscreen.js restore`.
 
 | Problem | What to do |
 |---|---|
+| "Windows couldn't connect to the screen at startup" (banner with a Reconnect button), or the screen is missing and Device Manager shows "Unknown USB Device (Device Descriptor Request Failed)" | A known quirk: after a PC boot Windows sometimes fails to enumerate the screen (the screen itself keeps playing its loop). Click **Reconnect** (or run `node.exe bin\coolerscreen.js reconnect`) and approve the Windows prompt. It power-cycles only that one USB port, which fixes it immediately. Nothing is installed or changed permanently. |
 | "Screen not found" | Check the USB cable/header and that the cooler has power. Unplug and replug USB, then "Check screen". |
 | Banner says the screen "needs setup" again | The driver was reset (moving the internal USB header to another port, or a big Windows update). Click "Set up screen (one-time)" again. |
 | Screen goes dark about 30 s after sending | The one-time setup was not applied (or was undone). Run "Set up screen". |
@@ -67,6 +68,14 @@ Command line equivalent: `node.exe bin\coolerscreen.js restore`.
 | Clip is "too big for the screen" | Shorten the loop length, lower fps, or use Auto quality. The screen only has about 10 MB. Garbage on screen means an oversize file got through, so re-convert smaller. |
 | The setup says it failed | Read `%TEMP%\coolerscreen-setup.log` and open an issue with its contents. |
 | Browser page does not open | Open http://127.0.0.1:8765/ yourself (the black window prints the exact address). |
+
+### Screen stays on when the PC is off
+
+Many motherboards keep the USB ports powered while the PC is shut down, so the screen keeps showing its loop. The vendor
+app used to switch the screen off at shutdown, which needs a running program; CoolerScreen runs nothing in the
+background, so it cannot do that. The no-software fix is in the BIOS/UEFI: enable **ErP Ready** / **ErP** (Gigabyte "ErP",
+ASUS "ErP Ready", MSI "EuP 2013") or disable **USB power in S4/S5** (names vary by board). Then the USB ports lose power
+when the PC is off and the screen turns off with it. Note: this also stops USB charging (phones etc.) while the PC is off.
 
 ## For developers
 
@@ -88,6 +97,7 @@ Set `COOLERSCREEN_HOME` to keep library/settings in another folder.
                                              [--start sec] [--length sec] [--name text] [--no-send]
     node bin/coolerscreen.js setup         # one-time WinUSB driver setup (UAC prompt)
     node bin/coolerscreen.js restore       # undo the setup
+    node bin/coolerscreen.js reconnect     # reset the USB port after a failed boot-time enumeration
     node bin/coolerscreen.js transport     # winusb | serial | none
     node bin/coolerscreen.js clear startup|standby
     node bin/coolerscreen.js slots

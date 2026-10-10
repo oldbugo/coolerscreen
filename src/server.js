@@ -31,7 +31,7 @@ function newJob(kind) {
 function runJob(job, fn) {
   fn(job).then(
     r => { job.status = 'done'; job.progress = 1; job.result = r; },
-    e => { job.status = 'error'; job.error = e.message || String(e); },
+    e => { job.status = 'error'; job.error = e.message || String(e); job.failedUsb = !!e.failedUsb; },
   );
   return job;
 }
@@ -144,10 +144,10 @@ async function handle(req, res) {
       return json(res, 200, { jobId: job.id });
     }
     if (p === '/api/transport' && m === 'GET') return json(res, 200, await deviceOps.state());
-    if ((p === '/api/setup' || p === '/api/restore') && m === 'POST') {
+    if ((p === '/api/setup' || p === '/api/restore' || p === '/api/reconnect') && m === 'POST') {
       if (deviceBusy) return json(res, 409, { error: 'The screen is busy with another operation.' });
       deviceBusy = true;
-      const fn = p === '/api/setup' ? setup.setupWinUsb : setup.restoreSerial;
+      const fn = p === '/api/setup' ? setup.setupWinUsb : p === '/api/reconnect' ? setup.reconnect : setup.restoreSerial;
       const job = runJob(newJob('setup'), async j => {
         try { return await fn((f, msg) => { j.progress = f; j.message = msg; }); } finally { deviceBusy = false; }
       });
@@ -157,7 +157,7 @@ async function handle(req, res) {
       if (deviceBusy) return json(res, 409, { error: 'The screen is busy with another operation.' });
       deviceBusy = true;
       try { return json(res, 200, await deviceOps.checkScreen()); }
-      catch (e) { return json(res, 502, { error: e.message }); }
+      catch (e) { return json(res, 502, { error: e.message, failedUsb: !!e.failedUsb }); }
       finally { deviceBusy = false; }
     }
     return json(res, 404, { error: 'Not found' });

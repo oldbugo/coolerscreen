@@ -12,7 +12,7 @@ let advanced = false;
 async function api(path, method = 'GET', body) {
   const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  if (!r.ok) { const err = new Error(j.error || r.statusText); err.failedUsb = !!j.failedUsb; throw err; }
   return j;
 }
 
@@ -28,7 +28,7 @@ async function pollJob(jobId, onUpdate) {
     const j = await api('/api/jobs/' + jobId);
     onUpdate && onUpdate(j);
     if (j.status === 'done') return j.result;
-    if (j.status === 'error') throw new Error(j.error);
+    if (j.status === 'error') { const err = new Error(j.error); err.failedUsb = !!j.failedUsb; throw err; }
     await new Promise(r => setTimeout(r, 400));
   }
 }
@@ -163,7 +163,7 @@ async function sendItem(it, slot, prog) {
     const r = await pollJob(jobId, j => setBar(prog, j.progress, j.message + ' ' + Math.round(j.progress * 100) + '%'));
     setBar(prog, 1, 'Sent');
     toast((r.note || 'Sent') + (r.serialWarning ? '  WARNING: ' + r.serialWarning : ''), !!r.serialWarning, r.serialWarning ? 20000 : 6000);
-  } catch (e) { setBar(prog, 1, e.message, true); toast(e.message, true, 12000); }
+  } catch (e) { setBar(prog, 1, e.message, true); toast(e.message, true, 12000); if (e.failedUsb) $('reconnectBanner').classList.remove('hidden'); }
   loadSlots().then(renderGallery);
 }
 
@@ -310,7 +310,7 @@ $('checkBtn').onclick = async () => {
     $('setupBanner').classList.toggle('hidden', !info._needsSetup);
     s.title = JSON.stringify(info, null, 2);
     toast(parts.join('  |  ') || JSON.stringify(info), false, 15000);
-  } catch (e) { s.className = 'status bad'; s.textContent = 'Screen: ' + e.message; }
+  } catch (e) { s.className = 'status bad'; s.textContent = 'Screen: ' + e.message; $('reconnectBanner').classList.toggle('hidden', !e.failedUsb); }
   b.disabled = false;
 };
 
@@ -395,7 +395,8 @@ async function runSetupJob(url, label, box) {
     setBar(box, 1, 'Done');
     toast(r.warning || label + ' finished.', !!r.warning, 12000);
     $('setupBanner').classList.add('hidden');
-  } catch (e) { setBar(box, 1, e.message, true); toast(e.message, true, 15000); }
+    return true;
+  } catch (e) { setBar(box, 1, e.message, true); toast(e.message, true, 15000); return false; }
 }
 $('setupBtn').onclick = () => {
   if (!confirm("One-time setup: this replaces the screen's standard COM-port driver with Microsoft's WinUSB driver so the screen keeps its display on. Windows will ask for administrator approval. The vendor app will no longer see the screen until you restore the original driver (Advanced section).\n\nContinue?")) return;
@@ -406,3 +407,14 @@ $('restoreBtn').onclick = () => {
   runSetupJob('/api/restore', 'Restore', $('setupProg'));
 };
 $('advToggle').onchange = e => { advanced = e.target.checked; renderGallery(); };
+
+$('reconnectBtn').onclick = async () => {
+  if (!confirm('Reset the USB port the screen is connected to? Windows will ask for administrator approval. Nothing else is changed.')) return;
+  const b = $('reconnectBtn'); b.disabled = true;
+  try {
+    if (await runSetupJob('/api/reconnect', 'Reconnect', $('reconnectProg'))) {
+      $('reconnectBanner').classList.add('hidden');
+      $('checkBtn').click();
+    }
+  } finally { b.disabled = false; }
+};

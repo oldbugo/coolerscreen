@@ -3,6 +3,7 @@
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 function friendly(e) {
+  if (e && e.failedUsb) return e;
   const m = (e && e.message) || String(e);
   if (/not found/i.test(m)) {
     return new Error('Screen not found. Check the USB cable and that the cooler is powered.');
@@ -26,6 +27,11 @@ async function openAny() {
     const { Screen, findPort } = require('./device');
     if (await findPort()) return { screen: await Screen.open(), transport: 'serial' };
   } catch (e) { throw friendly(e); }
+  if (!(usbErr && /claim/.test(usbErr.message)) && (await failedUsbPresent())) {
+    const e = new Error('Windows could not connect to the screen at startup (a known quirk). Click Reconnect (needs one administrator approval).');
+    e.failedUsb = true;
+    throw e;
+  }
   throw friendly(usbErr && /claim/.test(usbErr.message) ? usbErr : new Error('Screen not found'));
 }
 
@@ -39,7 +45,17 @@ async function state() {
     const { findPort } = require('./device');
     if (await findPort()) return { transport: 'serial', needsSetup: true, warning: SERIAL_WARNING };
   } catch {}
-  return { transport: 'none', needsSetup: false };
+  return { transport: 'none', needsSetup: false, failedUsb: await failedUsbPresent() };
+}
+
+// Windows sometimes fails to enumerate the screen at boot: "Unknown USB Device (Device Descriptor Request Failed)".
+function failedUsbPresent() {
+  if (process.platform !== 'win32') return Promise.resolve(false);
+  return new Promise(resolve => {
+    const cmd = "@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\VID_0000&PID_000' }).Count";
+    require('child_process').execFile('powershell', ['-NoProfile', '-Command', cmd], { windowsHide: true, timeout: 15000 },
+      (e, out) => resolve(!e && parseInt(out, 10) > 0));
+  });
 }
 
 async function checkScreen() {
@@ -101,4 +117,4 @@ async function sendFiles(items, onProgress, opts = {}) {
   return { ok: true, warning, transport, serialWarning: transport === 'serial' ? SERIAL_WARNING : undefined };
 }
 
-module.exports = { checkScreen, sendFiles, state, openAny, openRetry, SERIAL_WARNING };
+module.exports = { failedUsbPresent, checkScreen, sendFiles, state, openAny, openRetry, SERIAL_WARNING };
