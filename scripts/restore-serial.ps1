@@ -1,8 +1,9 @@
 # Undo setup-winusb.ps1 (run elevated; CoolerScreen launches it via a UAC prompt).
 # Removes the screen's CDC device node so Windows re-detects it and installs the standard usbser (COM port)
 # driver again. The vendor app will see the screen again afterwards.
-# Log: %TEMP%\coolerscreen-setup.log (last line is "RESULT: OK" or "RESULT: ERROR ...")
-$log = Join-Path $env:TEMP 'coolerscreen-setup.log'
+# Log: -Log <file> (CoolerScreen 2 passes a per-run file; default %TEMP%\coolerscreen-setup.log) (last line is "RESULT: OK" or "RESULT: ERROR ...")
+param([string]$Log = (Join-Path $env:TEMP 'coolerscreen-setup.log'))
+$log = $Log
 function Log($m) { "$(Get-Date -Format 'HH:mm:ss') $m" | Add-Content $log }
 Remove-Item $log -ErrorAction SilentlyContinue
 try {

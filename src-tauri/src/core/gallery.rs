@@ -113,7 +113,7 @@ fn is_stable(file: &Path, md: &std::fs::Metadata) -> bool {
 
 impl App {
     pub fn gallery_dir(&self) -> PathBuf {
-        if let Some(g) = std::env::var_os("COOLERSCREEN_GALLERY") {
+        if let Some(g) = self.gallery_env.lock().unwrap().clone() {
             return g.into();
         }
         let s = self.settings.load();

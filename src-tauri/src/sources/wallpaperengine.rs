@@ -84,8 +84,9 @@ pub struct Entry {
 /// Interpret one project.json found in `dir` (a folder inside a library folder `parent_is_workshop` or not).
 pub fn parse_project(dir: &Path, folder_name: &str, workshop: bool, j: &serde_json::Value) -> Entry {
     let type_ = j.get("type").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-    let file = j.get("file").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|f| dir.join(f));
-    let preview = j.get("preview").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(|f| dir.join(f)).filter(|p| p.exists());
+    // Paths from project.json must stay inside the item folder (no absolute paths, no "..", no links out).
+    let file = j.get("file").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).and_then(|f| join_inside(dir, f));
+    let preview = j.get("preview").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).and_then(|f| join_inside(dir, f)).filter(|p| p.is_file());
     let key = format!("we-{}", if workshop { folder_name.to_string() } else { sha1_hex10(&dir.to_string_lossy()) });
     let (mut action, mut note) = (Action::None, String::new());
     if type_ == "video" && file.as_ref().map_or(false, |f| f.exists()) {
@@ -97,6 +98,13 @@ pub fn parse_project(dir: &Path, folder_name: &str, workshop: bool, j: &serde_js
     }
     let title: String = j.get("title").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or(folder_name).chars().take(120).collect();
     Entry { id: key, title, type_: if type_.is_empty() { "other".into() } else { type_ }, action, note, dir: dir.to_path_buf(), file, project: dir.join("project.json"), preview }
+}
+
+static SCAN: ScanCache<Entry> = ScanCache::new();
+
+/// `scan`, cached while the library folders are unchanged (30 s at most); `refresh` forces a new scan.
+pub fn scan_cached(ctx: &SourceCtx, refresh: bool) -> std::sync::Arc<Vec<Entry>> {
+    SCAN.get(&folders(ctx), std::time::Duration::from_secs(30), refresh, || scan(ctx))
 }
 
 pub fn scan(ctx: &SourceCtx) -> Vec<Entry> {
@@ -213,8 +221,8 @@ impl SourceProvider for WallpaperEngine {
         let vid = items.iter().filter(|i| i.action == Action::Add).count();
         Detect::ok(format!("Wallpaper Engine found: {} items ({vid} video, {rec} to record)", items.len()))
     }
-    fn list(&self, ctx: &SourceCtx, page: u32, query: Option<&str>, _refresh: bool) -> Result<ListPage> {
-        let all: Vec<Entry> = scan(ctx).into_iter().filter(|e| title_matches(&e.title, query)).collect();
+    fn list(&self, ctx: &SourceCtx, page: u32, query: Option<&str>, refresh: bool) -> Result<ListPage> {
+        let all: Vec<Entry> = scan_cached(ctx, refresh).iter().filter(|e| title_matches(&e.title, query)).cloned().collect();
         let p = page.max(1) as usize;
         let items = all.iter().skip((p - 1) * PAGE).take(PAGE).map(|i| Item {
             id: i.id.clone(), title: i.title.clone(), thumb: i.preview.as_ref().map(|_| format!("thumb:{}", i.id)), type_: i.type_.clone(),
@@ -222,10 +230,10 @@ impl SourceProvider for WallpaperEngine {
         Ok(ListPage { items, total: all.len() as u64, has_more: p * PAGE < all.len() })
     }
     fn thumb_path(&self, ctx: &SourceCtx, item_id: &str) -> Option<PathBuf> {
-        scan(ctx).into_iter().find(|e| e.id == item_id).and_then(|e| e.preview)
+        scan_cached(ctx, false).iter().find(|e| e.id == item_id).and_then(|e| e.preview.clone())
     }
     fn add(&self, ctx: &SourceCtx, item_id: &str, req: &AddRequest, progress: Progress, cancel: &Cancel) -> Result<AddResult> {
-        let Some(i) = scan(ctx).into_iter().find(|e| e.id == item_id) else { return err("This wallpaper is no longer there.") };
+        let Some(i) = scan_cached(ctx, false).iter().find(|e| e.id == item_id).cloned().or_else(|| scan_cached(ctx, true).iter().find(|e| e.id == item_id).cloned()) else { return err("This wallpaper is no longer there.") };
         match i.action {
             Action::Add => {
                 progress(0.5, "");

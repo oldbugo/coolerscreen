@@ -783,6 +783,25 @@ impl Scheduler {
         g.running.iter().any(|id| kinds.contains(&g.entries[id].spec.kind.as_str()))
     }
 
+    /// Wait until no task is running (or, with `ignore_device`, only device tasks are), at most `max`.
+    /// Returns true if that state was reached.
+    pub fn wait_idle(&self, max: Duration, ignore_device: bool) -> bool {
+        let end = Instant::now() + max;
+        loop {
+            let busy = {
+                let g = self.0.inner.lock().unwrap();
+                g.running.iter().any(|id| !(ignore_device && g.entries[id].spec.resources.get(Res::Device) > 0))
+            };
+            if !busy {
+                return true;
+            }
+            if Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// Number of queued and running tasks (tests, diagnostics).
     pub fn counts(&self) -> (usize, usize) {
         let g = self.0.inner.lock().unwrap();
@@ -1447,6 +1466,26 @@ mod tests {
         rel.store(true, Ordering::SeqCst);
         a.wait().unwrap();
         b.wait().unwrap();
+    }
+
+    #[test]
+    fn shutdown_wait_is_bounded_and_skips_uploads() {
+        let s = sched([2, 2, 1, 4, 1, 8]);
+        let log = Arc::new(Mutex::new(vec![]));
+        let never = Arc::new(AtomicBool::new(false));
+        let dev = s.submit(TaskSpec::new("send", "send", Resources::one(Res::Device)), gate_task("send", log.clone(), never.clone()));
+        let cpu = s.submit(TaskSpec::new("version", "conv", Resources::one(Res::Cpu)), gate_task("conv", log.clone(), never.clone()));
+        wait_until(|| log.lock().unwrap().len() == 2);
+        s.cancel_where(|_| true);
+        let t = Instant::now();
+        assert!(s.wait_idle(Duration::from_secs(1), true), "only the upload is left");
+        assert!(t.elapsed() < Duration::from_millis(500));
+        assert!(cpu.wait().is_err());
+        let t = Instant::now();
+        assert!(!s.wait_idle(Duration::from_millis(200), false), "the upload keeps running");
+        assert!(t.elapsed() < Duration::from_millis(400));
+        never.store(true, Ordering::SeqCst);
+        dev.wait().unwrap();
     }
 
     #[test]

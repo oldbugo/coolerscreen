@@ -65,8 +65,17 @@ fn resolve(dir: &Path, v: &serde_json::Value) -> Option<PathBuf> {
 /// Parse one `LivelyInfo.json` (already read) living in `dir`.
 pub fn parse_info(dir: &Path, folder_name: &str, j: &serde_json::Value) -> Entry {
     let t = j.get("Type").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(-1);
-    let file = j.get("FileName").and_then(|v| resolve(dir, v));
-    let thumb = j.get("Thumbnail").and_then(|v| resolve(dir, v)).or_else(|| j.get("Preview").and_then(|v| resolve(dir, v)));
+    // Lively may store absolute paths (by design), so they are allowed, but only to existing media files of the
+    // expected kind: a LivelyInfo.json can never make the app read or serve some other file.
+    let has_ext = |p: &PathBuf, exts: &[&str]| p.extension().map(|e| e.to_string_lossy().to_lowercase()).is_some_and(|e| exts.contains(&e.as_str()));
+    const MEDIA: [&str; 13] = ["mp4", "mov", "mkv", "webm", "avi", "m4v", "wmv", "gif", "jpg", "jpeg", "png", "bmp", "webp"];
+    const IMAGES: [&str; 6] = ["jpg", "jpeg", "png", "bmp", "webp", "gif"];
+    let file = j.get("FileName").and_then(|v| resolve(dir, v)).filter(|p| has_ext(p, &MEDIA) && p.is_file());
+    let thumb = j
+        .get("Thumbnail")
+        .and_then(|v| resolve(dir, v))
+        .filter(|p| has_ext(p, &IMAGES) && p.is_file())
+        .or_else(|| j.get("Preview").and_then(|v| resolve(dir, v)).filter(|p| has_ext(p, &IMAGES) && p.is_file()));
     let importable = matches!(t, 7 | 8 | 11);
     let exists = file.as_ref().map_or(false, |f| f.exists());
     let tn = type_name(t);
@@ -81,6 +90,13 @@ pub fn parse_info(dir: &Path, folder_name: &str, j: &serde_json::Value) -> Entry
         file: if exists { file } else { None },
         thumb: thumb.filter(|p| p.exists()),
     }
+}
+
+static SCAN: ScanCache<Entry> = ScanCache::new();
+
+/// `scan`, cached while the library folders are unchanged (30 s at most); `refresh` forces a new scan.
+pub fn scan_cached(ctx: &SourceCtx, refresh: bool) -> std::sync::Arc<Vec<Entry>> {
+    SCAN.get(&libraries(ctx), std::time::Duration::from_secs(30), refresh, || scan(ctx))
 }
 
 pub fn scan(ctx: &SourceCtx) -> Vec<Entry> {
@@ -122,8 +138,8 @@ impl SourceProvider for Lively {
         let n = items.iter().filter(|i| i.action == Action::Add).count();
         Detect::ok(format!("Lively Wallpaper found: {} items ({n} can be added)", items.len()))
     }
-    fn list(&self, ctx: &SourceCtx, page: u32, query: Option<&str>, _refresh: bool) -> Result<ListPage> {
-        let all: Vec<Entry> = scan(ctx).into_iter().filter(|e| title_matches(&e.title, query)).collect();
+    fn list(&self, ctx: &SourceCtx, page: u32, query: Option<&str>, refresh: bool) -> Result<ListPage> {
+        let all: Vec<Entry> = scan_cached(ctx, refresh).iter().filter(|e| title_matches(&e.title, query)).cloned().collect();
         let p = page.max(1) as usize;
         let items = all.iter().skip((p - 1) * PAGE).take(PAGE).map(|i| Item {
             id: i.id.clone(), title: i.title.clone(), thumb: i.thumb.as_ref().map(|_| format!("thumb:{}", i.id)), type_: i.type_.clone(),
@@ -131,10 +147,10 @@ impl SourceProvider for Lively {
         Ok(ListPage { items, total: all.len() as u64, has_more: p * PAGE < all.len() })
     }
     fn thumb_path(&self, ctx: &SourceCtx, item_id: &str) -> Option<PathBuf> {
-        scan(ctx).into_iter().find(|e| e.id == item_id).and_then(|e| e.thumb)
+        scan_cached(ctx, false).iter().find(|e| e.id == item_id).and_then(|e| e.thumb.clone())
     }
     fn add(&self, ctx: &SourceCtx, item_id: &str, _req: &AddRequest, progress: Progress, _cancel: &Cancel) -> Result<AddResult> {
-        let Some(i) = scan(ctx).into_iter().find(|e| e.id == item_id) else { return err("This wallpaper is no longer there.") };
+        let Some(i) = scan_cached(ctx, false).iter().find(|e| e.id == item_id).cloned().or_else(|| scan_cached(ctx, true).iter().find(|e| e.id == item_id).cloned()) else { return err("This wallpaper is no longer there.") };
         let Some(file) = i.file.clone().filter(|_| i.action == Action::Add) else { return err(if i.note.is_empty() { "Not supported".to_string() } else { i.note }) };
         progress(0.5, "");
         let ext = file.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();

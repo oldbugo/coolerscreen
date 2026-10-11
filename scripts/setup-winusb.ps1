@@ -2,8 +2,9 @@
 # Binds Microsoft's in-box WinUSB driver (C:\Windows\INF\winusb.inf) to the screen's CDC function
 # (USB\VID_33C3&PID_77xx&MI_00) so Windows never sends the serial "DTR low" request that makes the
 # firmware turn the display off after 30 s. Safe to run repeatedly. Undo: scripts\restore-serial.ps1
-# Log: %TEMP%\coolerscreen-setup.log (last line is "RESULT: OK" or "RESULT: ERROR ...")
-$log = Join-Path $env:TEMP 'coolerscreen-setup.log'
+# Log: -Log <file> (CoolerScreen 2 passes a per-run file; default %TEMP%\coolerscreen-setup.log) (last line is "RESULT: OK" or "RESULT: ERROR ...")
+param([string]$Log = (Join-Path $env:TEMP 'coolerscreen-setup.log'))
+$log = $Log
 function Log($m) { "$(Get-Date -Format 'HH:mm:ss') $m" | Add-Content $log }
 Remove-Item $log -ErrorAction SilentlyContinue
 $GUID = '{6E45736A-2B1B-4078-B772-B3AF2B6FDE1C}'

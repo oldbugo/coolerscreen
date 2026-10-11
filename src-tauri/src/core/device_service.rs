@@ -29,6 +29,10 @@ struct Fake {
 pub struct DeviceService {
     fake: Option<Mutex<Fake>>,
     scripts: Mutex<PathBuf>,
+    /// Folder for the elevated scripts' logs (the app folder, so an administrator approving the prompt from another
+    /// account still writes where the app reads; %TEMP% would be the administrator's own).
+    logs_dir: PathBuf,
+    last_log: Mutex<Option<PathBuf>>,
 }
 
 fn friendly_fake(code: &str) -> CoreError {
@@ -42,20 +46,55 @@ fn friendly_fake(code: &str) -> CoreError {
     CoreError::coded(code, m).status(502)
 }
 
-pub fn setup_log() -> PathBuf {
-    std::env::temp_dir().join("coolerscreen-setup.log")
+
+/// The PowerShell command that runs `script` (elevated: through a UAC prompt) with `-Log <log>` and `extra` switches.
+/// Inner double quotes keep paths with spaces intact through Start-Process's argument joining.
+pub fn script_command(script: &Path, log: &Path, extra: &[&str], elevated: bool) -> String {
+    let q = |p: &Path| p.display().to_string().replace('\'', "''");
+    let extra: String = extra.iter().map(|a| format!(",'{}'", a.replace('\'', "''"))).collect();
+    format!(
+        "Start-Process powershell{} -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','\"{}\"','-Log','\"{}\"'{extra}",
+        if elevated { " -Verb RunAs" } else { "" },
+        q(script),
+        q(log)
+    )
 }
 
 impl DeviceService {
     /// Real device unless COOLERSCREEN_FAKE_DEVICE is set.
-    pub fn from_env(_base: &Path) -> Self {
-        match std::env::var("COOLERSCREEN_FAKE_DEVICE") {
+    pub fn from_env(base: &Path) -> Self {
+        let mut d = match std::env::var("COOLERSCREEN_FAKE_DEVICE") {
             Ok(v) if !v.is_empty() => {
                 let speed = std::env::var("COOLERSCREEN_FAKE_SPEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
                 Self::fake(&v, speed, std::env::var_os("COOLERSCREEN_FAKE_FAIL").is_some())
             }
-            _ => DeviceService { fake: None, scripts: Mutex::new(super::paths::scripts_dir()) },
+            _ => DeviceService { fake: None, ..Self::fake("winusb", 1.0, false) },
+        };
+        d.logs_dir = base.join("logs");
+        d
+    }
+
+    /// A new log file for one run of an elevated script (old ones beyond the last 10 are removed).
+    fn new_setup_log(&self, script: &str) -> PathBuf {
+        let _ = std::fs::create_dir_all(&self.logs_dir);
+        if let Ok(rd) = std::fs::read_dir(&self.logs_dir) {
+            let mut old: Vec<PathBuf> =
+                rd.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("setup-"))).collect();
+            old.sort();
+            let n = old.len().saturating_sub(9);
+            for p in &old[..n] {
+                let _ = std::fs::remove_file(p);
+            }
         }
+        let stem = script.trim_end_matches(".ps1");
+        let f = self.logs_dir.join(format!("setup-{}-{stem}.log", super::scheduler::now_ms()));
+        *self.last_log.lock().unwrap() = Some(f.clone());
+        f
+    }
+
+    /// The log of the last elevated script run (for messages).
+    pub fn last_setup_log(&self) -> String {
+        self.last_log.lock().unwrap().as_ref().map(|p| p.display().to_string()).unwrap_or_default()
     }
 
     pub fn fake(mode: &str, speed: f64, fail_upload: bool) -> Self {
@@ -63,6 +102,8 @@ impl DeviceService {
         DeviceService {
             fake: Some(Mutex::new(Fake { transport: t, restarted: false, fail_upload, speed })),
             scripts: Mutex::new(super::paths::scripts_dir()),
+            logs_dir: std::env::temp_dir().join("CoolerScreen-logs"),
+            last_log: Mutex::new(None),
         }
     }
 
@@ -280,12 +321,8 @@ impl DeviceService {
             if !file.exists() {
                 return Err(CoreError::new(format!("Setup script not found: {}", file.display())));
             }
-            let log = setup_log();
-            let _ = std::fs::remove_file(&log);
-            let ps = format!(
-                "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{}'",
-                file.display().to_string().replace('\'', "''")
-            );
+            let log = self.new_setup_log(script);
+            let ps = script_command(&file, &log, &[], true);
             let out = std::process::Command::new("powershell")
                 .args(["-NoProfile", "-Command", &ps])
                 .creation_flags(0x0800_0000)
@@ -336,7 +373,7 @@ impl DeviceService {
         if !self.wait_for(|s| s["transport"] == "winusb", 25) {
             return Err(CoreError::new(format!(
                 "Driver was installed but the screen is not reachable over WinUSB yet. Unplug and replug the screen's USB cable and try \"Check screen\". (log: {})",
-                setup_log().display()
+                self.last_setup_log()
             )));
         }
         progress(0.85, "Verifying (restarting the screen)");
@@ -455,6 +492,84 @@ mod tests {
         let stuck = DeviceService::fake("noreply-stuck", 0.01, false);
         let e = stuck.send_files(&[(ok, Slot::Standby)], true, &mut |_, _, _, _| {}).unwrap_err();
         assert!(e.failed_usb, "{e}");
+    }
+
+    fn scripts() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("scripts")
+    }
+
+    /// Every regex in scripts/*.ps1 (after -match / -notmatch / [regex]::Match) must compile in .NET: an invalid one
+    /// throws at run time and the script ends with RESULT: ERROR (reconnect.ps1 had '^USB\VID_...\').
+    #[test]
+    #[cfg(windows)]
+    fn script_regexes_compile_in_dotnet() {
+        let mut pats = vec![];
+        for e in std::fs::read_dir(scripts()).unwrap().flatten() {
+            if e.path().extension().is_some_and(|x| x == "ps1") {
+                let s = std::fs::read_to_string(e.path()).unwrap();
+                for key in ["-match '", "-notmatch '", "[regex]::Match("] {
+                    let mut rest = s.as_str();
+                    while let Some(i) = rest.find(key) {
+                        rest = &rest[i + key.len()..];
+                        let lit = if key.starts_with('[') {
+                            // second argument: , '...'
+                            match rest.find(", '") {
+                                Some(j) if j < 200 => &rest[j + 3..],
+                                _ => continue,
+                            }
+                        } else {
+                            rest
+                        };
+                        // a PowerShell single-quoted literal ('' is an escaped quote)
+                        let mut out = String::new();
+                        let mut it = lit.chars().peekable();
+                        while let Some(c) = it.next() {
+                            if c == '\'' {
+                                if it.peek() == Some(&'\'') {
+                                    it.next();
+                                    out.push('\'');
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                out.push(c);
+                            }
+                        }
+                        pats.push(out);
+                    }
+                }
+            }
+        }
+        assert!(pats.len() >= 8, "found {} patterns", pats.len());
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join("patterns.txt");
+        std::fs::write(&list, pats.join("\n")).unwrap();
+        let cmd = format!(
+            "$bad = 0; Get-Content -LiteralPath '{}' -Encoding UTF8 | ForEach-Object {{ try {{ [void][regex]::new($_) }} catch {{ $bad++; 'BAD ' + $_ }} }}; \"BAD_COUNT $bad\"",
+            list.display()
+        );
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &cmd]).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("BAD_COUNT 0"), "invalid .NET regexes in scripts:\n{text}\npatterns: {pats:?}");
+    }
+
+    /// The script command passes -Log (and extra switches) intact, also through paths with spaces: reconnect.ps1
+    /// -DryRun only enumerates devices (no admin rights needed, nothing is cycled).
+    #[test]
+    #[cfg(windows)]
+    fn script_command_passes_log_and_dry_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("with space");
+        std::fs::create_dir_all(&sub).unwrap();
+        let script = sub.join("reconnect.ps1");
+        std::fs::copy(scripts().join("reconnect.ps1"), &script).unwrap();
+        let log = sub.join("run log.txt");
+        let cmd = script_command(&script, &log, &["-DryRun"], false);
+        let st = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &cmd]).status().unwrap();
+        assert!(st.success());
+        let text = std::fs::read_to_string(&log).expect("the script wrote the -Log file");
+        assert!(text.contains("RESULT: OK"), "{text}");
+        assert!(!text.contains("cycling "), "a dry run never cycles a port:\n{text}");
     }
 
     #[test]

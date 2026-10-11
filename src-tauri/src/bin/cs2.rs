@@ -87,7 +87,7 @@ fn main() {
         _ => {
             eprintln!("usage: cs2 info | state | restart | upload <file.mp4> [--intro] | poll <count> <seconds>");
             eprintln!("       cs2 unstick | recover-race-delete | delete-ota   (recovery tools, see tools/README.md)");
-            eprintln!("       cs2 core-check | core-state | core-restart | core-send <library>/<oid>/versions/<vid>  (COOLERSCREEN_HOME = scratch)");
+            eprintln!("       cs2 core-check | core-state | core-restart [--real] | core-send <library>/<oid>/versions/<vid>  (COOLERSCREEN_HOME = scratch folder, or --real)");
             2
         }
     };
@@ -105,6 +105,11 @@ fn core_app() -> std::sync::Arc<cs_core::core::App> {
 }
 
 fn core_run(f: impl FnOnce(&cs_core::core::App) -> Result<serde_json::Value, cs_core::core::CoreError>) -> i32 {
+    // The core writes settings (capacity, slot records): never the real app folder by accident.
+    if std::env::var_os("COOLERSCREEN_HOME").is_none() && !std::env::args().any(|a| a == "--real") {
+        eprintln!("core-* commands use an app folder: set COOLERSCREEN_HOME to a scratch folder, or pass --real to use the real one (%APPDATA%\\CoolerScreen).");
+        return 2;
+    }
     let t = Instant::now();
     let app = core_app();
     match f(&app) {
