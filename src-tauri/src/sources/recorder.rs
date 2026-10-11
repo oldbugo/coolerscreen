@@ -19,6 +19,8 @@ use windows_capture::window::Window;
 pub struct Params {
     pub seconds: f32,
     pub fps: u32,
+    /// Capture the mouse pointer (always false in the app; true only to prove the setting works in tests).
+    pub cursor: bool,
     pub out: PathBuf,
     pub ffmpeg: PathBuf,
 }
@@ -89,7 +91,7 @@ pub fn record_window(title: &str, p: &Params, progress: Progress, cancel: &Cance
     let interval = Duration::from_secs_f64(0.8 / p.fps as f64);
     let settings = Settings::new(
         window,
-        CursorCaptureSettings::WithoutCursor,
+        if p.cursor { CursorCaptureSettings::WithCursor } else { CursorCaptureSettings::WithoutCursor },
         DrawBorderSettings::WithoutBorder,
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Custom(interval),

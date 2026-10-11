@@ -166,7 +166,7 @@ fn sleep_cancellable(d: Duration, cancel: &Cancel) -> Result<()> {
 }
 
 /// Record a scene/web wallpaper to an MP4 in `ctx.tmp_dir`.
-fn record(ctx: &SourceCtx, i: &Entry, seconds: f32, progress: Progress, cancel: &Cancel) -> Result<AddResult> {
+pub(crate) fn record(ctx: &SourceCtx, i: &Entry, seconds: f32, cursor: bool, progress: Progress, cancel: &Cancel) -> Result<AddResult> {
     let _one_at_a_time = RECORDING.lock().unwrap_or_else(|p| p.into_inner());
     let Some(exe) = running_exe() else { return err("Start Wallpaper Engine first (it is needed to play the wallpaper while recording).") };
     let seconds = seconds.clamp(3.0, 60.0);
@@ -176,11 +176,13 @@ fn record(ctx: &SourceCtx, i: &Entry, seconds: f32, progress: Progress, cancel: 
     let out = ctx.tmp_dir.join(format!("{}-{ms}.mp4", i.id));
     progress(0.02, "Opening the wallpaper in its own window");
     let project = i.project.to_string_lossy().to_string();
+    let (px, py) = popout_position();
+    let (px, py) = (px.to_string(), py.to_string());
     {
         let _close = CloseOnDrop { exe: &exe, title: &title };
-        run_control(&exe, &["-control", "openWallpaper", "-file", &project, "-playInWindow", &title, "-width", "2400", "-height", "1080", "-x", "0", "-y", "0", "-borderless"]);
+        run_control(&exe, &["-control", "openWallpaper", "-file", &project, "-playInWindow", &title, "-width", "2400", "-height", "1080", "-x", &px, "-y", &py, "-borderless"]);
         sleep_cancellable(Duration::from_secs(4), cancel)?; // let it load and start animating
-        recorder::record_window(&title, &recorder::Params { seconds, fps: 18, out: out.clone(), ffmpeg: ctx.ffmpeg.clone() }, &|f, m| progress(0.05 + 0.9 * f, m), cancel)?;
+        recorder::record_window(&title, &recorder::Params { seconds, fps: 18, cursor, out: out.clone(), ffmpeg: ctx.ffmpeg.clone() }, &|f, m| progress(0.05 + 0.9 * f, m), cancel)?;
     }
     progress(1.0, "");
     Ok(AddResult { file: out, name: format!("{} [{}].mp4", safe_name(&i.title), i.id), temp: true })
@@ -231,9 +233,28 @@ impl SourceProvider for WallpaperEngine {
                 let ext = file.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
                 Ok(AddResult { name: format!("{} [{}]{ext}", safe_name(&i.title), i.id), file, temp: false })
             }
-            Action::Record => record(ctx, &i, req.seconds.unwrap_or(20.0), progress, cancel),
+            Action::Record => record(ctx, &i, req.seconds.unwrap_or(20.0), false, progress, cancel),
             Action::None => err(if i.note.is_empty() { "This wallpaper type is not supported.".to_string() } else { i.note }),
         }
+    }
+}
+
+/// Where to open the pop-out so the pointer is unlikely to hover it (scenes with mouse parallax react to it): the
+/// bottom-right corner of the whole desktop, so only ~100 px of the window is on a visible monitor.
+/// `COOLERSCREEN_POPOUT_POS="x,y"` overrides (tests).
+pub fn popout_position() -> (i32, i32) {
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    if let Ok(s) = std::env::var("COOLERSCREEN_POPOUT_POS") {
+        if let Some((a, b)) = s.split_once(',') {
+            if let (Ok(x), Ok(y)) = (a.trim().parse(), b.trim().parse()) {
+                return (x, y);
+            }
+        }
+    }
+    unsafe {
+        let (l, t) = (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN));
+        let (w, h) = (GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+        (l + w - 100, t + h - 100)
     }
 }
 
