@@ -809,8 +809,19 @@ impl Shared {
             let e = g.entries.remove(id).unwrap();
             return Some(Self::finish_entry(g, e, Err(reason)));
         }
-        if e.spec.resources.get(Res::Device) > 0 || e.token.is_cancelled() {
+        if e.spec.resources.get(Res::Device) > 0 {
             return None;
+        }
+        if e.token.is_cancelled() {
+            // Being preempted (it would be re-queued): turn that into a real cancel. Already cancelling: nothing to do.
+            if !e.preempted {
+                return None;
+            }
+            let e = g.entries.get_mut(id).unwrap();
+            e.preempted = false;
+            *e.token.0.reason.lock().unwrap() = Some(reason);
+            e.job.message = "Cancelling".into();
+            return Some(e.job.clone());
         }
         let e = g.entries.get_mut(id).unwrap();
         e.preempted = false;
@@ -1310,6 +1321,32 @@ mod tests {
         assert!(s.cancel(&bg1.id));
         let _ = never;
         assert!(bg1.wait().is_err());
+    }
+
+    #[test]
+    fn cancelling_a_task_being_preempted_cancels_it() {
+        let s = sched([1, 2, 1, 4, 1, 8]);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let r2 = runs.clone();
+        // A background task that takes 300 ms to stop after being asked (like a slow child process exit).
+        let bg = s.submit(TaskSpec::new("cards", "bg", Resources::one(Res::Cpu)).priority(Priority::Background).preemptible(), move |ctx| {
+            r2.fetch_add(1, Ordering::SeqCst);
+            while !ctx.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            ctx.check()?;
+            Ok(Value::Null)
+        });
+        wait_until(|| runs.load(Ordering::SeqCst) == 1);
+        let sel = s.submit(TaskSpec::new("estimate", "sel", Resources::one(Res::Cpu)).priority(Priority::Selected), |_| Ok(json!(1)));
+        std::thread::sleep(Duration::from_millis(50)); // bg is now being preempted
+        assert!(s.cancel(&bg.id), "a preempting task can still be cancelled");
+        assert!(bg.wait().unwrap_err().code_is("cancelled"));
+        sel.wait().unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "not re-queued after the cancel");
+        assert_eq!(s.job(&bg.id).unwrap().state, JobState::Cancelled);
     }
 
     #[test]

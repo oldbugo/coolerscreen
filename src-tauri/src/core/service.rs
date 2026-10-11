@@ -301,6 +301,7 @@ impl App {
             .priority(Priority::Selected)
             .auto_priority()
             .cancel_on_blur() // leaving a clip stops its search (the UI searches again when the clip is reopened)
+            .coalesce(format!("loopsearch:{oid}"))
             .visible();
         let (app, oid2, body) = (self.arc(), oid.to_string(), body.clone());
         let h = self.sched.submit(spec, move |ctx| app.search_loops(ctx, &oid2, &body));
@@ -385,31 +386,43 @@ impl App {
         Ok(out)
     }
 
-    /// Loop card previews as their own job, so the size meter for the picked loop runs alongside.
-    fn cards_job(&self, oid: &str, src: &Path, duration: f64, fps: Option<f64>, candidates: Value) {
+    /// Loop card previews as their own job, so the size meter for the picked loop runs alongside. A newer search's
+    /// cards replace older ones for the same clip (coalesced); the "pending" mark (the media server waits for cards
+    /// while it is set) is cleared when this job ends in any way, unless a newer cards job took over.
+    pub(crate) fn cards_job(&self, oid: &str, src: &Path, duration: f64, fps: Option<f64>, candidates: Value) {
         let dir = self.lib.o_dir(oid);
-        // Old cards belong to the previous search.
-        if let Ok(rd) = std::fs::read_dir(&dir) {
-            for e in rd.filter_map(Result::ok) {
-                let n = e.file_name().to_string_lossy().to_string();
-                if n.starts_with("loop-") && n.ends_with(".mp4") {
-                    let _ = std::fs::remove_file(e.path());
-                }
-            }
-        }
-        self.cards_pending.lock().unwrap().insert(oid.to_string());
-        let req = super::api::LoopCardsReq { file: src.to_path_buf(), dir, candidates, duration, fps };
+        let req = super::api::LoopCardsReq { file: src.to_path_buf(), dir: dir.clone(), candidates, duration, fps };
         let o = self.lib.read_original(oid);
         let res = self.media.resources(MediaTask::Cards, o.as_ref().map(probe_of).as_ref());
-        let spec = TaskSpec::new("cards", "Making the loop previews", res).original(oid).priority(Priority::Selected).auto_priority().preemptible();
-        let (app, oid2) = (self.arc(), oid.to_string());
-        self.sched.submit(spec, move |ctx| {
-            let r = app.media.loop_cards(ctx, &req);
-            // Paused for more important work: it runs again later, so the cards are still pending.
-            if !(r.is_err() && ctx.is_cancelled() && ctx.check().err().is_some_and(|e| e.code_is("preempted"))) {
-                app.cards_pending.lock().unwrap().remove(&oid2);
+        let spec = TaskSpec::new("cards", "Making the loop previews", res)
+            .original(oid)
+            .priority(Priority::Selected)
+            .auto_priority()
+            .preemptible()
+            .coalesce(format!("cards:{oid}"));
+        let app = self.arc();
+        let mut pending = self.cards_pending.lock().unwrap();
+        let h = self.sched.submit(spec, move |ctx| {
+            // Old cards belong to the previous search (an older cards job was cancelled by coalescing).
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.filter_map(Result::ok) {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    if n.starts_with("loop-") && n.ends_with(".mp4") {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
             }
-            r.map(|_| Value::Null)
+            app.media.loop_cards(ctx, &req).map(|_| Value::Null)
+        });
+        pending.insert(oid.to_string(), h.id.clone());
+        drop(pending);
+        let (app, oid) = (self.arc(), oid.to_string());
+        std::thread::spawn(move || {
+            let _ = h.wait(); // done, failed or cancelled (a preempted job is re-queued and does not end here)
+            let mut p = app.cards_pending.lock().unwrap();
+            if p.get(&oid) == Some(&h.id) {
+                p.remove(&oid);
+            }
         });
     }
 
@@ -855,9 +868,11 @@ impl App {
     }
 
     fn import_added(&self, ctx: &super::scheduler::TaskCtx, r: super::api::AddedFile) -> CoreResult<Value> {
-        ctx.check()?;
-        ctx.progress(0.9, "Adding to the gallery");
-        let res = self.add_file(&r.file, Some(&r.name));
+        // A temporary download is always deleted: after the import, and also when cancelled or failed.
+        let res = ctx.check().and_then(|_| {
+            ctx.progress(0.9, "Adding to the gallery");
+            self.add_file(&r.file, Some(&r.name))
+        });
         if r.temp {
             let _ = std::fs::remove_file(&r.file);
         }
@@ -893,7 +908,7 @@ impl App {
                 if file.starts_with("loop-") {
                     let end = std::time::Instant::now() + Duration::from_secs(30);
                     // (cards are written in place, so wait for the whole job, not just the file)
-                    while self.cards_pending.lock().unwrap().contains(*oid)
+                    while self.cards_pending.lock().unwrap().contains_key(*oid)
                         && std::time::Instant::now() < end
                     {
                         std::thread::sleep(Duration::from_millis(100));

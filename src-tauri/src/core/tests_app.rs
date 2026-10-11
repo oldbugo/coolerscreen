@@ -234,6 +234,36 @@ fn estimate_is_paused_while_the_screen_is_busy_in_blocking_mode() {
 }
 
 #[test]
+fn cancelled_cards_job_clears_pending() {
+    use super::scheduler::{Res, Resources, TaskSpec};
+    let (_d, app, _rec, gallery) = setup();
+    put(&gallery.join("k.mp4"), b"kkkk");
+    app.startup();
+    let oid = app.originals_list()["originals"][0]["id"].as_str().unwrap().to_string();
+    // Hold every cpu unit so the cards job stays queued.
+    let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let r2 = release.clone();
+    let blocker = app.sched.submit(TaskSpec::new("t", "blocker", Resources::none().with(Res::Cpu, 1000)), move |ctx| {
+        while !r2.load(std::sync::atomic::Ordering::SeqCst) {
+            ctx.sleep(Duration::from_millis(5))?;
+        }
+        Ok(Value::Null)
+    });
+    let src = gallery.join("k.mp4");
+    app.cards_job(&oid, &src, 4.0, Some(25.0), json!([{ "start": 0, "length": 1 }]));
+    assert!(app.cards_pending.lock().unwrap().contains_key(&oid));
+    // A newer search for the same clip replaces the queued cards job; the newer one owns the pending mark.
+    app.cards_job(&oid, &src, 4.0, Some(25.0), json!([{ "start": 0, "length": 1 }]));
+    app.sched.cancel_original(&oid);
+    wait_until(|| !app.cards_pending.lock().unwrap().contains_key(&oid));
+    let t = Instant::now();
+    assert!(app.resolve_media(&format!("/media/o/{oid}/loop-0.mp4"), "").is_none());
+    assert!(t.elapsed() < Duration::from_secs(1), "no 30 s hold once the job is gone");
+    release.store(true, std::sync::atomic::Ordering::SeqCst);
+    blocker.wait().unwrap();
+}
+
+#[test]
 fn settings_update_keeps_corners() {
     let (_d, app, _rec, _g) = setup();
     app.settings.update(|s| s["mask"]["corners"] = json!({ "on": true, "r": 50 })).unwrap();

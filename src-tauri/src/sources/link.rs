@@ -84,8 +84,11 @@ pub fn download_file(url: &str, tmp_dir: &std::path::Path, allowed_hosts: Option
         return err("This link points to a web address the source does not list.");
     }
     let policy = reqwest::redirect::Policy::custom(move |a| {
+        let was_https = a.previous().last().is_some_and(|p| p.scheme() == "https");
         if a.previous().len() >= 5 {
             a.error("Too many redirects.")
+        } else if was_https && a.url().scheme() != "https" {
+            a.error("The link redirects from a secure (https) address to an insecure one.")
         } else if !allowed(a.url().host_str()) {
             a.error("The link redirects to an address the source does not list.")
         } else {
@@ -95,6 +98,9 @@ pub fn download_file(url: &str, tmp_dir: &std::path::Path, allowed_hosts: Option
     let client = reqwest::blocking::Client::builder()
         .user_agent(http::UA)
         .connect_timeout(Duration::from_secs(30))
+        // Whole request incl. the body (reqwest's blocking default is only 30 s; 500 MB needs longer). Cancelling
+        // returns at once (core detaches the download, see core/sources_adapter.rs).
+        .timeout(Duration::from_secs(3600))
         .redirect(policy)
         .build()
         .map_err(|e| SourceError(e.to_string()))?;
@@ -103,7 +109,7 @@ pub fn download_file(url: &str, tmp_dir: &std::path::Path, allowed_hosts: Option
         let chain = std::error::Error::source(&e).map(|s| s.to_string()).unwrap_or_default();
         if m.contains("Too many redirects") || chain.contains("Too many redirects") {
             SourceError("Too many redirects.".into())
-        } else if chain.contains("redirects to an address") {
+        } else if chain.contains("redirects to an address") || chain.contains("redirects from a secure") {
             SourceError(chain)
         } else {
             SourceError(format!("Download failed: {m}"))

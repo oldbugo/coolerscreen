@@ -14,7 +14,20 @@ pub fn client(redirects: usize) -> Result<Client> {
         .user_agent(UA)
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(3600))
-        .redirect(if redirects == 0 { Policy::none() } else { Policy::limited(redirects) })
+        .redirect(if redirects == 0 {
+            Policy::none()
+        } else {
+            Policy::custom(move |a| {
+                let was_https = a.previous().last().is_some_and(|p| p.scheme() == "https");
+                if a.previous().len() >= redirects {
+                    a.error("Too many redirects.")
+                } else if was_https && a.url().scheme() != "https" {
+                    a.error("Refused a redirect from https to an insecure address.")
+                } else {
+                    a.follow()
+                }
+            })
+        })
         .build()
         .map_err(|e| SourceError(format!("Could not start the network client: {e}")))
 }

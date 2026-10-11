@@ -73,7 +73,7 @@ pub struct App {
     pub app_version: String,
     pub media_base: Mutex<String>,
     /// Originals whose loop cards job has not finished (the media server waits for those files).
-    pub cards_pending: Mutex<std::collections::HashSet<String>>,
+    pub cards_pending: Mutex<std::collections::HashMap<String, String>>,
     pub(crate) me: Mutex<Weak<App>>,
 }
 

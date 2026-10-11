@@ -47,35 +47,76 @@ fn src_err(e: ws3::SourceError) -> CoreError {
     }
 }
 
-/// Run a WS3 add with progress and cancellation bridged from the task.
-fn run_add(task: &TaskCtx, f: impl FnOnce(ws3::Progress, &ws3::Cancel) -> ws3::Result<ws3::AddResult>) -> CoreResult<AddedFile> {
-    let cancel = ws3::Cancel::new();
-    let done = Mutex::new(false);
-    let r = std::thread::scope(|s| {
-        s.spawn(|| loop {
-            if *done.lock().unwrap() {
-                break;
+/// Run a WS3 add on its own thread, with progress and cancellation bridged from the task. Cancelling returns at once
+/// even if the provider is stuck in a network read (the thread finishes on its own later); a file the provider
+/// produces after that, or for a cancelled task, is deleted when it is a temporary download.
+fn run_add(task: &TaskCtx, p: Arc<dyn ws3::SourceProvider>, c: ws3::SourceCtx, item: String, req: ws3::AddRequest) -> CoreResult<AddedFile> {
+    enum Msg {
+        P(f32, String),
+        Done(ws3::Result<ws3::AddResult>),
+    }
+    let drop_temp = |r: &ws3::Result<ws3::AddResult>| {
+        if let Ok(a) = r {
+            if a.temp {
+                let _ = std::fs::remove_file(&a.file);
             }
-            if task.is_cancelled() {
-                cancel.cancel();
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        });
-        // WS3 reports 0..1 for its own work; the import into the Gallery is the last 12 %.
-        let prog = |f: f32, m: &str| task.progress((f as f64).clamp(0.0, 1.0) * 0.88, m);
-        let r = f(&prog, &cancel);
-        *done.lock().unwrap() = true;
-        r
-    });
+        }
+    };
     task.check()?;
+    let cancel = ws3::Cancel::new();
+    let (tx, rx) = std::sync::mpsc::channel::<Msg>();
+    {
+        let cancel = cancel.clone();
+        std::thread::Builder::new()
+            .name("source-add".into())
+            .spawn(move || {
+                let tp = Mutex::new(tx.clone());
+                let prog = move |f: f32, m: &str| {
+                    let _ = tp.lock().unwrap().send(Msg::P(f, m.to_string()));
+                };
+                let r = p.add(&c, &item, &req, &prog, &cancel);
+                if let Err(std::sync::mpsc::SendError(Msg::Done(r))) = tx.send(Msg::Done(r)) {
+                    drop_temp(&r); // nobody is waiting any more (cancelled)
+                }
+            })
+            .map_err(|e| CoreError::new(e.to_string()))?;
+    }
+    let r = loop {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            // WS3 reports 0..1 for its own work; the import into the Gallery is the last 12 %.
+            Ok(Msg::P(f, m)) => task.progress((f as f64).clamp(0.0, 1.0) * 0.88, &m),
+            Ok(Msg::Done(r)) => break r,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if task.is_cancelled() => {
+                cancel.cancel();
+                // Give a cooperative provider a moment to stop and clean up; otherwise leave it behind.
+                let end = std::time::Instant::now() + Duration::from_secs(2);
+                while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
+                    match rx.recv_timeout(left) {
+                        Ok(Msg::Done(r)) => {
+                            drop_temp(&r);
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                return Err(task.check().err().unwrap_or_else(CoreError::cancelled));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(CoreError::new("The source stopped unexpectedly.")),
+        }
+    };
+    if task.is_cancelled() {
+        drop_temp(&r);
+        return Err(task.check().err().unwrap_or_else(CoreError::cancelled));
+    }
     let a = r.map_err(src_err)?;
     Ok(AddedFile { file: a.file, name: a.name, temp: a.temp })
 }
 
 /// A built-in WS3 provider.
 struct Builtin {
-    p: Box<dyn ws3::SourceProvider>,
+    p: Arc<dyn ws3::SourceProvider>,
     env: Env,
     kind: &'static str,
 }
@@ -132,7 +173,7 @@ impl SourceProvider for Builtin {
     fn add(&self, ctx: &SourceCtx, task: &TaskCtx, item: &str, opts: &AddOpts) -> CoreResult<AddedFile> {
         let c = ctx3(&self.env, ctx);
         let req = ws3::AddRequest { seconds: opts.seconds.map(|s| s as f32) };
-        run_add(task, |p, cancel| self.p.add(&c, item, &req, p, cancel))
+        run_add(task, self.p.clone(), c, item.to_string(), req)
     }
     /// "Add from link": WS3's link source takes the URL as the item id.
     fn download(&self, ctx: &SourceCtx, task: &TaskCtx, url: &str) -> CoreResult<AddedFile> {
@@ -196,7 +237,7 @@ impl SourceProvider for Plugin {
     }
     fn list(&self, ctx: &SourceCtx, page: u32, refresh: bool) -> CoreResult<ItemPage> {
         let p = self.load()?;
-        Builtin { p: Box::new(PluginRef(p)), env: self.env.clone(), kind: "plugin" }.list(ctx, page, refresh)
+        Builtin { p: Arc::new(PluginRef(p)), env: self.env.clone(), kind: "plugin" }.list(ctx, page, refresh)
     }
     fn thumb_path(&self, ctx: &SourceCtx, item: &str) -> Option<PathBuf> {
         use ws3::SourceProvider as _;
@@ -204,7 +245,7 @@ impl SourceProvider for Plugin {
     }
     fn add(&self, ctx: &SourceCtx, task: &TaskCtx, item: &str, opts: &AddOpts) -> CoreResult<AddedFile> {
         let p = self.load()?;
-        Builtin { p: Box::new(PluginRef(p)), env: self.env.clone(), kind: "plugin" }.add(ctx, task, item, opts)
+        Builtin { p: Arc::new(PluginRef(p)), env: self.env.clone(), kind: "plugin" }.add(ctx, task, item, opts)
     }
 }
 
@@ -254,7 +295,7 @@ impl Catalog {
             .into_iter()
             .map(|p| {
                 let kind = kind_str(p.kind());
-                Arc::new(Builtin { p, env: env.clone(), kind }) as Arc<dyn SourceProvider>
+                Arc::new(Builtin { p: Arc::from(p), env: env.clone(), kind }) as Arc<dyn SourceProvider>
             })
             .collect();
         Catalog { env, builtins, plugins: Mutex::new(vec![]) }
@@ -287,5 +328,63 @@ impl SourceCatalog for Catalog {
     }
     fn desktop_capture(&self) -> bool {
         cfg!(windows)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::scheduler::{Limits, NoSink, Policy, Res, Resources, Scheduler, TaskSpec};
+    use std::time::Instant;
+
+    /// A provider stuck in a "network read" that ignores cancellation, then returns a temporary file.
+    struct Stuck(PathBuf);
+    impl ws3::SourceProvider for Stuck {
+        fn id(&self) -> &str {
+            "stuck"
+        }
+        fn name(&self) -> &str {
+            "Stuck"
+        }
+        fn description(&self) -> &str {
+            ""
+        }
+        fn kind(&self) -> ws3::Kind {
+            ws3::Kind::Online
+        }
+        fn detect(&self, _: &ws3::SourceCtx) -> ws3::Detect {
+            ws3::Detect::ok("")
+        }
+        fn list(&self, _: &ws3::SourceCtx, _: u32, _: Option<&str>, _: bool) -> ws3::Result<ws3::ListPage> {
+            Ok(Default::default())
+        }
+        fn add(&self, _: &ws3::SourceCtx, _: &str, _: &ws3::AddRequest, p: ws3::Progress, _: &ws3::Cancel) -> ws3::Result<ws3::AddResult> {
+            p(0.5, "Downloading");
+            std::thread::sleep(Duration::from_millis(3000));
+            std::fs::write(&self.0, b"downloaded").unwrap();
+            Ok(ws3::AddResult { file: self.0.clone(), name: "x.mp4".into(), temp: true })
+        }
+    }
+
+    #[test]
+    fn cancel_returns_at_once_and_temp_download_is_deleted() {
+        let d = tempfile::tempdir().unwrap();
+        let file = d.path().join("dl.mp4");
+        let env = Env { data_dir: d.path().into(), sources_dir: d.path().into(), ffmpeg: "ffmpeg".into() };
+        let b = Arc::new(Builtin { p: Arc::new(Stuck(file.clone())), env, kind: "online" });
+        let s = Scheduler::new(Limits::default(), Policy::default(), Arc::new(NoSink));
+        let ctx = SourceCtx { options: json!({}), tmp_dir: d.path().into() };
+        let b2 = b.clone();
+        let h = s.submit(TaskSpec::new("source", "add", Resources::one(Res::Net)), move |t| {
+            b2.add(&ctx, t, "item", &AddOpts::default()).map(|a| json!(a.file))
+        });
+        std::thread::sleep(Duration::from_millis(150));
+        let t0 = Instant::now();
+        assert!(s.cancel(&h.id));
+        assert!(h.wait().unwrap_err().is_cancelled());
+        assert!(t0.elapsed() < Duration::from_millis(2600), "returned without waiting for the provider");
+        assert!(!file.exists());
+        std::thread::sleep(Duration::from_millis(1500)); // the provider finishes on its own
+        assert!(!file.exists(), "temporary download deleted after the cancel");
     }
 }
