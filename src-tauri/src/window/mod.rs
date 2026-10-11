@@ -98,7 +98,7 @@ fn state_path() -> std::path::PathBuf {
 fn load_saved(app: &App) -> Option<Saved> {
     let text = std::fs::read_to_string(state_path()).ok()?;
     let mut s = serde_json::from_str::<Saved>(text.trim_start_matches('\u{feff}')).ok()?;
-    if !(s.scale.is_finite() && s.scale > 0.4 && s.scale < 8.0) || s.w < 300 || s.h < 300 || s.w > 100_000 || s.h > 100_000 {
+    if !(s.scale.is_finite() && s.scale > 0.4 && s.scale < 8.0) || s.w > 100_000 || s.h > 100_000 {
         return None;
     }
     if s.x.unsigned_abs() > 1_000_000 || s.y.unsigned_abs() > 1_000_000 {
@@ -106,7 +106,7 @@ fn load_saved(app: &App) -> Option<Saved> {
     }
     let mons = app.available_monitors().unwrap_or_default();
     if mons.is_empty() {
-        return Some(s); // cannot tell: trust the (sanity-checked) file
+        return (s.w >= 920 && s.h >= 660).then_some(s); // cannot tell: trust a sane file, else the default
     }
     let (x, y, w, h) = (s.x as i64, s.y as i64, s.w as i64, s.h as i64);
     // Monitor with the largest overlap of the title-bar strip; its work area (without the taskbar) is the limit.
@@ -125,8 +125,11 @@ fn load_saved(app: &App) -> Option<Saved> {
         }
     }
     let (wx, wy, ww, wh) = best?.1; // off-screen (monitor unplugged): the default size and place
-    let nw = w.min(ww).max(300);
-    let nh = h.min(wh).max(300);
+    // At least the window's minimum size (900x640 inner; SetWindowPos ignores it), but never larger than the work area.
+    let min_w = (920.0 * s.scale).round() as i64;
+    let min_h = (660.0 * s.scale).round() as i64;
+    let nw = w.max(min_w).min(ww);
+    let nh = h.max(min_h).min(wh);
     let nx = x.clamp(wx, (wx + ww - nw).max(wx));
     let ny = y.clamp(wy, (wy + wh - nh).max(wy));
     (s.x, s.y, s.w, s.h) = (nx as i32, ny as i32, nw as u32, nh as u32);
