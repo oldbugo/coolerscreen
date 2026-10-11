@@ -1,0 +1,19 @@
+[package]
+name = "coolerscreen"
+version = "2.0.0-alpha.0"
+description = "CoolerScreen 2.0 spike: Tauri shell + Rust device layer"
+edition = "2021"
+default-run = "coolerscreen"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

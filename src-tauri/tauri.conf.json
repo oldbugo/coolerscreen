@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CoolerScreen",
+  "version": "2.0.0-alpha.0",
+  "identifier": "com.oldbugo.coolerscreen",
+  "build": { "frontendDist": "boot" },
+  "app": {
+    "windows": [{ "label": "main", "title": "CoolerScreen", "width": 800, "height": 500 }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.ico", "icons/icon.png"] }
+}

@@ -3,3 +3,4 @@ work/
 *.log
 dist/
 .claude/
+src-tauri/target/
