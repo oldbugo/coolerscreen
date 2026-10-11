@@ -43,7 +43,7 @@ Folder ownership: `core/` + `device/` + `lib.rs`/`main.rs` = WS1; `media/` = WS2
 | PATCH /api/originals/:id | `original_patch` | `{ originalId, patch: { name?, draft? } }` (`draft: null` clears; wrapped because Tauri cannot tell a missing arg from null) | `Detail` |
 | DELETE /api/originals/:id | `original_delete` | `{ originalId }` | `{ ok: true }` (file → Recycle Bin; cancels its jobs first) |
 | POST …/reveal | `original_reveal` | `{ originalId }` | `{ ok: true }` |
-| POST …/estimate | `estimate` | `{ originalId, settings }` | `Estimate` or `{ stale: true }` when a newer estimate for the same clip superseded it; 409 `busy` while a screen job is active (as 1.2, unless `allowMediaDuringUpload`). |
+| POST …/estimate | `estimate` | `{ originalId, settings }` | `Estimate` or `{ stale: true }` when a newer estimate for the same clip superseded it; 409 `busy` during uploads only with `COOLERSCREEN_BLOCK_MEDIA_DURING_UPLOAD=1`. |
 | POST …/loopsearch | `loop_search` | `{ originalId, minLen?, maxLen? }` (null = Auto) | `{ jobId }` (result in `job.result`, as 1.2) |
 | POST …/looppoint | `loop_point` | `{ originalId, start, length }` | `{ best, current, alternatives, searched }` |
 | POST …/versions | `version_create` | `{ originalId, settings }` (settings = 1.2 body incl. `force`) | `{ versionId, jobId }`; 400 `duplicate` + `versionId` |
@@ -132,8 +132,10 @@ The UI may keep polling `activity` (cheap, in-memory) while migrating; events le
   preemptible/estimate work (`set_focus`), deleting a clip/version cancels all of its work.
 - **Coalescing**: tasks with the same `coalesceKey` (e.g. `estimate:<oid>`): a new one replaces queued older ones
   (they resolve `superseded` → `estimate` returns `{ stale: true }`) and cancels a running older one.
-- **Device vs media**: while a device task runs, new `cpu`/`gpu` work does not start (1.2 saw an encode stall an
-  upload); running work finishes. Setting `allowMediaDuringUpload` (default off) lifts this after hardware testing.
+- **Device vs media** (decision 2026-10-11): media work is allowed during an upload, but while a device task runs new
+  `cpu` work is capped at max(1, cores/4); every process started through `TaskCtx::spawn` runs at below-normal
+  priority. `COOLERSCREEN_BLOCK_MEDIA_DURING_UPLOAD=1` restores 1.2's full block (then `estimate` returns 409 `busy`
+  during uploads). To be confirmed on hardware during integration.
   The screen is only ever touched from tasks holding `device`.
 
 ## 4. Media server (decision)

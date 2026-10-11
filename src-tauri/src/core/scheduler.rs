@@ -396,7 +396,7 @@ impl TaskCtx {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            cmd.creation_flags(0x0800_0000 | 0x0000_4000); // CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS (keeps the UI and uploads smooth)
         }
         let child = Arc::new(Mutex::new(cmd.spawn()?));
         self.token.0.children.lock().unwrap().push(Arc::downgrade(&child));
@@ -506,14 +506,25 @@ struct Entry {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Policy {
-    /// While a device task is running or queued, cpu/gpu work does not start, and the device task waits for
-    /// running cpu/gpu work (1.2 saw an encode stall an upload). Default on.
+    /// 1.2 behaviour (fallback): while a device task is running or queued, cpu/gpu work does not start, and the
+    /// device task waits for running cpu/gpu work (1.2 saw an encode stall an upload). Default off
+    /// (decision 2026-10-11: allow media during uploads with a reduced cpu cap; to be confirmed on hardware).
     pub device_blocks_media: bool,
+    /// While a device task runs (and media is allowed), at most this many cpu units are in use by new starts.
+    pub cpu_during_device: u32,
 }
 
 impl Default for Policy {
     fn default() -> Self {
-        Policy { device_blocks_media: true }
+        let cores = std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(4);
+        Policy { device_blocks_media: false, cpu_during_device: (cores / 4).max(1) }
+    }
+}
+
+impl Policy {
+    /// The 1.2 full block.
+    pub fn blocking() -> Self {
+        Policy { device_blocks_media: true, ..Policy::default() }
     }
 }
 
@@ -779,6 +790,10 @@ impl Shared {
         g.entries.values().any(|e| e.spec.resources.get(Res::Device) > 0)
     }
 
+    fn device_running(g: &Inner) -> bool {
+        g.running.iter().any(|id| g.entries[id].spec.resources.get(Res::Device) > 0)
+    }
+
     fn emit(&self, j: &Job) {
         if j.visible {
             self.sink.job(j);
@@ -869,12 +884,18 @@ impl Shared {
                 return false;
             }
         }
+        let dev = r.get(Res::Device) > 0;
         if g.policy.device_blocks_media {
-            let dev = r.get(Res::Device) > 0;
             if dev && (g.in_use[Res::Cpu as usize] > 0 || g.in_use[Res::Gpu as usize] > 0) {
                 return false;
             }
             if r.media() && Self::device_active(g) && !dev {
+                return false;
+            }
+        } else if !dev && r.get(Res::Cpu) > 0 && Self::device_running(g) {
+            let cap = g.policy.cpu_during_device.max(1).min(g.limits.0[Res::Cpu as usize].max(1));
+            let (want, used) = (r.get(Res::Cpu), g.in_use[Res::Cpu as usize]);
+            if if want > cap { used > 0 } else { used + want > cap } {
                 return false;
             }
         }
@@ -889,7 +910,7 @@ impl Shared {
             } else {
                 "Waiting for conversions to finish…"
             }
-        } else if dev_ahead && spec.resources.media() && g.policy.device_blocks_media {
+        } else if dev_ahead && spec.resources.media() && (g.policy.device_blocks_media || Self::device_running(g)) {
             "Waiting for the screen operation to finish…"
         } else {
             "Waiting for the previous conversion to finish…"
@@ -1326,7 +1347,7 @@ mod tests {
 
     #[test]
     fn device_is_exclusive_and_blocks_media() {
-        let s = sched([4, 2, 1, 4, 1, 8]);
+        let s = Scheduler::new(Limits([4, 2, 1, 4, 1, 8]), Policy::blocking(), Arc::new(NoSink));
         let log = Arc::new(Mutex::new(vec![]));
         let rel_conv = Arc::new(AtomicBool::new(false));
         let rel_dev = Arc::new(AtomicBool::new(false));
@@ -1350,6 +1371,29 @@ mod tests {
         }
         assert_eq!(*log.lock().unwrap(), vec!["conv", "send", "send2", "est"]);
         assert!(!s.device_active());
+    }
+
+    #[test]
+    fn media_during_upload_is_capped() {
+        // Default policy: media may run during an upload, but new cpu work is capped to cpu_during_device.
+        let pol = Policy { device_blocks_media: false, cpu_during_device: 1 };
+        let s = Scheduler::new(Limits([4, 2, 1, 4, 1, 8]), pol, Arc::new(NoSink));
+        let log = Arc::new(Mutex::new(vec![]));
+        let rel_dev = Arc::new(AtomicBool::new(false));
+        let rel = Arc::new(AtomicBool::new(false));
+        let dev = s.submit(TaskSpec::new("send", "send", Resources::one(Res::Device)), gate_task("send", log.clone(), rel_dev.clone()));
+        wait_until(|| log.lock().unwrap().len() == 1);
+        let a = s.submit(TaskSpec::new("estimate", "a", Resources::one(Res::Cpu)), gate_task("a", log.clone(), rel.clone()));
+        let b = s.submit(TaskSpec::new("estimate", "b", Resources::one(Res::Cpu)), gate_task("b", log.clone(), rel.clone()));
+        wait_until(|| log.lock().unwrap().len() == 2);
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(*log.lock().unwrap(), vec!["send", "a"], "one cpu task while uploading");
+        rel_dev.store(true, Ordering::SeqCst);
+        dev.wait().unwrap();
+        wait_until(|| log.lock().unwrap().len() == 3);
+        rel.store(true, Ordering::SeqCst);
+        a.wait().unwrap();
+        b.wait().unwrap();
     }
 
     #[test]

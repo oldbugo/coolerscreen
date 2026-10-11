@@ -28,7 +28,7 @@ struct Fake {
 
 pub struct DeviceService {
     fake: Option<Mutex<Fake>>,
-    scripts: PathBuf,
+    scripts: Mutex<PathBuf>,
 }
 
 fn friendly_fake(code: &str) -> CoreError {
@@ -54,7 +54,7 @@ impl DeviceService {
                 let speed = std::env::var("COOLERSCREEN_FAKE_SPEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
                 Self::fake(&v, speed, std::env::var_os("COOLERSCREEN_FAKE_FAIL").is_some())
             }
-            _ => DeviceService { fake: None, scripts: super::paths::scripts_dir() },
+            _ => DeviceService { fake: None, scripts: Mutex::new(super::paths::scripts_dir()) },
         }
     }
 
@@ -62,8 +62,19 @@ impl DeviceService {
         let t = if mode == "1" { "winusb".to_string() } else { mode.to_lowercase() };
         DeviceService {
             fake: Some(Mutex::new(Fake { transport: t, restarted: false, fail_upload, speed })),
-            scripts: super::paths::scripts_dir(),
+            scripts: Mutex::new(super::paths::scripts_dir()),
         }
+    }
+
+    /// Where scripts/*.ps1 live (the app's bundled resources folder in an installed build).
+    pub fn set_scripts_dir(&self, dir: PathBuf) {
+        if dir.join("setup-winusb.ps1").exists() {
+            *self.scripts.lock().unwrap() = dir;
+        }
+    }
+
+    pub fn scripts_dir(&self) -> PathBuf {
+        self.scripts.lock().unwrap().clone()
     }
 
     /// The fake mode name ("winusb", ...) or None for the real screen (AppState.fake).
@@ -265,7 +276,7 @@ impl DeviceService {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            let file = self.scripts.join(script);
+            let file = self.scripts.lock().unwrap().join(script);
             if !file.exists() {
                 return Err(CoreError::new(format!("Setup script not found: {}", file.display())));
             }

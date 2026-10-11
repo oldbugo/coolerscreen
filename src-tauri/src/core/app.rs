@@ -93,7 +93,9 @@ impl App {
         let settings = Arc::new(SettingsStore::new(base.join("settings.json")));
         let lib = Arc::new(Library::new(&base, settings.clone()));
         lib.set_splash_version(backends.media.splash_version());
-        let sched = Scheduler::new(Limits::default(), Policy::default(), Arc::new(SinkAdapter(events.clone())));
+        // COOLERSCREEN_BLOCK_MEDIA_DURING_UPLOAD=1: 1.2's full block (fallback if uploads stall on hardware).
+        let policy = if std::env::var("COOLERSCREEN_BLOCK_MEDIA_DURING_UPLOAD").is_ok_and(|v| v == "1") { Policy::blocking() } else { Policy::default() };
+        let sched = Scheduler::new(Limits::default(), policy, Arc::new(SinkAdapter(events.clone())));
         let app = Arc::new(App {
             lib: lib.clone(),
             settings: settings.clone(),

@@ -214,10 +214,11 @@ fn deleting_a_converting_version_cancels_it() {
 }
 
 #[test]
-fn estimate_is_paused_while_the_screen_is_busy() {
+fn estimate_is_paused_while_the_screen_is_busy_in_blocking_mode() {
     let (_d, app, _rec, gallery) = setup();
     put(&gallery.join("e.mp4"), b"eeee");
     app.startup();
+    app.sched.set_policy(super::scheduler::Policy::blocking());
     let oid = app.originals_list()["originals"][0]["id"].as_str().unwrap().to_string();
     let r = app.device_restart();
     let jid = r["jobId"].as_str().unwrap().to_string();

@@ -189,6 +189,10 @@ fn main() {
         ])
         .setup(move |app| {
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));
+            // One-time driver scripts are bundled as resources (installed build); development keeps the repo's.
+            if let Ok(res) = app.path().resource_dir() {
+                app.state::<Core>().0.device.set_scripts_dir(res.join("scripts"));
+            }
             let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("CoolerScreen")
                 .inner_size(1280.0, 860.0)
