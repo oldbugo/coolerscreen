@@ -177,6 +177,114 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the device_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-info",
+          "markdownDescription": "Enables the device_info command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-restart",
+          "markdownDescription": "Enables the device_restart command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-state",
+          "markdownDescription": "Enables the device_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_upload command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-upload",
+          "markdownDescription": "Enables the device_upload command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the win_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-win-close",
+          "markdownDescription": "Enables the win_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the win_force_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-win-force-close",
+          "markdownDescription": "Enables the win_force_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the win_minimize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-win-minimize",
+          "markdownDescription": "Enables the win_minimize command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the win_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-win-state",
+          "markdownDescription": "Enables the win_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the win_toggle_maximize command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-win-toggle-maximize",
+          "markdownDescription": "Enables the win_toggle_maximize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-info",
+          "markdownDescription": "Denies the device_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_restart command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-restart",
+          "markdownDescription": "Denies the device_restart command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-state",
+          "markdownDescription": "Denies the device_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_upload command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-upload",
+          "markdownDescription": "Denies the device_upload command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the win_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-win-close",
+          "markdownDescription": "Denies the win_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the win_force_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-win-force-close",
+          "markdownDescription": "Denies the win_force_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the win_minimize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-win-minimize",
+          "markdownDescription": "Denies the win_minimize command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the win_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-win-state",
+          "markdownDescription": "Denies the win_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the win_toggle_maximize command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-win-toggle-maximize",
+          "markdownDescription": "Denies the win_toggle_maximize command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

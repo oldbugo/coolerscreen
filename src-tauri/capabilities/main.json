@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Window chrome and device commands for the boot page (local).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-win-minimize", "allow-win-toggle-maximize", "allow-win-state", "allow-win-close", "allow-win-force-close",
+    "allow-device-state", "allow-device-info", "allow-device-restart", "allow-device-upload"
+  ]
+}
