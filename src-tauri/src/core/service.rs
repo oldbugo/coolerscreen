@@ -529,7 +529,9 @@ impl App {
             if frac > (n as f64 - 1.0) / (n as f64 + 0.1) {
                 loop_started = true;
             }
-            tctx.progress_bytes(frac, msg, (frac.min(1.0) * bytes_total as f64).round() as u64, bytes_total);
+            // frac runs over the uploads (n parts) plus 0.1 for the final restart.
+            let uploaded = (frac * (n as f64 + 0.1) / n as f64).min(1.0);
+            tctx.progress_bytes(frac, msg, (uploaded * bytes_total as f64).round() as u64, bytes_total);
         });
         let record_splash = |s: &Option<(PathBuf, u64, String)>| {
             if let Some((_, size, id)) = s {

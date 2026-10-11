@@ -225,6 +225,8 @@ fn main() {
                 let resolver_app = c.clone();
                 match MediaServer::start(Arc::new(move |p: &str, q: &str| resolver_app.resolve_media(p, q))) {
                     Ok(srv) => {
+                        #[cfg(debug_assertions)]
+                        eprintln!("CS_MEDIA {}", srv.base_url());
                         c.set_media_base(&srv.base_url());
                         app.state::<Media>().0.lock().unwrap().replace(srv);
                     }
