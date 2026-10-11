@@ -7,6 +7,13 @@
 ;     pinned shortcut keeps working).
 ; The user's data (%APPDATA%\CoolerScreen, Documents\CoolerScreen\Gallery) is never touched.
 ; (cs2.exe, the recovery tool, is installed by the bundler itself.)
+;
+; Apps & Features: 1.x was installed by scripts\install-local.ps1, which writes NO registry entry (checked on the
+; development PC: no HKCU\...\Uninstall\CoolerScreen exists), so there is nothing stale to remove. Should a 1.x entry
+; ever exist, it has the same key name as the one this installer writes (Uninstall\CoolerScreen, from the product
+; name), so it is simply overwritten; installing 2.x twice also reuses that one key (no duplicates).
+; Uninstall: the bundler's own uninstaller deletes the Start Menu and Desktop "CoolerScreen.lnk" only when they point at
+; our exe (IsShortcutTarget), which is exactly the shortcut repointed here; a shortcut the user retargeted stays.
 
 !macro CS_REMOVE_LEGACY DIR TAG
   IfFileExists "${DIR}\resources\app\electron\main.js" 0 cs_done_${TAG}

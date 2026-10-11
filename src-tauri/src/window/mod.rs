@@ -48,8 +48,9 @@ pub fn create(app: &mut App) -> tauri::Result<WebviewWindow> {
     #[cfg(windows)]
     if let Some(s) = saved {
         // Same logical size on the monitor the window lands on (scale may differ from when it was saved).
-        let k = win.scale_factor().unwrap_or(s.scale) / s.scale;
-        rect::set(&win, s.x, s.y, (s.w as f64 * k).round() as u32, (s.h as f64 * k).round() as u32);
+        let k = (win.scale_factor().unwrap_or(s.scale) / s.scale).clamp(0.25, 4.0);
+        let (w, h) = ((s.w as f64 * k).round().min(100_000.0) as u32, (s.h as f64 * k).round().min(100_000.0) as u32);
+        rect::set(&win, s.x, s.y, w, h);
         if s.maximized {
             let _ = win.maximize(); // un-maximising returns to the rectangle above
         }
@@ -91,23 +92,53 @@ fn state_path() -> std::path::PathBuf {
     cs_core::core::paths::base().join("window.json")
 }
 
-/// The saved rectangle, if enough of its title bar is on a connected monitor.
+/// Reads window.json. Anything unreadable, nonsensical or not on a connected monitor gives `None` (default size and
+/// place). Otherwise the rectangle is clamped into the work area of the monitor it mostly sits on. All arithmetic is
+/// in i64 so a corrupt file cannot overflow.
 fn load_saved(app: &App) -> Option<Saved> {
-    let s = std::fs::read_to_string(state_path()).ok().and_then(|t| serde_json::from_str::<Saved>(t.trim_start_matches('\u{feff}')).ok())?;
-    if s.w < 300 || s.h < 300 || !(s.scale > 0.4 && s.scale < 8.0) {
+    let text = std::fs::read_to_string(state_path()).ok()?;
+    let mut s = serde_json::from_str::<Saved>(text.trim_start_matches('\u{feff}')).ok()?;
+    if !(s.scale.is_finite() && s.scale > 0.4 && s.scale < 8.0) || s.w < 300 || s.h < 300 || s.w > 100_000 || s.h > 100_000 {
+        return None;
+    }
+    if s.x.unsigned_abs() > 1_000_000 || s.y.unsigned_abs() > 1_000_000 {
         return None;
     }
     let mons = app.available_monitors().unwrap_or_default();
     if mons.is_empty() {
-        return Some(s); // cannot tell: trust the file
+        return Some(s); // cannot tell: trust the (sanity-checked) file
     }
-    let visible = mons.iter().any(|m| {
+    let (x, y, w, h) = (s.x as i64, s.y as i64, s.w as i64, s.h as i64);
+    // Monitor with the largest overlap of the title-bar strip; its work area (without the taskbar) is the limit.
+    let mut best: Option<(i64, (i64, i64, i64, i64))> = None;
+    for m in &mons {
         let (mp, ms) = (m.position(), m.size());
-        let ox = (s.x + s.w as i32).min(mp.x + ms.width as i32) - s.x.max(mp.x);
-        let oy = (s.y + 80).min(mp.y + ms.height as i32) - s.y.max(mp.y);
-        ox >= 160 && oy >= 40
-    });
-    visible.then_some(s) // off-screen (monitor unplugged): the default size and place
+        let (mx, my, mw, mh) = (mp.x as i64, mp.y as i64, ms.width as i64, ms.height as i64);
+        let ox = (x + w).min(mx + mw) - x.max(mx);
+        let oy = (y + 80).min(my + mh) - y.max(my);
+        if ox >= 160 && oy >= 40 && best.is_none_or(|(a, _)| ox * oy > a) {
+            let wa = m.work_area();
+            let (wx, wy) = (wa.position.x as i64, wa.position.y as i64);
+            let (ww, wh) = (wa.size.width as i64, wa.size.height as i64);
+            let area = if ww >= 300 && wh >= 300 { (wx, wy, ww, wh) } else { (mx, my, mw, mh) };
+            best = Some((ox * oy, area));
+        }
+    }
+    let (wx, wy, ww, wh) = best?.1; // off-screen (monitor unplugged): the default size and place
+    let nw = w.min(ww).max(300);
+    let nh = h.min(wh).max(300);
+    let nx = x.clamp(wx, (wx + ww - nw).max(wx));
+    let ny = y.clamp(wy, (wy + wh - nh).max(wy));
+    (s.x, s.y, s.w, s.h) = (nx as i32, ny as i32, nw as u32, nh as u32);
+    Some(s)
+}
+
+/// Write via a temp file and rename, so a crash mid-write never leaves a half-written window.json.
+fn write_atomic(path: &std::path::Path, text: &str) {
+    let tmp = path.with_extension("json.tmp");
+    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
 }
 
 fn remember(win: &WebviewWindow, force: bool) {
@@ -134,7 +165,7 @@ fn remember(win: &WebviewWindow, force: bool) {
         *last = Some(Instant::now());
         if let Ok(t) = serde_json::to_string(&s) {
             let _ = std::fs::create_dir_all(cs_core::core::paths::base());
-            let _ = std::fs::write(state_path(), t);
+            write_atomic(&state_path(), &t);
         }
     }
 }
