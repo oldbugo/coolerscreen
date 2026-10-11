@@ -43,7 +43,73 @@ pub fn is_mjpeg_mp4(buf: &[u8]) -> bool {
             return false;
         }
     }
-    [&b"mp4v"[..], b"jpeg", b"mjpa", b"mjpb"].iter().any(|g| contains(m, g))
+    if [&b"jpeg"[..], b"mjpa", b"mjpb"].iter().any(|g| contains(m, g)) {
+        return true;
+    }
+    // 'mp4v' is also MPEG-4 Part 2 video (which would freeze the player): accept it only when every mp4v sample
+    // entry declares JPEG (objectTypeIndication 0x6C) in its esds, as ffmpeg's mjpeg-in-mp4 does.
+    let entries = mp4v_object_types(m);
+    !entries.is_empty() && entries.iter().all(|t| *t == Some(0x6C))
+}
+
+/// objectTypeIndication of every 'mp4v' sample entry in `moov` (None when its esds is missing or unreadable).
+fn mp4v_object_types(moov: &[u8]) -> Vec<Option<u8>> {
+    let mut out = vec![];
+    let mut i = 4;
+    while i + 4 <= moov.len() {
+        if &moov[i..i + 4] == b"mp4v" {
+            let start = i - 4;
+            let size = u32::from_be_bytes(moov[start..i].try_into().unwrap()) as usize;
+            // A sample entry is at least 86 bytes (8 header + 78 visual fields); anything else is not a box header.
+            if size >= 86 && start + size <= moov.len() {
+                out.push(esds_object_type(&moov[start..start + size]));
+                i = start + size;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn esds_object_type(entry: &[u8]) -> Option<u8> {
+    let at = entry.windows(4).position(|w| w == b"esds")?;
+    let mut p = at + 4 + 4; // type, version + flags
+    let desc_len = |p: &mut usize| -> Option<usize> {
+        let mut n = 0usize;
+        for _ in 0..4 {
+            let b = *entry.get(*p)?;
+            *p += 1;
+            n = (n << 7) | (b & 0x7f) as usize;
+            if b & 0x80 == 0 {
+                return Some(n);
+            }
+        }
+        Some(n)
+    };
+    if *entry.get(p)? != 0x03 {
+        return None;
+    }
+    p += 1;
+    desc_len(&mut p)?;
+    p += 2; // ES_ID
+    let flags = *entry.get(p)?;
+    p += 1;
+    if flags & 0x80 != 0 {
+        p += 2;
+    }
+    if flags & 0x40 != 0 {
+        p += 1 + *entry.get(p)? as usize;
+    }
+    if flags & 0x20 != 0 {
+        p += 2;
+    }
+    if *entry.get(p)? != 0x04 {
+        return None;
+    }
+    p += 1;
+    desc_len(&mut p)?;
+    entry.get(p).copied()
 }
 
 #[cfg(test)]
@@ -64,14 +130,68 @@ mod tests {
         v
     }
 
+    /// An 'mp4v' sample entry (78 bytes of visual fields) holding an esds with this objectTypeIndication.
+    fn mp4v_entry(oti: u8) -> Vec<u8> {
+        // esds: version/flags, ES_Descriptor(0x03, len, ES_ID, flags=0), DecoderConfig(0x04, len, OTI, ...)
+        let esds = fbox(b"esds", &[0, 0, 0, 0, 0x03, 0x80, 0x80, 0x80, 0x19, 0, 1, 0, 0x04, 0x80, 0x80, 0x80, 0x11, oti, 0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let mut body = vec![0u8; 78];
+        body.extend(esds);
+        fbox(b"mp4v", &body)
+    }
+
     #[test]
     fn accepts_mjpeg_rejects_h264() {
-        assert!(is_mjpeg_mp4(&mp4(b"....mp4v....", b"avc1 in jpeg data is fine")));
+        assert!(is_mjpeg_mp4(&mp4(&mp4v_entry(0x6C), b"avc1 in jpeg data is fine")));
+        assert!(is_mjpeg_mp4(&mp4(b"....jpeg....", b"")));
         assert!(!is_mjpeg_mp4(&mp4(b"....avc1....", b"")));
-        assert!(!is_mjpeg_mp4(&mp4(b"....mp4v..hvc1", b"")));
+        assert!(!is_mjpeg_mp4(&mp4(&[mp4v_entry(0x6C), b"hvc1".to_vec()].concat(), b"")));
         assert!(!is_mjpeg_mp4(b"not an mp4 file at all"));
         // mp4v only in mdat, not in moov: rejected
         assert!(!is_mjpeg_mp4(&mp4(b"........", b"mp4v")));
+    }
+
+    #[test]
+    fn rejects_mpeg4_part2_in_mp4v() {
+        assert!(!is_mjpeg_mp4(&mp4(&mp4v_entry(0x20), b"")), "MPEG-4 Part 2 visual");
+        assert!(!is_mjpeg_mp4(&mp4(b"....mp4v....", b"")), "mp4v without an esds");
+        assert!(!is_mjpeg_mp4(&mp4(&[mp4v_entry(0x6C), mp4v_entry(0x20)].concat(), b"")), "one bad track is enough");
+    }
+
+    /// Real files: CS_MJPEG_OK = folder whose */versions/*/device.mp4 must all pass (the library);
+    /// CS_FFMPEG = ffmpeg used to make an MPEG-4 Part 2 .mp4 that must be refused.
+    #[test]
+    #[ignore = "needs CS_MJPEG_OK (library folder) and CS_FFMPEG"]
+    fn real_files() {
+        let lib = std::path::PathBuf::from(std::env::var("CS_MJPEG_OK").unwrap());
+        let mut n = 0;
+        for o in std::fs::read_dir(&lib).unwrap().flatten() {
+            let Ok(vs) = std::fs::read_dir(o.path().join("versions")) else { continue };
+            for v in vs.flatten() {
+                let f = v.path().join("device.mp4");
+                if let Ok(d) = std::fs::read(&f) {
+                    assert!(is_mjpeg_mp4(&d), "{}", f.display());
+                    n += 1;
+                }
+            }
+        }
+        assert!(n > 0);
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("mpeg4.mp4");
+        let st = std::process::Command::new(std::env::var("CS_FFMPEG").unwrap())
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=18", "-t", "1", "-c:v", "mpeg4", "-y"])
+            .arg(&out)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        assert!(!is_mjpeg_mp4(&std::fs::read(&out).unwrap()), "MPEG-4 Part 2 must be refused");
+        let mj = dir.path().join("mjpeg.mp4");
+        std::process::Command::new(std::env::var("CS_FFMPEG").unwrap())
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=18", "-t", "1", "-c:v", "mjpeg", "-y"])
+            .arg(&mj)
+            .status()
+            .unwrap();
+        assert!(is_mjpeg_mp4(&std::fs::read(&mj).unwrap()), "ffmpeg mjpeg must pass");
+        eprintln!("{n} library versions passed");
     }
 }
 

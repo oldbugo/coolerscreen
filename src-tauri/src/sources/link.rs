@@ -177,6 +177,12 @@ mod tests {
         assert!(file_name_for(&u("https://x.com/a.exe"), "", "application/octet-stream").is_none());
     }
     #[test]
+    fn percent_escape_at_the_end() {
+        assert_eq!(percent_decode("b%20c%41"), "b cA");
+        assert_eq!(percent_decode("%41"), "A");
+        assert_eq!(percent_decode("x%4"), "x%4");
+    }
+    #[test]
     fn rejects_bad_links() {
         let t = std::env::temp_dir();
         let c = Cancel::new();

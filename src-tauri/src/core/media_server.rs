@@ -58,23 +58,31 @@ impl Drop for MediaServer {
     }
 }
 
+/// 128 bits from the operating system's CSPRNG.
 fn random_token() -> String {
-    let mut out = String::new();
-    let mut seed = super::scheduler::now_ms() ^ ((std::process::id() as u64) << 32);
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0);
-    seed ^= nanos.rotate_left(17);
-    // Mix in the address of a heap allocation (ASLR) and a per-call counter through splitmix64.
-    let heap = Box::new(0u8);
-    seed ^= (&*heap as *const u8 as u64).rotate_left(41);
-    for _ in 0..2 {
-        seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = seed;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^= z >> 31;
-        out.push_str(&format!("{z:016x}"));
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).expect("OS random number generator");
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The app's own page origins (WebView2 serves the app as http://tauri.localhost). Only these may read media
+/// through CORS (canvas frame reads); other origins get no CORS header.
+const APP_ORIGINS: [&str; 3] = ["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"];
+
+const MAX_LINE: u64 = 8 * 1024;
+const MAX_HEADERS: usize = 64;
+
+/// One CRLF-terminated line of at most MAX_LINE bytes. Ok(None) at end of stream; Err for an over-long line.
+fn read_line_capped(r: &mut impl BufRead) -> std::io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    let n = r.by_ref().take(MAX_LINE).read_until(b'\n', &mut buf)?;
+    if n == 0 {
+        return Ok(None);
     }
-    out
+    if !buf.ends_with(b"\n") {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "line too long"));
+    }
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
 }
 
 fn content_type(p: &std::path::Path) -> &'static str {
@@ -122,7 +130,7 @@ pub fn query_param(query: &str, key: &str) -> Option<String> {
 
 fn respond(w: &mut TcpStream, code: u16, reason: &str, headers: &[(&str, String)], body: &[u8], keep: bool) -> std::io::Result<()> {
     let mut h = format!("HTTP/1.1 {code} {reason}\r\n");
-    for (k, v) in headers {
+    for (k, v) in headers.iter().filter(|(_, v)| !v.is_empty()) {
         h.push_str(&format!("{k}: {v}\r\n"));
     }
     h.push_str(&format!("Connection: {}\r\n\r\n", if keep { "keep-alive" } else { "close" }));
@@ -135,36 +143,48 @@ fn serve_conn(stream: TcpStream, token: &str, resolver: &Resolver) -> std::io::R
     let mut w = stream.try_clone()?;
     let mut r = BufReader::new(stream);
     loop {
-        let mut line = String::new();
-        if r.read_line(&mut line)? == 0 {
-            return Ok(());
-        }
+        let bad = |w: &mut TcpStream| respond(w, 431, "Request Header Fields Too Large", &[("Content-Length", "0".into())], b"", false);
+        let line = match read_line_capped(&mut r) {
+            Ok(Some(l)) => l,
+            Ok(None) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return bad(&mut w),
+            Err(e) => return Err(e),
+        };
         let mut parts = line.split_whitespace();
         let (method, target, ver) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or("HTTP/1.0"));
         let mut range = None;
         let mut host = String::new();
+        let mut origin = String::new();
         let mut conn_close = ver == "HTTP/1.0";
+        let mut n_headers = 0;
         loop {
-            let mut h = String::new();
-            if r.read_line(&mut h)? == 0 {
-                return Ok(());
-            }
+            let h = match read_line_capped(&mut r) {
+                Ok(Some(l)) => l,
+                Ok(None) => return Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => return bad(&mut w),
+                Err(e) => return Err(e),
+            };
             let h = h.trim_end();
             if h.is_empty() {
                 break;
+            }
+            n_headers += 1;
+            if n_headers > MAX_HEADERS {
+                return bad(&mut w);
             }
             if let Some((k, v)) = h.split_once(':') {
                 let v = v.trim();
                 match k.trim().to_ascii_lowercase().as_str() {
                     "range" => range = Some(v.to_string()),
                     "host" => host = v.to_string(),
+                    "origin" => origin = v.to_string(),
                     "connection" => conn_close = v.eq_ignore_ascii_case("close"),
                     _ => {}
                 }
             }
         }
         let keep = !conn_close;
-        let cors = ("Access-Control-Allow-Origin", "*".to_string());
+        let cors = ("Access-Control-Allow-Origin", if APP_ORIGINS.contains(&origin.as_str()) { origin.clone() } else { String::new() });
         // DNS-rebinding protection, as 1.2: only our own host names.
         let host_ok = {
             let hn = host.rsplit_once(':').map(|x| x.0).unwrap_or(&host);
@@ -325,6 +345,44 @@ mod tests {
         let (c, hs, _) = get(srv.port, &format!("/{tok}/sources/we/thumb?item=a%20b%2Fc"), None);
         assert_eq!(c, 200);
         assert_eq!(header(&hs, "cache-control"), Some("max-age=60"));
+    }
+
+    fn raw(port: u16, req: &str) -> String {
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.write_all(req.as_bytes()).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let mut all = vec![];
+        let _ = s.read_to_end(&mut all);
+        String::from_utf8_lossy(&all).to_string()
+    }
+
+    #[test]
+    fn cors_only_for_the_app_and_limits() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("t.jpg");
+        std::fs::write(&f, b"0123456789").unwrap();
+        let srv = MediaServer::start(Arc::new(move |_: &str, _: &str| Some((f.clone(), false)))).unwrap();
+        assert_eq!(srv.token.len(), 32);
+        let req = |origin: &str| format!("GET /{}/x HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {origin}\r\nConnection: close\r\n\r\n", srv.token);
+        let app = raw(srv.port, &req("http://tauri.localhost"));
+        assert!(app.contains("Access-Control-Allow-Origin: http://tauri.localhost"), "{app}");
+        let evil = raw(srv.port, &req("https://evil.example"));
+        assert!(evil.starts_with("HTTP/1.1 200") && !evil.contains("Access-Control-Allow-Origin"), "{evil}");
+        // over-long header line and too many headers are refused
+        let long = raw(srv.port, &format!("GET /{}/x HTTP/1.1\r\nX: {}\r\n\r\n", srv.token, "a".repeat(20_000)));
+        assert!(long.starts_with("HTTP/1.1 431"), "{long}");
+        let many: String = (0..100).map(|i| format!("X{i}: y\r\n")).collect();
+        let many = raw(srv.port, &format!("GET /{}/x HTTP/1.1\r\nHost: 127.0.0.1\r\n{many}\r\n", srv.token));
+        assert!(many.starts_with("HTTP/1.1 431"), "{many}");
+    }
+
+    #[test]
+    fn percent_escape_at_the_end() {
+        assert_eq!(percent_decode("a%41"), "aA");
+        assert_eq!(percent_decode("%41"), "A");
+        assert_eq!(percent_decode("a%4"), "a%4");
+        assert_eq!(percent_decode("%E5%A4%AA"), "太");
+        assert_eq!(query_param("item=x%2Fy%41", "item").as_deref(), Some("x/yA"));
     }
 
     #[test]

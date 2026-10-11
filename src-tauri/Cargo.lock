@@ -601,6 +601,7 @@ name = "coolerscreen"
 version = "2.0.0-alpha.0"
 dependencies = [
  "dirs 6.0.0",
+ "getrandom 0.3.4",
  "miniz_oxide 0.8.9",
  "notify",
  "nusb",
