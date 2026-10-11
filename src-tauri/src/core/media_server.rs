@@ -39,7 +39,11 @@ impl MediaServer {
                 let Ok(conn) = conn else { continue };
                 let (r, t) = (resolver.clone(), tok.clone());
                 let _ = std::thread::Builder::new().name("media-conn".into()).spawn(move || {
+                    let keep = conn.try_clone();
                     let _ = serve_conn(conn, &t, &r);
+                    if let Ok(s) = keep {
+                        close_gracefully(s);
+                    }
                 });
             }
         })?;
@@ -55,6 +59,24 @@ impl MediaServer {
 impl Drop for MediaServer {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// End a connection without losing the response: on Windows, closing a socket that still has unread request bytes
+/// sends a reset (RST) and the client can lose data it has not read yet. So: send FIN (shutdown write), then read
+/// and discard whatever the client still sends (bounded in time and size), then close.
+fn close_gracefully(s: TcpStream) {
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+    let mut sink = [0u8; 16 * 1024];
+    let mut left: usize = 1 << 20;
+    let end = std::time::Instant::now() + Duration::from_secs(2);
+    let mut r = &s;
+    while left > 0 && std::time::Instant::now() < end {
+        match r.read(&mut sink) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => left = left.saturating_sub(n),
+        }
     }
 }
 

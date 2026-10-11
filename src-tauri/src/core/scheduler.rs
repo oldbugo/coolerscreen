@@ -542,6 +542,8 @@ struct Inner {
     /// Finished jobs kept for `activity` / `job_get` (newest last), at most KEEP_FINISHED.
     finished: Vec<Job>,
     device_busy_reported: bool,
+    /// Finished jobs whose waiters are woken by `emit`, right after their final event was sent.
+    wakes: Vec<(String, Arc<Slot>, Outcome)>,
 }
 
 const KEEP_FINISHED: usize = 100;
@@ -570,6 +572,7 @@ impl Scheduler {
                 entries: HashMap::new(),
                 finished: vec![],
                 device_busy_reported: false,
+                wakes: vec![],
             }),
             sink,
             me: Mutex::new(Weak::new()),
@@ -796,9 +799,21 @@ impl Shared {
         g.running.iter().any(|id| g.entries[id].spec.resources.get(Res::Device) > 0)
     }
 
+    /// Every job state change goes through here. A finished job's waiters are woken only after its final event
+    /// was sent, so whoever waits on a job has always seen that event first.
     fn emit(&self, j: &Job) {
         if j.visible {
             self.sink.job(j);
+        }
+        if j.state.finished() {
+            let w = {
+                let mut g = self.inner.lock().unwrap();
+                g.wakes.iter().position(|(id, _, _)| id == &j.id).map(|i| g.wakes.swap_remove(i))
+            };
+            if let Some((_, slot, r)) = w {
+                *slot.v.lock().unwrap() = Some(r);
+                slot.cv.notify_all();
+            }
         }
     }
 
@@ -850,8 +865,7 @@ impl Shared {
             }
         }
         job.status = job.state.legacy();
-        *e.slot.v.lock().unwrap() = Some(r);
-        e.slot.cv.notify_all();
+        g.wakes.push((job.id.clone(), e.slot.clone(), r));
         g.finished.push(job.clone());
         if g.finished.len() > KEEP_FINISHED {
             let n = g.finished.len() - KEEP_FINISHED;
