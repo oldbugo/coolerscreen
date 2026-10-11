@@ -74,6 +74,8 @@ pub struct App {
     pub media_base: Mutex<String>,
     /// Originals whose loop cards job has not finished (the media server waits for those files).
     pub cards_pending: Mutex<std::collections::HashMap<String, String>>,
+    /// COOLERSCREEN_GALLERY, read once by `App::new` (tests build the App with `with_device` and never see it).
+    pub gallery_env: Mutex<Option<PathBuf>>,
     pub(crate) me: Mutex<Weak<App>>,
 }
 
@@ -87,7 +89,9 @@ impl App {
             eprintln!("Fake media engine: using the fake screen too.");
             device = DeviceService::fake("winusb", 1.0, false);
         }
-        Self::with_device(base, backends, events, app_version, device)
+        let app = Self::with_device(base, backends, events, app_version, device);
+        *app.gallery_env.lock().unwrap() = std::env::var_os("COOLERSCREEN_GALLERY").map(PathBuf::from);
+        app
     }
 
     pub fn with_device(base: PathBuf, backends: Backends, events: Arc<dyn Events>, app_version: &str, device: DeviceService) -> Arc<App> {
@@ -110,6 +114,7 @@ impl App {
             app_version: app_version.to_string(),
             media_base: Mutex::new(String::new()),
             cards_pending: Mutex::new(Default::default()),
+            gallery_env: Mutex::new(None),
             me: Mutex::new(Weak::new()),
         });
         *app.me.lock().unwrap() = Arc::downgrade(&app);

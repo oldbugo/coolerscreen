@@ -709,6 +709,10 @@ impl App {
     /// App exit: cancel every queued and running task (kills their ffmpeg children; a running device upload cannot be cut off).
     pub fn shutdown(&self) {
         self.sched.cancel_where(|_| true);
+        // Give cancelled tasks a moment to stop (their ffmpeg children are already killed) so media clean-up after
+        // this does not race them. Bounded: a running screen upload cannot be cancelled and is never waited for
+        // longer than this.
+        self.sched.wait_idle(Duration::from_secs(1), true);
     }
 
     /// True while something is being written to the screen (close guard).

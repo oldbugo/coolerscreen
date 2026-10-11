@@ -1,9 +1,10 @@
 # Elevated (CoolerScreen launches it via a UAC prompt): reconnect a screen that Windows failed to enumerate at boot
 # ("Unknown USB Device (Device Descriptor Request Failed)", instance USB\VID_0000&PID_0002\...).
 # It power-cycles the single USB hub port the broken device sits on (IOCTL_USB_HUB_CYCLE_PORT), which makes the
-# screen enumerate normally. Prefers the port where the screen was seen before; otherwise every failed port.
-# Log: %TEMP%\coolerscreen-setup.log (last line is "RESULT: OK" or "RESULT: ERROR ...")
-$log = Join-Path $env:TEMP 'coolerscreen-setup.log'
+# screen enumerate normally. -DryRun only lists what it would cycle (no admin rights needed). Prefers the port where the screen was seen before; otherwise every failed port.
+# Log: -Log <file> (CoolerScreen 2 passes a per-run file; default %TEMP%\coolerscreen-setup.log) (last line is "RESULT: OK" or "RESULT: ERROR ...")
+param([string]$Log = (Join-Path $env:TEMP 'coolerscreen-setup.log'), [switch]$DryRun)
+$log = $Log
 function Log($m) { "$(Get-Date -Format 'HH:mm:ss') $m" | Add-Content $log }
 Remove-Item $log -ErrorAction SilentlyContinue
 Add-Type -TypeDefinition @'
@@ -53,15 +54,26 @@ public static class Hub {
 function Prop($id, $key) { try { (Get-PnpDeviceProperty -InstanceId $id -KeyName $key -ErrorAction Stop).Data } catch { $null } }
 
 try {
-  $screen = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\VID_33C3&PID_77(88|91)\' } | Select-Object -First 1
-  $failed = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\VID_0000&PID_000[0-9A-F]\' })
+  $screen = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' } | Select-Object -First 1
+  $failed = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_0000&PID_000[0-9A-F]\\' })
   if ($screen) { Log "screen already present: $($screen.InstanceId)" }
+  if ($DryRun) {
+    # Show that the port lookup works on the screen's own node (the same steps a failed node goes through).
+    foreach ($d in @($screen) + $failed | Where-Object { $_ }) {
+      $hub = Prop $d.InstanceId 'DEVPKEY_Device_Parent'
+      $loc = Prop $d.InstanceId 'DEVPKEY_Device_LocationInfo'
+      $m = [regex]::Match([string]$loc, 'Port_#(\d+)')
+      $path = if ($hub) { [Hub]::PathFor($hub) } else { $null }
+      Log "dry run: node $($d.InstanceId) location '$loc' port $(if ($m.Success) { [int]$m.Groups[1].Value } else { '?' }) hub $hub interface $(if ($path) { 'found' } else { 'NOT found' })"
+    }
+  }
   if (-not $failed) {
     if ($screen) { Log 'RESULT: OK'; return }
+    if ($DryRun) { Log 'dry run: no failed USB device present, nothing would be cycled'; Log 'RESULT: OK (dry run)'; return }
     throw 'no failed USB device found and the screen is not present (check the cable / power)'
   }
   # Where was the screen before? Look at remembered (non-present) screen nodes.
-  $hist = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\VID_33C3&PID_77(88|91)\' -and -not $_.Present })
+  $hist = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' -and -not $_.Present })
   $histLoc = @($hist | ForEach-Object { Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo' } | Where-Object { $_ })
   $histPar = @($hist | ForEach-Object { Prop $_.InstanceId 'DEVPKEY_Device_Parent' } | Where-Object { $_ })
   Log "failed nodes: $($failed.Count); remembered screen locations: $($histLoc -join ', ')"
@@ -79,10 +91,12 @@ try {
     $port = [int]$m.Groups[1].Value
     $path = [Hub]::PathFor($hub)
     if (-not $path) { Log "skip $($dev.InstanceId): hub interface for $hub not found"; continue }
+    if ($DryRun) { Log "WOULD cycle $($dev.InstanceId) hub $hub port $port"; continue }
     Log "cycling $($dev.InstanceId) hub $hub port $port : $([Hub]::Cycle($path, $port))"
   }
+  if ($DryRun) { Log 'RESULT: OK (dry run, nothing cycled)'; return }
   Start-Sleep 6
-  $now = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\VID_33C3&PID_77(88|91)\' } | Select-Object -First 1
+  $now = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' } | Select-Object -First 1
   if (-not $now) { throw 'ports were cycled but the screen did not appear (try replugging the USB cable)' }
   Log "screen now: $($now.InstanceId) $($now.Status)"
   Log 'RESULT: OK'

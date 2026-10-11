@@ -298,6 +298,58 @@ pub fn safe_name(s: &str) -> String {
     }
 }
 
+/// Caches a folder scan (Wallpaper Engine, Lively): Browse asks for one thumbnail per item, and rescanning hundreds of
+/// project files per thumbnail was slow. The result is reused while the scanned folders are the same, their
+/// modification times have not changed (items added/removed) and it is younger than `ttl` (edits inside items).
+pub(crate) struct ScanCache<T> {
+    inner: std::sync::Mutex<Option<ScanEntry<T>>>,
+}
+
+struct ScanEntry<T> {
+    key: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    at: std::time::Instant,
+    items: Arc<Vec<T>>,
+}
+
+impl<T> ScanCache<T> {
+    pub(crate) const fn new() -> Self {
+        ScanCache { inner: std::sync::Mutex::new(None) }
+    }
+
+    pub(crate) fn get(&self, folders: &[PathBuf], ttl: std::time::Duration, refresh: bool, scan: impl FnOnce() -> Vec<T>) -> Arc<Vec<T>> {
+        let key: Vec<_> = folders.iter().map(|f| (f.clone(), std::fs::metadata(f).and_then(|m| m.modified()).ok())).collect();
+        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if !refresh {
+            if let Some(e) = g.as_ref() {
+                if e.key == key && e.at.elapsed() < ttl {
+                    return e.items.clone();
+                }
+            }
+        }
+        let items = Arc::new(scan());
+        *g = Some(ScanEntry { key, at: std::time::Instant::now(), items: items.clone() });
+        items
+    }
+}
+
+/// `rel` joined to `dir` only if it is a plain relative path that stays inside `dir` (no drive, root or `..`), and,
+/// when it exists, its real location (links resolved) is still inside `dir`.
+pub(crate) fn join_inside(dir: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let r = Path::new(rel);
+    if r.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+        return None;
+    }
+    let p = dir.join(r);
+    if p.exists() {
+        let (cp, cd) = (std::fs::canonicalize(&p).ok()?, std::fs::canonicalize(dir).ok()?);
+        if !cp.starts_with(&cd) {
+            return None;
+        }
+    }
+    Some(p)
+}
+
 pub(crate) fn title_matches(title: &str, query: Option<&str>) -> bool {
     match query.map(str::trim) {
         Some(q) if !q.is_empty() => title.to_lowercase().contains(&q.to_lowercase()),
@@ -314,6 +366,55 @@ pub(crate) fn sha1_hex10(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn project_paths_stay_inside_the_item() {
+        let d = tempfile::tempdir().unwrap();
+        let item = d.path().join("item");
+        std::fs::create_dir_all(&item).unwrap();
+        std::fs::write(item.join("v.mp4"), b"x").unwrap();
+        std::fs::write(d.path().join("secret.txt"), b"x").unwrap();
+        assert_eq!(join_inside(&item, "v.mp4"), Some(item.join("v.mp4")));
+        assert!(join_inside(&item, "../secret.txt").is_none());
+        assert!(join_inside(&item, "sub/../../secret.txt").is_none());
+        assert!(join_inside(&item, &d.path().join("secret.txt").to_string_lossy()).is_none(), "absolute");
+        assert!(join_inside(&item, "C:\\Windows\\win.ini").is_none());
+        assert!(join_inside(&item, "\\Windows\\win.ini").is_none(), "rooted");
+        // and in the Wallpaper Engine parser
+        let j = serde_json::json!({ "type": "video", "file": "../secret.txt", "preview": "C:\\Windows\\win.ini", "title": "x" });
+        let e = wallpaperengine::parse_project(&item, "1", true, &j);
+        assert!(e.file.is_none() && e.preview.is_none());
+        assert_eq!(e.action, Action::None);
+        // Lively: absolute paths are allowed by design, but only to existing media files
+        let secret = d.path().join("secret.txt").to_string_lossy().to_string();
+        let l = lively::parse_info(&item, "x", &serde_json::json!({ "Type": 7, "FileName": secret, "Thumbnail": secret }));
+        assert!(l.file.is_none() && l.thumb.is_none());
+        let ok = item.join("v.mp4").to_string_lossy().to_string();
+        let l = lively::parse_info(&d.path().join("elsewhere"), "x", &serde_json::json!({ "Type": 7, "FileName": ok }));
+        assert_eq!(l.file, Some(item.join("v.mp4")));
+        assert_eq!(l.action, Action::Add);
+    }
+
+    #[test]
+    fn scan_cache_reuses_until_the_folder_changes() {
+        let d = tempfile::tempdir().unwrap();
+        let cache: ScanCache<u32> = ScanCache::new();
+        let n = std::sync::atomic::AtomicU32::new(0);
+        let scan = || vec![n.fetch_add(1, std::sync::atomic::Ordering::SeqCst)];
+        let ttl = std::time::Duration::from_secs(60);
+        let a = cache.get(&[d.path().to_path_buf()], ttl, false, scan);
+        let b = cache.get(&[d.path().to_path_buf()], ttl, false, scan);
+        assert!(Arc::ptr_eq(&a, &b), "second call served from the cache");
+        assert_eq!(cache.get(&[d.path().to_path_buf()], ttl, true, scan)[0], 1, "refresh rescans");
+        // a new item folder changes the library folder's modification time
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::create_dir(d.path().join("new item")).unwrap();
+        let f = std::fs::File::open(d.path()).ok();
+        drop(f);
+        let c = cache.get(&[d.path().to_path_buf()], ttl, false, scan);
+        assert_eq!(c[0], 2, "folder changed: rescanned");
+        assert_eq!(cache.get(&[d.path().to_path_buf()], std::time::Duration::ZERO, false, scan)[0], 3, "expired: rescanned");
+    }
+
     #[test]
     fn names() {
         assert_eq!(safe_name("a:b/c. "), "a_b_c");
