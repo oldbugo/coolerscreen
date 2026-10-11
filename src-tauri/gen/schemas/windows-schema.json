@@ -201,12 +201,6 @@
           "markdownDescription": "Enables the device_check command without any pre-configured scope."
         },
         {
-          "description": "Enables the device_info command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-device-info",
-          "markdownDescription": "Enables the device_info command without any pre-configured scope."
-        },
-        {
           "description": "Enables the device_reconnect command without any pre-configured scope.",
           "type": "string",
           "const": "allow-device-reconnect",
@@ -235,12 +229,6 @@
           "type": "string",
           "const": "allow-device-state",
           "markdownDescription": "Enables the device_state command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the device_upload command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-device-upload",
-          "markdownDescription": "Enables the device_upload command without any pre-configured scope."
         },
         {
           "description": "Enables the estimate command without any pre-configured scope.",
@@ -471,12 +459,6 @@
           "markdownDescription": "Denies the device_check command without any pre-configured scope."
         },
         {
-          "description": "Denies the device_info command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-device-info",
-          "markdownDescription": "Denies the device_info command without any pre-configured scope."
-        },
-        {
           "description": "Denies the device_reconnect command without any pre-configured scope.",
           "type": "string",
           "const": "deny-device-reconnect",
@@ -505,12 +487,6 @@
           "type": "string",
           "const": "deny-device-state",
           "markdownDescription": "Denies the device_state command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the device_upload command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-device-upload",
-          "markdownDescription": "Denies the device_upload command without any pre-configured scope."
         },
         {
           "description": "Denies the estimate command without any pre-configured scope.",
