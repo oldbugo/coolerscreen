@@ -80,6 +80,7 @@ const DEFAULT_FRAME = { zoom: 1, x: 0.5, y: 0.5 };
 const PILL = {
   checking: 'Checking screen…', ready: 'Screen ready', setup: 'Needs one-time setup', failedUsb: 'Not connected',
   notFound: 'Screen not found', busy: 'Screen in use', updating: 'Updating screen…', error: 'Screen problem',
+  noReply: 'Screen not responding',
 };
 function pillState() {
   const updating = S.jobs.some(j => (j.kind === 'send' || j.kind === 'setup') && j.status === 'running');
@@ -122,6 +123,8 @@ function renderBanners() {
     el('button', { class: 'btn primary', text: 'Reconnect', title: 'Windows will ask for permission', onclick: runReconnect }));
   if (st === 'notFound') add('danger', 'Screen not found. Check the cooler\'s USB cable and power, then try again.',
     el('button', { class: 'btn secondary', text: 'Check again', onclick: checkScreen }));
+  if (st === 'noReply') add('danger', 'Screen not responding: it keeps playing but doesn\'t answer. Restarting it brings it back (about 10 seconds).',
+    el('button', { class: 'btn primary', text: 'Restart screen', onclick: runRestart }));
   if (st === 'busy') add('warn', 'Another program is using the screen. Close LOVINGCOOL MONITOR and try again.',
     el('button', { class: 'btn secondary', text: 'Check again', onclick: checkScreen }));
   const os = S.app && S.app.onScreen;
@@ -162,9 +165,11 @@ async function checkScreen() {
   try {
     const info = await api('/api/device');
     S.screen = { state: info._needsSetup ? 'setup' : 'ready', info, error: null };
+    if (info._restarted) toast('The screen wasn\'t answering, so CoolerScreen restarted it. It is fine now.', false, 8000);
+    if (info._capacity) loadApp();
   } catch (e) {
     if (e.status === 409) S.screen = { state: 'updating', info: null, error: null, retry: true };
-    else S.screen = { state: e.failedUsb ? 'failedUsb' : e.code === 'notFound' ? 'notFound' : e.code === 'busy' ? 'busy' : 'error', info: null, error: e.message };
+    else S.screen = { state: e.failedUsb ? 'failedUsb' : e.code === 'notFound' ? 'notFound' : e.code === 'busy' ? 'busy' : e.code === 'noReply' ? 'noReply' : 'error', info: null, error: e.message };
   }
   checking = false;
   renderTop(); renderBanners(); renderScreenSettings();
@@ -545,7 +550,7 @@ function showPreview(vid, force = false) {
 function applyCorners() {
   if (!refs.corners) return;
   if (S.showing || !S.draft) { refs.corners.style.display = 'none'; return; }
-  styleCorners(refs.corners, { corners: S.draft.corners });
+  styleCorners(refs.corners, S.draft.corners, liveMask());
 }
 
 function applyGeometry() {
@@ -553,7 +558,9 @@ function applyGeometry() {
   const g = frameGeometry(natural.w, natural.h, S.draft.frame);
   const st = { left: (g.left / W) * 100 + '%', top: (g.top / H) * 100 + '%', width: (g.width / W) * 100 + '%', height: (g.height / H) * 100 + '%' };
   // "Simplify fine detail" = Gaussian blur on the 2400x1080 canvas (src/convert.js detailSigma); same deviation here.
-  const sigma = (Math.min(100, Math.max(0, S.draft.detail || 0)) / 100) * 3.5 * (refs.stage.clientWidth / W);
+  // In Best that fits the level is the one the size check chose; in Custom it is the slider.
+  const level = S.draft.quality === 'auto' ? (S.est.r && S.est.r.mode === 'auto' && S.est.r.fits ? S.est.r.detail || 0 : 0) : S.draft.detail || 0;
+  const sigma = (Math.min(100, Math.max(0, level)) / 100) * 3.5 * (refs.stage.clientWidth / W);
   st.filter = sigma > 0 ? `blur(${sigma.toFixed(2)}px)` : '';
   Object.assign(media.style, st);
   if (blendVid) Object.assign(blendVid.style, st);
@@ -752,13 +759,15 @@ function buildTune(d) {
   refs.qRow = el('div', { class: 'slider-row' }, el('span', { class: 'small muted', text: 'Smaller file' }), refs.qSlider, el('span', { class: 'small muted', text: 'Sharper' }), refs.qNum);
   refs.detail = el('input', { type: 'range', id: 'dVal', min: '0', max: '100', step: '5' });
   refs.detailNum = el('span', { class: 'num', style: 'min-width:28px' });
-  qg.append(el('label', { class: 'radio' }, refs.qAuto, 'Best that fits (recommended)'),
-    el('label', { class: 'radio' }, refs.qCustom, 'Custom'), refs.qRow,
+  refs.detailBox = el('div', {},
     el('div', { class: 'slider-row', style: 'margin-top:8px' }, el('label', { for: 'dVal', class: 'small muted', text: 'Simplify fine detail' }), refs.detail, refs.detailNum),
     el('p', { class: 'muted small', text: 'Softens tiny detail so more of the clip fits (0 = off). The preview shows the effect.' }));
+  qg.append(el('label', { class: 'radio' }, refs.qAuto, 'Best that fits (recommended: chooses quality and detail for you)'),
+    el('label', { class: 'radio' }, refs.qCustom, 'Custom'), refs.qRow, refs.detailBox);
   const onQ = () => {
     dr.quality = refs.qAuto.checked ? 'auto' : Number(refs.qSlider.value);
-    refs.qRow.hidden = refs.qAuto.checked;
+    refs.qRow.hidden = refs.detailBox.hidden = refs.qAuto.checked;
+    applyGeometry();
     refs.qNum.textContent = refs.qSlider.value;
     draftChanged();
   };
@@ -837,12 +846,24 @@ function buildLoopGroup(d) {
   const blendRow = el('div', { class: 'slider-row' }, el('label', { for: 'bVal', class: 'small muted', text: 'Blend the end into the start' }), refs.blend, refs.blendNum);
   // seam check
   refs.seamBtn = el('button', { class: 'btn secondary', text: 'Check the seam', 'aria-expanded': 'false', onclick: toggleSeamPanel });
-  refs.findBtn = el('button', { class: 'btn secondary', text: 'Find best loop point', onclick: findLoopPoint });
+  refs.findBtn = el('button', { class: 'btn ghost', text: 'Only near the current end', onclick: findLoopPoint });
   refs.findResult = el('div', { class: 'small', role: 'status' });
+  refs.lsMin = el('input', { type: 'number', id: 'lsMin', min: '0.5', max: '30', step: '0.5', value: '3' });
+  refs.lsMax = el('input', { type: 'number', id: 'lsMax', min: '0.5', max: '30', step: '0.5', placeholder: 'auto' });
+  refs.lsBtn = el('button', { class: 'btn primary', text: 'Find loop points', onclick: searchLoops });
+  refs.lsStatus = el('div', { class: 'small muted', role: 'status' });
+  refs.lsResults = el('ul', { class: 'ls-results' });
+  const lsBox = el('div', { class: 'ls-box' },
+    el('div', { class: 'row' }, el('span', { class: 'small', text: 'Loop length between' }),
+      el('label', { for: 'lsMin', class: 'sr-only', text: 'Shortest loop (seconds)' }), refs.lsMin, el('span', { class: 'small', text: 'and' }),
+      el('label', { for: 'lsMax', class: 'sr-only', text: 'Longest loop (seconds; empty = the longest that fits)' }), refs.lsMax,
+      el('span', { class: 'small', text: 's' }), refs.lsBtn),
+    el('p', { class: 'muted small', text: 'Searches the whole clip, frame by frame, for the starts and ends that join most smoothly. Empty maximum = the longest loop that fits on the screen.' }),
+    refs.lsStatus, refs.lsResults);
   refs.seamPanel = el('div', { class: 'seam-panel', hidden: true });
   g.append(el('div', { class: 'row trim-head' }, refs.viewLabel, el('span', { class: 'grow' }), refs.zoomTrack),
     refs.trim, startRow, endRow, modes, blendRow, refs.blendNote,
-    el('div', { class: 'row' }, refs.seamBtn, refs.findBtn), refs.findResult, refs.seamPanel);
+    lsBox, el('div', { class: 'row' }, refs.seamBtn, refs.findBtn), refs.findResult, refs.seamPanel);
   setupTrim();
   fitView();
   return g;
@@ -894,6 +915,7 @@ function syncTuneControls() {
   refs.qNum.textContent = refs.qSlider.value;
   refs.qRow.hidden = dr.quality === 'auto';
   refs.detail.value = dr.detail || 0; refs.detailNum.textContent = dr.detail || 'off';
+  refs.detailBox.hidden = dr.quality === 'auto';
   refs.cornersOn.checked = !!dr.corners.on; refs.cornersR.value = refs.cornersRN.value = dr.corners.r;
   refs.cornersRow.hidden = !dr.corners.on;
   applyCorners();
@@ -1086,6 +1108,56 @@ function drawSeam() {
   refs.seamScore.textContent = `The frame after the end is ${sim.toFixed(1)}% like the first frame` + (sim >= 98.8 ? ' (looks seamless).' : sim >= 97.5 ? ' (a small jump).' : ' (a visible jump).') + hint;
 }
 
+async function searchLoops() {
+  const d = S.detail;
+  const minLen = Number(refs.lsMin.value) || 3, maxLen = Number(refs.lsMax.value) || null;
+  if (maxLen && maxLen < minLen) { refs.lsStatus.textContent = 'The longest loop must be at least the shortest.'; return; }
+  refs.lsBtn.disabled = true;
+  refs.lsResults.textContent = '';
+  refs.lsStatus.textContent = 'Starting…';
+  try {
+    const { jobId } = await api(`/api/originals/${d.id}/loopsearch`, 'POST', { minLen, maxLen });
+    const r = await pollJob(jobId, j => { refs.lsStatus.textContent = j.status === 'waiting' ? plainWait(j.message) : `${j.message || 'Searching'}… ${Math.round((j.progress || 0) * 100)}%`; });
+    if (S.detail !== d && (!S.detail || S.detail.id !== d.id)) return;
+    if (r.suggestedMax && !refs.lsMax.value) refs.lsMax.placeholder = `auto (${r.searched.maxLen})`;
+    refs.lsStatus.textContent = `Searched ${r.frames} frames for loops of ${fmtSecs(r.searched.minLen)} to ${fmtSecs(r.searched.maxLen)}${r.searched.truncated ? ' (first part of a long clip)' : ''}. Best first:`;
+    renderLoopResults(r.candidates);
+  } catch (e) { refs.lsStatus.textContent = e.message; }
+  refs.lsBtn.disabled = false;
+}
+async function pollJob(jobId, onUpdate) {
+  for (;;) {
+    const j = await api('/api/jobs/' + jobId);
+    onUpdate(j);
+    if (j.status === 'done') return j.result;
+    if (j.status === 'error') throw new Error(j.error);
+    await new Promise(res => setTimeout(res, 400));
+  }
+}
+const seamWords = ratio => (ratio <= 1.05 ? 'seamless' : ratio <= 1.6 ? 'nearly seamless' : 'a visible jump');
+function renderLoopResults(list) {
+  const ul = refs.lsResults;
+  ul.textContent = '';
+  if (!list.length) { refs.lsStatus.textContent = 'No loop found in that length range.'; return; }
+  const tw = 120, th = Math.round(tw * (natural.h / natural.w || 9 / 16));
+  for (const c of list) {
+    const a = el('canvas', { width: tw, height: th, class: 'ls-thumb', 'aria-hidden': 'true' });
+    const b = el('canvas', { width: tw, height: th, class: 'ls-thumb', 'aria-hidden': 'true' });
+    const text = `Start ${fmtT2(c.start)} → end ${fmtT2(c.end)} · ${fmtSecs(c.length)} (${c.frames} frames) · the jump looks like ${c.ratio.toFixed(1)}× a normal frame step (${seamWords(c.ratio)})`;
+    const use = el('button', { class: 'btn secondary', text: 'Use', 'aria-label': `Use: ${text}`, onclick: () => {
+      setTrim(c.startFrame / srcFps(), c.frames / OUT_FPS(), c.startFrame / srcFps());
+      if (view.zoomed) { fitView(); positionTrim(); drawFilmstrip(); }
+      draftChanged(); updateSeamSoon();
+      refs.lsStatus.textContent = `Using ${fmtT2(c.start)} → ${fmtT2(c.end)} (${fmtSecs(c.length)}).`;
+    } });
+    ul.append(el('li', { class: 'ls-item' }, el('div', { class: 'ls-thumbs' }, a, el('span', { 'aria-hidden': 'true', text: '↺' }), b),
+      el('div', { class: 'small ls-text', text }), use));
+    // end thumb = the last frame of the loop; start thumb = its first frame
+    grabFrame(c.endFrame / srcFps(), tw, th).then(f => f && b.getContext('2d').drawImage(f, 0, 0));
+    grabFrame(c.startFrame / srcFps(), tw, th).then(f => f && a.getContext('2d').drawImage(f, 0, 0));
+  }
+}
+
 async function findLoopPoint() {
   const d = S.detail, dr = S.draft;
   refs.findBtn.disabled = true;
@@ -1138,6 +1210,7 @@ async function runEstimate() {
     const r = await api(`/api/originals/${id}/estimate`, 'POST', body);
     if (r.stale || seq !== estSeq || !S.detail || S.detail.id !== id) return;
     S.est = { state: 'done', r };
+    applyGeometry();
   } catch (e) {
     if (seq !== estSeq) return;
     S.est = { ...S.est, state: e.code === 'busy' ? 'paused' : 'error', error: e.message };
@@ -1154,7 +1227,7 @@ function duplicateOf() {
       s.start === (d.isImage ? 0 : dr.start) && s.length === dr.length && String(s.quality) === String(dr.quality) &&
       s.frame && s.frame.zoom === dr.frame.zoom && s.frame.x === dr.frame.x && s.frame.y === dr.frame.y &&
       !!s.corners.on === !!dr.corners.on && (!dr.corners.on || s.corners.r === dr.corners.r) &&
-      (s.detail || 0) === (dr.detail || 0) && (s.blend || 0) === (d.isImage ? 0 : (dr.blend || 0));
+      (s.detail || 0) === (dr.quality === 'auto' ? 0 : dr.detail || 0) && (s.blend || 0) === (d.isImage ? 0 : (dr.blend || 0));
   });
 }
 
@@ -1177,7 +1250,9 @@ function updateTuneState() {
     if (!r.fits) { refs.meter.classList.add('danger'); stateText = `Too big by ${mb(r.bytes - budget)}`; stateCls = 'danger'; }
     else if (frac > 0.97) { refs.meter.classList.add('warn'); stateText = 'Close to the limit'; stateCls = 'warn'; }
     else { stateText = 'Fits'; stateCls = 'ok'; }
-    refs.meterNote.textContent = (r.mode === 'auto' ? (r.fits ? (r.quality > 1 ? `Best that fits: quality ${r.quality}` : 'Best that fits: the lowest quality') : 'At the lowest quality') : `Quality ${S.draft.quality}`) + ' · estimate, the final size may differ slightly';
+    refs.meterNote.textContent = (r.mode === 'auto'
+      ? (r.fits ? `Auto chose: quality ${r.quality}, ${r.detail ? `simplify ${r.detail}` : 'no simplify'}` : 'At the lowest quality, even fully simplified')
+      : `Quality ${S.draft.quality}${S.draft.detail ? `, simplify ${S.draft.detail}` : ''}`) + ' · estimate, the final size may differ slightly';
   } else { fill.style.width = '0'; over.hidden = true; refs.meterText.textContent = `– of ${mb(budget)}`; }
   if (est.state === 'checking') { refs.meter.classList.add('checking'); stateText = 'Checking size…'; stateCls = ''; }
   if (est.state === 'paused') { refs.meter.classList.add('checking'); stateText = 'Size check paused while the screen is updating'; stateCls = ''; }
@@ -1192,13 +1267,12 @@ function updateTuneState() {
   else if (est.state === 'done' && r && !r.fits) {
     disabled = true; danger = true;
     if (r.mode === 'auto') {
-      reason = 'This part is too long to fit even at the lowest quality.' +
-        (r.detailFits ? ` "Simplify fine detail" at ${r.detailFits} should make it fit` : '') +
-        (r.maxFitLength ? `${r.detailFits ? ', or s' : ' S'}horten it to about ${fmtSecs(r.maxFitLength)}.` : '.');
-      if (r.detailFits) {
+      reason = 'This part is too long to fit, even at the lowest quality with fine detail simplified.' +
+        (r.maxFitLength ? ` Shorten it to about ${fmtSecs(r.maxFitLength)}.` : '');
+      if (r.maxFitLength && !S.detail.isImage) {
         refs.saveFix.hidden = false;
-        refs.saveFix.textContent = `Simplify detail: ${r.detailFits}`;
-        refs.saveFix.onclick = () => { S.draft.detail = r.detailFits; syncTuneControls(); applyGeometry(); draftChanged(); };
+        refs.saveFix.textContent = `Shorten to ${fmtSecs(r.maxFitLength)}`;
+        refs.saveFix.onclick = () => { setTrim(S.draft.start, r.maxFitLength); draftChanged(); };
       }
     } else reason = `Too big.${r.maxFitLength ? ` Shorten to about ${fmtSecs(r.maxFitLength)} or` : ''} choose Best that fits.`;
   }
@@ -1242,7 +1316,8 @@ function versionSummary(v) {
   const f = s.frame;
   if (f && (f.zoom !== 1 || f.x !== 0.5 || f.y !== 0.5)) parts.push(f.zoom < 1 ? 'whole picture' : `zoom ${Math.round(f.zoom * 100)}%`);
   if (s.blend > 0) parts.push(`blend ${s.blend.toFixed(2)} s`);
-  if (s.detail > 0) parts.push(`simplified ${s.detail}`);
+  const det = s.quality === 'auto' ? (v.result && v.result.detail) || 0 : s.detail || 0;
+  if (det > 0) parts.push(`simplified ${det}`);
   if (s.corners && s.corners.on) parts.push(`rounded ${s.corners.r}`);
   return parts.join(' · ');
 }
@@ -1358,7 +1433,7 @@ async function confirmSend(vid) {
       el('figure', {}, el('img', { src: `/media/v/${v.id}/thumb.jpg`, alt: '' }), el('figcaption', { text: `${name} (${mb(v.result.size)})` })),
       el('span', { 'aria-hidden': 'true', text: '→' }), el('span', { class: 'small muted', text: 'replaces' }), curFig),
     el('p', { text: `This takes ${fmtDuration(secs)}. Keep CoolerScreen open until it finishes.` }),
-    el('p', { class: 'muted small', text: 'The screen may go dark or restart briefly during the upload. If LOVINGCOOL MONITOR is running, close it first.' }));
+    el('p', { class: 'muted small', text: 'The screen restarts to show the new clip. If LOVINGCOOL MONITOR is running, close it first.' }));
   const ok = await openDialog({ title: 'Send to the screen?', body, wide: true,
     actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Send to screen', value: true, kind: 'primary' }] });
   if (!ok) return;
@@ -1388,6 +1463,12 @@ function renderActivity() {
       const act = sendErrorAction(outcome);
       rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Couldn't send "${outcome.label}". ${plainSendError(outcome)}` }),
         act, el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
+    } else if (outcome.result && outcome.result.restartFailed) {
+      box.classList.add('warn');
+      const rf = outcome.result.restartFailed;
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `"${outcome.label}" was sent, but the screen didn't answer after restarting. ${rf.failedUsb ? 'Windows lost its USB connection.' : ''}` }),
+        rf.failedUsb ? el('button', { class: 'btn primary', text: 'Reconnect', onclick: runReconnect }) : el('button', { class: 'btn primary', text: 'Check again', onclick: checkScreen }),
+        el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
     } else if (outcome.result && outcome.result.serialWarning) {
       box.classList.add('warn');
       rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Done. "${outcome.label}" is on the screen. The screen is not set up yet, so it will switch off about 30 seconds after this app closes.` }),
@@ -1395,7 +1476,8 @@ function renderActivity() {
         el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
     } else if (now - outcome.finishedAt < 8000) {
       box.classList.add('ok');
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt', text: `Done. "${outcome.label}" is on the screen.` })));
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt', text: `Done. "${outcome.label}" is on the screen.` +
+        (outcome.result && outcome.result.restarted ? ' (The screen wasn\'t answering, so it was restarted first.)' : '') })));
       setTimeout(renderActivity, 8000 - (now - outcome.finishedAt) + 50);
     }
   }
@@ -1411,6 +1493,7 @@ function activityRow(j) {
     if (/Connecting/.test(m)) text = `Sending "${j.label}": connecting to the screen`;
     else if (/intro/.test(m)) text = `Sending "${j.label}": writing the start-up logo · ${pct}%`;
     else if (/Starting playback/.test(m)) text = `Sending "${j.label}": starting playback`;
+    else if (/Restarting the screen to show/.test(m)) text = `"${j.label}" is on the screen: restarting it to show the new clip`;
     else if (/Waiting for screen/.test(m)) text = `Sending "${j.label}": waiting for the screen to come back`;
     else {
       text = `Sending "${j.label}" to the screen · ${pct}%`;
@@ -1430,11 +1513,13 @@ function plainSendError(j) {
   if (j.code === 'busy') return 'Another program is using the screen. Close LOVINGCOOL MONITOR.';
   if (j.code === 'notFound') return 'Lost contact with the screen during the upload.';
   if (j.code === 'stalled') return 'The screen stopped responding. Unplugging isn\'t needed: press Reconnect, then send again.';
+  if (j.code === 'noReply') return 'The screen is not responding, even after a restart. Restart it again, then send again.';
   return j.error || '';
 }
 function sendErrorAction(j) {
   if (j.failedUsb || j.code === 'failedUsb' || j.code === 'stalled') return el('button', { class: 'btn primary', text: 'Reconnect', onclick: runReconnect });
   if (j.code === 'notFound') return el('button', { class: 'btn primary', text: 'Check again', onclick: checkScreen });
+  if (j.code === 'noReply') return el('button', { class: 'btn primary', text: 'Restart screen', onclick: runRestart });
   return el('button', { class: 'btn primary', text: 'Try again', onclick: () => { S.dismissed.add(j.id); confirmSend(j.versionId); } });
 }
 
@@ -1520,6 +1605,13 @@ function runSetup() {
       'The vendor app (LOVINGCOOL MONITOR) won\'t see the screen until you restore the original driver in Settings.'],
   });
 }
+function runRestart() {
+  return runDeviceJob('/api/restart', {
+    title: 'Restart the screen', confirmLabel: 'Restart screen',
+    text: ['The screen restarts (about 10 seconds), then plays its clip again. Nothing on it is changed.',
+      'If it doesn\'t come back, CoolerScreen offers Reconnect.'],
+  });
+}
 function runReconnect() {
   return runDeviceJob('/api/reconnect', {
     title: 'Reconnect the screen', confirmLabel: 'Reconnect',
@@ -1569,6 +1661,7 @@ function renderScreenSettings() {
     checking: 'Checking…', ready: 'Connected · set up (no background program needed)', setup: 'Connected, but the one-time setup is needed: the screen switches off 30 seconds after this app closes.',
     failedUsb: 'Not connected: Windows couldn\'t connect to the screen when the PC started.', notFound: 'Screen not found. Check the cooler\'s USB cable and power.',
     busy: 'Another program is using the screen. Close LOVINGCOOL MONITOR.', updating: 'Busy updating the screen.', error: st.error || 'Problem talking to the screen.',
+    noReply: 'Screen not responding: it keeps playing but doesn\'t answer commands. Restart the screen.',
   }[pillState()];
   $('scrStatus').textContent = text;
   $('scrSetup').hidden = st.state !== 'setup';
@@ -1577,6 +1670,7 @@ function renderScreenSettings() {
   $('scrInfo').textContent = st.info ? Object.entries(st.info).filter(([k, v]) => typeof v !== 'object').map(([k, v]) => `${k}: ${v}`).join('\n') : (st.error || '–');
 }
 $('scrCheck').onclick = checkScreen;
+$('scrRestart').onclick = () => runRestart();
 $('scrSetup').onclick = runSetup;
 $('scrSetupAgain').onclick = runSetup;
 $('aRestore').onclick = runRestore;
@@ -1611,6 +1705,7 @@ const liveMask = () => draftMask || (S.app && S.app.mask);
 function applyLiveMask() {
   if (!refs.notch || S.showing) return;
   styleNotch(refs.notch, liveMask());
+  applyCorners(); // the corners follow the notch band's inner edge
 }
 function drawNotch() {
   const m = formMask();

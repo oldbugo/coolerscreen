@@ -51,7 +51,8 @@ function gatedJob(gateKind, kind, info, fn) {
 
 const publicJob = j => {
   const { result, ...rest } = j;
-  return { ...rest, result: result && typeof result === 'object' ? { warning: result.warning, serialWarning: result.serialWarning, name: result.name, label: result.label } : undefined };
+  if (j.kind === 'loopsearch') return { ...rest, result };
+  return { ...rest, result: result && typeof result === 'object' ? { warning: result.warning, serialWarning: result.serialWarning, name: result.name, label: result.label, restarted: !!result.restarted, restartFailed: result.restartFailed || null } : undefined };
 };
 
 function activity() {
@@ -228,6 +229,13 @@ async function handle(req, res) {
           return json(res, 200, await gate.run('convert', () => (estimateSeq.get(oid) === seq ? lib.estimateFor(oid, body) : { stale: true })));
         } catch (e) { return json(res, 400, { error: e.message }); }
       }
+      if (sub === '/loopsearch' && m === 'POST') {
+        const body = await readBody(req);
+        const o = lib.readOriginal(oid);
+        const job = gatedJob('convert', 'loopsearch', { originalId: oid, label: `Finding loop points in "${o.name}"` },
+          j => lib.searchLoops(oid, body, (f, msg) => { j.progress = f; j.message = msg; }));
+        return json(res, 200, { jobId: job.id });
+      }
       if (sub === '/looppoint' && m === 'POST') {
         const body = await readBody(req);
         try { return json(res, 200, await gate.run('convert', () => lib.findLoopPoint(oid, body))); }
@@ -293,6 +301,10 @@ async function handle(req, res) {
     if (p === '/api/transport' && m === 'GET') {
       if (gate.deviceActive()) return json(res, 409, { error: 'The screen is busy with another operation.', code: 'updating' });
       return json(res, 200, await gate.run('device', () => deviceOps.state()));
+    }
+    if (p === '/api/restart' && m === 'POST') {
+      const job = gatedJob('device', 'setup', { label: 'Restarting the screen' }, j => deviceOps.restartScreen((f, msg) => { j.progress = f; j.message = msg; }));
+      return json(res, 200, { jobId: job.id });
     }
     if ((p === '/api/setup' || p === '/api/restore' || p === '/api/reconnect') && m === 'POST') {
       const fn = p === '/api/setup' ? setup.setupWinUsb : p === '/api/reconnect' ? setup.reconnect : setup.restoreSerial;

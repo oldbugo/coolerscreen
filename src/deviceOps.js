@@ -13,12 +13,22 @@ function fakeError() {
   if (t === 'none') { e = new Error('Screen not found. Check the USB cable and that the cooler is powered.'); e.code = 'notFound'; }
   if (t === 'failedusb') { e = new Error('Windows could not connect to the screen at startup (a known quirk). Click Reconnect (needs one administrator approval).'); e.failedUsb = true; e.code = 'failedUsb'; }
   if (t === 'busy') { e = new Error('Could not open the screen. Close "LOVINGCOOL MONITOR" (and any other program using the screen), then try again.'); e.code = 'busy'; }
+  // noreply: enumerates and opens, but commands time out until the screen is restarted (0x01). noreply-stuck: after the
+  // restart it does not come back and Windows shows a failed USB device instead.
+  if (/^noreply/.test(t) && !fake.restarted) e = friendly(new Error('No reply from screen'));
   return e;
 }
 
 function friendly(e) {
-  if (e && e.failedUsb) return e;
+  if (e && (e.failedUsb || e.code === 'noReply')) return e;
   const m = (e && e.message) || String(e);
+  if (/no reply/i.test(m)) {
+    // Seen on hardware: after playing for a while the screen can stop answering commands while the picture keeps
+    // playing. The restart command (0x01) still gets through and brings it back.
+    const n = new Error('The screen is not responding (it keeps playing, but doesn\'t answer). Restart the screen to bring it back.');
+    n.code = 'noReply';
+    return n;
+  }
   if (/not found/i.test(m)) {
     const n = new Error('Screen not found. Check the USB cable and that the cooler is powered.');
     n.code = 'notFound';
@@ -62,7 +72,7 @@ async function openAny() {
 /** What is reachable right now, without sending anything to the screen. */
 async function state() {
   if (FAKE) {
-    if (fake.transport === 'winusb') return { transport: 'winusb', needsSetup: false, fake: true };
+    if (fake.transport === 'winusb' || /^noreply/.test(fake.transport)) return { transport: 'winusb', needsSetup: false, fake: true };
     if (fake.transport === 'serial') return { transport: 'serial', needsSetup: true, warning: SERIAL_WARNING, fake: true };
     return { transport: 'none', needsSetup: false, failedUsb: fake.transport === 'failedusb', fake: true };
   }
@@ -88,7 +98,55 @@ function failedUsbPresent() {
   });
 }
 
-async function checkScreen() {
+/**
+ * Restart the screen (key 0x01; the only command that still works when it stops answering), wait for it to
+ * re-enumerate (up to 25 s) and check that it answers. If it does not come back but Windows shows a failed USB device,
+ * the error has failedUsb (use Reconnect). Never call this while file data is being streamed.
+ */
+async function restartScreen(onProgress = () => {}) {
+  onProgress(0.1, 'Restarting the screen');
+  if (FAKE) {
+    await sleep(1500);
+    if (fake.transport === 'noreply-stuck') { fake.transport = 'failedusb'; }
+    else fake.restarted = true;
+  } else {
+    const { screen } = await openRetry(25); // right after an upload it may still be re-enumerating
+    try { await screen.cmd(0x01, [], { wait: false }); await sleep(300); } finally { await screen.close().catch(() => {}); }
+    await sleep(3000); // it drops off USB while rebooting
+  }
+  onProgress(0.4, 'Waiting for the screen to come back');
+  const end = Date.now() + 25000;
+  let lastErr;
+  while (Date.now() < end) {
+    try {
+      const info = await checkOnce();
+      onProgress(1, 'Done');
+      return info;
+    } catch (e) {
+      lastErr = e;
+      if (e.failedUsb) break;
+      await sleep(1500);
+    }
+  }
+  if (lastErr && lastErr.failedUsb) throw lastErr;
+  if (await failedUsbPresent()) {
+    const e = new Error('The screen restarted but Windows could not connect to it again. Click Reconnect (needs one administrator approval).');
+    e.failedUsb = true; e.code = 'failedUsb';
+    throw e;
+  }
+  throw friendly(lastErr || new Error('Screen not found'));
+}
+
+/** Check the screen; if it doesn't answer, restart it once and check again (result has _restarted: true). */
+async function checkScreen(onProgress) {
+  try { return await checkOnce(); } catch (e) {
+    if (e.code !== 'noReply') throw e;
+    const info = await restartScreen(onProgress);
+    return { ...info, _restarted: true };
+  }
+}
+
+async function checkOnce() {
   if (FAKE) {
     await sleep(600);
     const err = fakeError();
@@ -122,11 +180,18 @@ async function openRetry(seconds) {
  */
 async function sendFiles(items, onProgress, opts = {}) {
   if (FAKE) { // test hook: pretend to upload (about 10 s for the loop clip), never touch USB
-    const err = fakeError();
-    if (err) throw err;
     const total = items.length + (opts.playLoop ? 0.1 : 0);
+    let restarted = false;
     for (let i = 0; i < items.length; i++) {
       onProgress && onProgress(i / total, i === 0 ? 'Connecting to screen' : 'Waiting for screen to come back');
+      let err = fakeError();
+      if (err && err.code === 'noReply' && !restarted) { // the upload command got no reply: nothing streamed yet
+        onProgress && onProgress(i / total, 'The screen did not answer: restarting it');
+        await restartScreen();
+        restarted = true;
+        err = fakeError();
+      }
+      if (err) throw err;
       await sleep(500);
       const steps = items[i].slot === 'standby' ? 20 : 4;
       for (let k = 1; k <= steps; k++) {
@@ -135,28 +200,45 @@ async function sendFiles(items, onProgress, opts = {}) {
         await sleep(500);
       }
     }
-    if (opts.playLoop) { onProgress && onProgress(items.length / total, 'Starting playback'); await sleep(500); }
-    return { ok: true, transport: 'fake', serialWarning: fake.transport === 'serial' ? SERIAL_WARNING : undefined };
+    let restartFailed = null;
+    if (opts.playLoop) {
+      onProgress && onProgress(items.length / total, 'Restarting the screen to show the new clip');
+      try { await restartScreen(); } catch (e) { restartFailed = { message: e.message, failedUsb: !!e.failedUsb }; }
+    }
+    return { ok: true, transport: 'fake', restarted, restartFailed, serialWarning: fake.transport === 'serial' ? SERIAL_WARNING : undefined };
   }
-  let warning, transport;
+  let warning, transport, restarted = false, restartFailed = null;
   const total = items.length + (opts.playLoop ? 0.1 : 0);
   for (let i = 0; i < items.length; i++) {
     const { file, slot } = items[i];
     const label = slot === 'standby' ? 'standby' : 'startup';
     onProgress && onProgress(i / total, i === 0 ? 'Connecting to screen' : 'Waiting for screen to come back');
-    const o = i === 0 ? await openAny() : await openRetry(25);
+    const o = i === 0 && !restarted ? await openAny() : await openRetry(25);
     const s = o.screen;
     transport = o.transport;
-    let sent = false;
+    let sent = false, streaming = false;
     try {
       await s.uploadAnimation(file, label, (a, b) => {
+        streaming = true;
         if (a >= b) sent = true;
         onProgress && onProgress((i + a / b) / total, 'Uploading ' + (label === 'standby' ? 'loop' : 'intro') + ' clip (the screen writes slowly: ~3 min for 9 MB)');
       });
       sent = true;
     } catch (e) {
       // The screen may reset itself right after the last byte; that is not a failure.
-      if (!sent) throw friendly(e);
+      if (!sent) {
+        const f = friendly(e);
+        // The upload command itself got no reply (no file data sent yet): restart the screen once and retry this file.
+        if (f.code === 'noReply' && !streaming && !restarted) {
+          await s.close().catch(() => {});
+          onProgress && onProgress(i / total, 'The screen did not answer: restarting it');
+          await restartScreen();
+          restarted = true;
+          i--;
+          continue;
+        }
+        throw f;
+      }
       warning = String(e.message || e);
     } finally {
       await s.close().catch(() => {});
@@ -164,12 +246,21 @@ async function sendFiles(items, onProgress, opts = {}) {
     if (i < items.length - 1 || opts.playLoop) await sleep(2500);
   }
   if (opts.playLoop) {
-    onProgress && onProgress(items.length / total, 'Starting playback');
-    const o = await openRetry(25);
-    try { await o.screen.cmd(0x14, [1, 0], { wait: false }); await sleep(300); } finally { await o.screen.close().catch(() => {}); }
-    transport = o.transport;
+    if (process.env.COOLERSCREEN_PLAY_CMD) { // old way: "play the loop now" (0x14 [1,0]); kept for experiments only
+      onProgress && onProgress(items.length / total, 'Starting playback');
+      const o = await openRetry(25);
+      try { await o.screen.cmd(0x14, [1, 0], { wait: false }); await sleep(300); } finally { await o.screen.close().catch(() => {}); }
+      transport = o.transport;
+    } else {
+      // Hardware (2026-10-11): after 0x14 the screen later stopped answering commands; after a restart (0x01, the
+      // normal boot path: splash, then loop) it stayed responsive. So the send ends with a restart and a final check.
+      onProgress && onProgress(items.length / total, 'Restarting the screen to show the new clip');
+      // The clip is already stored: a failure here is reported as a warning, not as a failed upload.
+      try { const info = await restartScreen(); transport = info._transport || transport; }
+      catch (e) { restartFailed = { message: e.message, failedUsb: !!e.failedUsb }; }
+    }
   }
-  return { ok: true, warning, transport, serialWarning: transport === 'serial' ? SERIAL_WARNING : undefined };
+  return { ok: true, warning, transport, restarted, restartFailed, serialWarning: transport === 'serial' ? SERIAL_WARNING : undefined };
 }
 
-module.exports = { FAKE, fake, failedUsbPresent, checkScreen, sendFiles, state, openAny, openRetry, SERIAL_WARNING };
+module.exports = { FAKE, fake, failedUsbPresent, checkScreen, restartScreen, sendFiles, state, openAny, openRetry, SERIAL_WARNING };

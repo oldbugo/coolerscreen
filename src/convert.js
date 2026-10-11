@@ -135,15 +135,27 @@ function frameGraph(frame) {
 // RGBA PNG (1 px anti-aliased edge) and overlaid on every frame, instead of evaluating a per-pixel expression per frame.
 // public/js/frame.js styleCorners() draws the same shape for the preview.
 const cornersOn = c => !!(c && c.on && Math.round(c.r) > 0);
-async function cornerMaskFile(corners) {
+// The visible picture: the canvas minus the notch band (a band on the left edge hides the left corners, so the corners
+// are rounded at the band's inner edge). public/js/frame.js visibleRect() is the same.
+function visibleRect(mask) {
+  const r = { x0: 0, y0: 0, x1: W, y1: H };
+  if (mask && mask.mode === 'band') {
+    const px = bandPx(mask.band);
+    if (px > 0) ({ left: () => (r.x0 = px), right: () => (r.x1 = W - px), top: () => (r.y0 = px), bottom: () => (r.y1 = H - px) })[mask.band.edge]();
+  }
+  return r;
+}
+
+async function cornerMaskFile(corners, mask) {
   if (!cornersOn(corners)) return null;
-  const R = Math.round(corners.r);
+  const { x0, y0, x1, y1 } = visibleRect(mask);
+  const R = Math.min(Math.round(corners.r), Math.floor(Math.min(x1 - x0, y1 - y0) / 2));
   const dir = path.join(paths.base, 'masks');
-  const f = path.join(dir, `corners-${W}x${H}-r${R}.png`);
+  const f = path.join(dir, `corners-${W}x${H}-r${R}-${x0}-${y0}-${x1}-${y1}.png`);
   if (fs.existsSync(f)) return f;
   fs.mkdirSync(dir, { recursive: true });
   // Distance from the pixel centre to the rounded rectangle, beyond the corner arcs (0 inside), anti-aliased over 1 px.
-  const dx = `max(max(${R}-(X+0.5),(X+0.5)-${W - R}),0)`, dy = `max(max(${R}-(Y+0.5),(Y+0.5)-${H - R}),0)`;
+  const dx = `max(max(${x0 + R}-(X+0.5),(X+0.5)-${x1 - R}),0)`, dy = `max(max(${y0 + R}-(Y+0.5),(Y+0.5)-${y1 - R}),0)`;
   const a = `255*clip(hypot(${dx},${dy})-${R}+0.5,0,1)`;
   const tmp = f + '.tmp.png';
   await runFfmpeg(['-f', 'lavfi', '-i', `color=black:s=${W}x${H}:d=1`, '-frames:v', '1',
@@ -272,7 +284,7 @@ async function prepare(file, dir, opts) {
     q: manual ? qFromQuality(opts.quality) : null,
     budget: opts.budgetBytes,
     blend,
-    base: { start, length, mask: opts.mask, frame, fps: DEVICE_FPS, srcFps: info.fps, isImage, cornerFile: await cornerMaskFile(opts.corners), detail: opts.detail || 0, blend: r3(blend) },
+    base: { start, length, mask: opts.mask, frame, fps: DEVICE_FPS, srcFps: info.fps, isImage, cornerFile: await cornerMaskFile(opts.corners, opts.mask), detail: opts.detail || 0, blend: r3(blend) },
   };
 }
 
@@ -294,16 +306,58 @@ function maxFitLength(c, bytesAtWorst) {
   return Math.max(0.5, Math.floor(((c.budget * 0.94) / perSec) * 2) / 2);
 }
 
-// Smallest q (best quality) whose estimate fits, or null if even q=31 does not; also the q=31 estimate.
-async function findQ(c) {
-  const worst = await sampleEstimate(c, 31);
-  if (worst > c.budget * 1.15) return { q: null, worst };
-  let lo = 3, hi = 31;
+// Smallest q (best quality) in [lo, hi] whose estimate fits (assumes hi fits).
+async function findQRange(c, lo, hi) {
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
     if ((await sampleEstimate(c, mid)) <= c.budget * 0.96) hi = mid; else lo = mid + 1;
   }
-  return { q: lo, worst };
+  return lo;
+}
+
+// Smallest q (best quality) whose estimate fits, or null if even q=31 does not; also the q=31 estimate.
+async function findQ(c) {
+  const worst = await sampleEstimate(c, 31);
+  if (worst > c.budget * 1.15) return { q: null, worst };
+  return { q: await findQRange(c, 3, 31), worst };
+}
+
+/**
+ * "Best that fits", fully automatic: chooses the "simplify fine detail" level and the JPEG quality together.
+ * Rule (from measurements on anime-style and photographic clips, 2026-10-11): sharpness from a finer JPEG quantiser is
+ * worth more than a little blur, until the quality would drop below AUTO_MIN_QUALITY; from there a mild blur buys back
+ * far more quality than it costs. So: the least blur that still allows quality >= AUTO_MIN_QUALITY; if no level up to
+ * 60 gets there, the level with the best (quality - 0.5 x detail) among those that fit; levels 80/100 only when
+ * nothing else fits. Returns { detail, q } or { q: null, worst } when even detail 100 at q=31 is too big.
+ */
+const AUTO_LEVELS = [0, 15, 30, 45, 60], AUTO_LAST_RESORT = [80, 100], AUTO_MIN_QUALITY = 45;
+async function chooseAuto(c, report = () => {}) {
+  const at = d => ({ ...c, base: { ...c.base, detail: d } });
+  const qT = qFromQuality(AUTO_MIN_QUALITY);
+  for (const d of AUTO_LEVELS) {
+    report(d);
+    const cd = at(d);
+    if ((await sampleEstimate(cd, qT)) <= c.budget * 0.96) return { detail: d, q: await findQRange(cd, 3, qT) };
+  }
+  let best = null, worst = null;
+  for (const d of [...AUTO_LEVELS, ...AUTO_LAST_RESORT]) {
+    if (best && AUTO_LAST_RESORT.includes(d)) break;
+    report(d);
+    const cd = at(d);
+    worst = await sampleEstimate(cd, 31);
+    if (worst > c.budget * 0.96) continue;
+    const q = await findQRange(cd, qT, 31);
+    const score = qualityFromQ(q) - 0.5 * d;
+    if (best && score <= best.score) break; // more blur stopped paying off
+    best = { detail: d, q, score };
+  }
+  return best ? { detail: best.detail, q: best.q } : { q: null, worst };
+}
+
+/** Bytes per second of output at a "sensible" quality (AUTO_MIN_QUALITY, no blur): sizes loop-length suggestions. */
+async function sampleBytesPerSecond(file, dir, opts) {
+  const c = await prepare(file, dir, { ...opts, quality: AUTO_MIN_QUALITY });
+  return (await sampleEstimate({ ...c, base: { ...c.base, detail: 0 } }, qFromQuality(AUTO_MIN_QUALITY))) / c.length;
 }
 
 /** Predict the result without writing output. opts as convert(). */
@@ -312,31 +366,24 @@ async function estimate(file, dir, opts) {
   const common = { length: c.length, start: c.start, budget: c.budget, duration: c.info.duration, fps: c.fps };
   if (c.manual) {
     const bytes = await sampleEstimate(c, c.q);
-    const r = { ...common, mode: 'manual', q: c.q, bytes: Math.round(bytes), fits: bytes <= c.budget };
+    const r = { ...common, mode: 'manual', q: c.q, detail: c.base.detail || 0, bytes: Math.round(bytes), fits: bytes <= c.budget };
     if (!r.fits) r.maxFitLength = maxFitLength(c, bytes); // at the chosen quality
     return r;
   }
-  const { q, worst } = await findQ(c);
-  if (q != null) {
-    const bytes = await sampleEstimate(c, q);
-    return { ...common, mode: 'auto', q, bytes: Math.round(bytes), fits: true };
+  const a = await chooseAuto(c);
+  if (a.q != null) {
+    const bytes = await sampleEstimate({ ...c, base: { ...c.base, detail: a.detail } }, a.q);
+    return { ...common, mode: 'auto', q: a.q, detail: a.detail, bytes: Math.round(bytes), fits: true };
   }
-  // Doesn't fit even at the lowest quality: before suggesting a shorter part, find the smallest "simplify fine
-  // detail" level that would make it fit (a few q=31 sample encodes).
-  const r = { ...common, mode: 'auto', q: 31, bytes: Math.round(worst), fits: false, maxFitLength: maxFitLength(c, worst) };
-  for (const level of [25, 50, 75, 100]) {
-    if (level <= (c.base.detail || 0)) continue;
-    const b = await sampleEstimate({ ...c, base: { ...c.base, detail: level } }, 31);
-    if (b <= c.budget * 0.96) { r.detailFits = level; break; }
-  }
-  return r;
+  return { ...common, mode: 'auto', q: 31, detail: 100, bytes: Math.round(a.worst), fits: false, maxFitLength: maxFitLength(c, a.worst) };
 }
 
 /**
  * Convert `file` into dir/device.mp4 (+ preview.mp4, thumb.jpg), always at DEVICE_FPS.
- * opts: { start, length, quality: 'auto'|1..100, frame, mask, budgetBytes, maxSeconds, onProgress(frac, msg) }
- * Auto lowers only the JPEG quality until it fits (error code 'tooLong' with maxFitLength if impossible).
- * Manual keeps the file even if over budget (tooBig: true).
+ * opts: { start, length, quality: 'auto'|1..100, detail, frame, mask, corners, blend, budgetBytes, maxSeconds, onProgress }
+ * Auto chooses detail and quality together (chooseAuto), then encodes, raising q (then detail) if the real file is
+ * bigger than the estimate; error code 'tooLong' with maxFitLength if nothing fits. Manual uses the given quality and
+ * detail and keeps the file even if over budget (tooBig: true).
  */
 async function convert(file, dir, opts) {
   const report = opts.onProgress || (() => {});
@@ -344,25 +391,33 @@ async function convert(file, dir, opts) {
   const out = path.join(dir, 'device.mp4');
   const tmp = path.join(dir, 'device.tmp.mp4');
 
-  report(0.02, 'Making the preview');
-  await makePreview(file, c.src, c.base, dir, t => report(0.02 + 0.2 * Math.min(1, t / c.length), 'Making the preview'));
-
-  let result = null, worst = null;
+  let result = null, worst = null, base = c.base;
   try {
     if (c.manual) {
-      const size = await encodeDevice(file, c.src, c.base, c.q, tmp, t => report(0.3 + 0.68 * Math.min(1, t / c.length), 'Preparing'));
+      report(0.02, 'Making the preview');
+      await makePreview(file, c.src, base, dir, t => report(0.02 + 0.2 * Math.min(1, t / c.length), 'Making the preview'));
+      const size = await encodeDevice(file, c.src, base, c.q, tmp, t => report(0.3 + 0.68 * Math.min(1, t / c.length), 'Preparing'));
       fs.renameSync(tmp, out);
-      result = { size, q: c.q, tooBig: size > c.budget };
+      result = { size, q: c.q, detail: base.detail || 0, tooBig: size > c.budget };
     } else {
-      report(0.25, 'Finding the best quality that fits');
-      const f = await findQ(c);
-      worst = f.worst;
-      let q = f.q;
-      while (q != null) {
-        const size = await encodeDevice(file, c.src, c.base, q, tmp, t => report(0.4 + 0.58 * Math.min(1, t / c.length), 'Preparing'));
-        if (size <= c.budget) { fs.renameSync(tmp, out); result = { size, q, tooBig: false }; break; }
-        if (q >= 31) break;
-        q++;
+      report(0.03, 'Choosing the best quality that fits');
+      const a = await chooseAuto(c, d => report(0.03 + 0.2 * (d / 100), 'Choosing the best quality that fits'));
+      worst = a.worst;
+      if (a.q != null) {
+        const levels = [...AUTO_LEVELS, ...AUTO_LAST_RESORT].filter(d => d >= a.detail);
+        let li = 0, q = a.q;
+        base = { ...c.base, detail: levels[0] };
+        report(0.25, 'Making the preview');
+        await makePreview(file, c.src, base, dir, t => report(0.25 + 0.15 * Math.min(1, t / c.length), 'Making the preview'));
+        for (;;) {
+          const size = await encodeDevice(file, c.src, base, q, tmp, t => report(0.4 + 0.58 * Math.min(1, t / c.length), 'Preparing'));
+          if (size <= c.budget) { fs.renameSync(tmp, out); result = { size, q, detail: base.detail, tooBig: false }; break; }
+          if (q < 31) { q++; continue; }
+          if (++li >= levels.length) break;
+          base = { ...c.base, detail: levels[li] };
+          q = (await findQ({ ...c, base })).q ?? 31;
+          await makePreview(file, c.src, base, dir);
+        }
       }
     }
   } finally {
@@ -381,20 +436,20 @@ async function convert(file, dir, opts) {
 
 // Small grey frames (source frame rate, no resampling) decoded straight to memory, for loop-point matching.
 const LW = 96, LH = 54;
-function grayFrames(file, start, dur, maxFrames) {
+function grayFrames(file, start, dur, maxFrames, fw = LW, fh = LH, onFrames) {
   return new Promise((resolve, reject) => {
     const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-ss', String(Math.max(0, start)), '-i', file,
       ...(dur ? ['-t', String(dur)] : []), ...(maxFrames ? ['-frames:v', String(maxFrames)] : []),
-      '-an', '-fps_mode', 'passthrough', '-vf', `scale=${LW}:${LH}:flags=area,format=gray`, '-f', 'rawvideo', 'pipe:1'];
+      '-an', '-fps_mode', 'passthrough', '-vf', `scale=${fw}:${fh}:flags=area,format=gray`, '-f', 'rawvideo', 'pipe:1'];
     const p = spawn(ffmpeg, args, { windowsHide: true });
-    const chunks = []; let err = '';
-    p.stdout.on('data', d => chunks.push(d));
+    const chunks = []; let err = '', got = 0;
+    p.stdout.on('data', d => { chunks.push(d); got += d.length; if (onFrames) onFrames(Math.floor(got / (fw * fh))); });
     p.stderr.on('data', d => (err += d));
     p.on('error', reject);
     p.on('close', code => {
       if (code !== 0) return reject(new Error('ffmpeg failed: ' + err.trim().split('\n').slice(-2).join(' | ')));
-      const buf = Buffer.concat(chunks), n = Math.floor(buf.length / (LW * LH)), out = [];
-      for (let i = 0; i < n; i++) out.push(buf.subarray(i * LW * LH, (i + 1) * LW * LH));
+      const buf = Buffer.concat(chunks), n = Math.floor(buf.length / (fw * fh)), out = [];
+      for (let i = 0; i < n; i++) out.push(buf.subarray(i * fw * fh, (i + 1) * fw * fh));
       resolve(out);
     });
   });
@@ -459,6 +514,6 @@ async function makeSplash(out) {
 }
 
 module.exports = {
-  convert, estimate, probe, cornerMaskFile, detailSigma, findLoopPoint, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
+  convert, estimate, probe, cornerMaskFile, visibleRect, grayFrames, sampleBytesPerSecond, AUTO_MIN_QUALITY, detailSigma, findLoopPoint, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
   bandPx, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H, DEVICE_FPS, IMAGE_SECONDS, FRAME_DEFAULT, SPLASH,
 };

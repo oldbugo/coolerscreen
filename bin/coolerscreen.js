@@ -79,7 +79,7 @@ async function make(oid) {
 async function sendIt(vid) {
   const sr = await send.sendVersion(vid, (f, msg) => bar(msg)(f));
   if (sr.serialWarning) console.log('\nWARNING: ' + sr.serialWarning);
-  console.log(`\nDone: ${sr.name} · ${sr.label} is on the screen. The screen may restart by itself for a few seconds.`);
+  console.log(`\nDone: ${sr.name} · ${sr.label} is on the screen (the screen restarted to show it).`);
 }
 
 (async () => {

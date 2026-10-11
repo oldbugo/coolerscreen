@@ -51,20 +51,28 @@ gear opens **Settings**.
   over and over) so you can judge the join.
   - **Check the seam** compares the last frame with the first: onion skin (first frame over the last, adjustable), side by
     side, or difference (black = identical), with a similarity score.
-  - **Find best loop point** searches ±2 s around the end for the frame most like the first frame and offers it.
+  - **Find loop points** searches the whole clip, frame by frame, for the start/end pairs that join most smoothly, within
+    "loop length between X and Y s" (default 3 s to the longest that fits on the screen at a sensible quality, and at least
+    the current length + 1 s). Each result shows its first and last frame, its length and how big the jump looks compared
+    with a normal frame step (1.0x or less = seamless); **Use** applies it exactly. It compares motion across the join
+    (the frames before and after), not just one frame, on small cached frames, and re-checks the best ones at higher
+    resolution; a 25 s clip takes a few seconds. "Only near the current end" is the quick ±2 s search.
   - **Blend the end into the start** (0-1.5 s) cross-fades the last moments into the frames just before the start (the
     classic seamless-loop trick; the length stays the same). It needs that much clip before the start.
 - **Tune: size, corners and quality.** Size and position on the screen (zoom, left-right, up-down, or drag the preview;
   "Fill the screen" is the default, "Show the whole picture" adds black bars). **Rounded corners** with an adjustable radius
-  (per version; the last choice is the default for the next clip). Quality **Best that fits** or Custom, and **Simplify
-  fine detail** (0 = off), which softens tiny detail so longer parts fit. The preview shows all of it, including the notch.
+  (per version; the last choice is the default for the next clip); they round the visible picture, so with the notch band
+  on the left the left corners are rounded at the band's edge. Quality: **Best that fits** chooses the JPEG quality and how
+  much fine detail to simplify by itself (it says what it chose, e.g. "Auto chose: quality 40, simplify 60"); **Custom**
+  gives you the quality and "Simplify fine detail" sliders. The preview shows all of it, including the notch.
 - **Space on the screen** shows the estimated size against the screen's real free space, measured at each screen check
   (free storage + what the app's two clips occupy, minus the start-up logo and a 160 KB margin; about 10.9 MB on the
-  tested screen; 9.5 MB minus the logo until the first check). If even the lowest quality doesn't fit, it suggests a
-  "Simplify fine detail" level that fits, then how long the part can be.
+  tested screen; 9.5 MB minus the logo until the first check). If nothing fits, it offers to shorten the part to a length
+  that does.
 - **Versions:** **Save as version** prepares a copy for the screen (a few seconds). A clip can have several versions, so you
   can compare them (click one to preview it) and send any of them. Versions are kept in `%APPDATA%\CoolerScreen`.
-- **Send to screen** replaces what is on the screen. Keep the app open until the bar at the bottom says it is done.
+- **Send to screen** replaces what is on the screen. Keep the app open until the bar at the bottom says it is done. At the
+  end the screen restarts to show the new clip (start-up logo, then your loop), and the app checks that it answers.
 - **Frame rate:** the screen always plays about 18 frames per second, whatever the file says, so every version is made at
   18 fps and plays at real speed. Versions made by CoolerScreen 1.1 or earlier (other rates) are marked "plays too
   fast/slow – re-make"; **Re-make** creates a corrected copy with the same settings.
@@ -96,6 +104,7 @@ Command line equivalent: `node.exe bin\coolerscreen.js restore`.
 | Problem | What to do |
 |---|---|
 | "Windows couldn't connect to the screen at startup" (banner with a Reconnect button), or the screen is missing and Device Manager shows "Unknown USB Device (Device Descriptor Request Failed)" | A known quirk: after a PC boot Windows sometimes fails to enumerate the screen (the screen itself keeps playing its loop). Click **Reconnect** (or run `node.exe bin\coolerscreen.js reconnect`) and approve the Windows prompt. It power-cycles only that one USB port, which fixes it immediately. Nothing is installed or changed permanently. |
+| "Screen not responding" (it keeps playing but doesn't answer) | Seen after the screen has played for a while. Click **Restart screen** (top banner, or Settings > Screen): it sends the screen's restart command, waits for it to come back and checks it. The app also does this by itself once when a check or the start of an upload gets no reply (never in the middle of an upload). If the screen doesn't come back, use **Reconnect**. |
 | "Screen not found" | Check the USB cable/header and that the cooler has power. Unplug and replug USB, then **Check again** (click the status pill at the top). |
 | Banner says the screen "needs setup" again | The driver was reset (moving the internal USB header to another port, or a big Windows update). Click "Set up screen" again. |
 | Screen goes dark about 30 s after sending | The one-time setup was not applied (or was undone). Run "Set up screen". |

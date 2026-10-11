@@ -59,10 +59,22 @@ export function styleNotch(el, mask) {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /** Path of the area outside a rounded rectangle covering the canvas (even-odd fill), radius r in canvas pixels. */
-export function cornersPath(r) {
-  const R = Math.round(r);
-  return `M0 0H${W}V${H}H0Z M${R} 0H${W - R}A${R} ${R} 0 0 1 ${W} ${R}V${H - R}A${R} ${R} 0 0 1 ${W - R} ${H}` +
-    `H${R}A${R} ${R} 0 0 1 0 ${H - R}V${R}A${R} ${R} 0 0 1 ${R} 0Z`;
+/** The visible picture: the canvas minus the notch band (same as src/convert.js visibleRect()). */
+export function visibleRect(mask) {
+  const r = { x0: 0, y0: 0, x1: W, y1: H };
+  if (mask && mask.mode === 'band') {
+    const px = bandPx(mask.band);
+    if (px > 0) ({ left: () => (r.x0 = px), right: () => (r.x1 = W - px), top: () => (r.y0 = px), bottom: () => (r.y1 = H - px) })[mask.band.edge]();
+  }
+  return r;
+}
+
+/** Path of everything outside a rounded rectangle (even-odd fill): the visible rectangle with corner radius r. */
+export function cornersPath(r, rect = { x0: 0, y0: 0, x1: W, y1: H }) {
+  const { x0, y0, x1, y1 } = rect;
+  const R = Math.min(Math.round(r), Math.floor(Math.min(x1 - x0, y1 - y0) / 2));
+  return `M0 0H${W}V${H}H0Z M${x0 + R} ${y0}H${x1 - R}A${R} ${R} 0 0 1 ${x1} ${y0 + R}V${y1 - R}A${R} ${R} 0 0 1 ${x1 - R} ${y1}` +
+    `H${x0 + R}A${R} ${R} 0 0 1 ${x0} ${y1 - R}V${y0 + R}A${R} ${R} 0 0 1 ${x0 + R} ${y0}Z`;
 }
 
 /** An <svg> overlay (absolute, full frame) for the rounded-corner mask; update it with styleCorners(). */
@@ -80,10 +92,9 @@ export function makeCornersOverlay() {
   return svg;
 }
 
-/** Same shape as src/convert.js cornerMaskFile(): black outside a rounded rectangle of radius mask.corners.r. */
-export function styleCorners(svg, mask) {
-  const c = mask && mask.corners;
-  const on = !!(c && c.on && Math.round(c.r) > 0);
+/** Same shape as src/convert.js cornerMaskFile(): black outside the visible rectangle rounded with radius corners.r. */
+export function styleCorners(svg, corners, notchMask) {
+  const on = !!(corners && corners.on && Math.round(corners.r) > 0);
   svg.style.display = on ? '' : 'none';
-  if (on) svg.firstChild.setAttribute('d', cornersPath(c.r));
+  if (on) svg.firstChild.setAttribute('d', cornersPath(corners.r, visibleRect(notchMask)));
 }

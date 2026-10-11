@@ -172,6 +172,13 @@ input[type="range"] { accent-color: var(--accent); flex: 1; min-width: 0; }
 .frame-row-label { font-weight: 600; font-size: var(--fs-small); min-width: 40px; }
 .frame-row input[type="number"] { width: 76px; }
 .btn.nudge { height: 28px; padding: 0 var(--s2); font-size: var(--fs-small); }
+.ls-box { margin: var(--s2) 0; padding: var(--s3); background: var(--surface-2); border-radius: var(--r-md); }
+.ls-box input[type="number"] { width: 70px; }
+.ls-results { list-style: none; margin: var(--s2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.ls-item { display: flex; align-items: center; gap: var(--s3); }
+.ls-thumbs { display: flex; align-items: center; gap: var(--s1); flex: none; color: var(--text-muted); }
+.ls-thumb { width: 72px; height: auto; border-radius: 4px; background: #000; display: block; }
+.ls-text { flex: 1; min-width: 0; }
 .seam-panel { margin-top: var(--s2); padding: var(--s3); background: var(--surface-2); border-radius: var(--r-md); }
 .seam-canvas { display: block; max-width: 100%; height: auto; border-radius: 6px; background: #000; margin: var(--s2) 0; }
 .grow { flex: 1; }

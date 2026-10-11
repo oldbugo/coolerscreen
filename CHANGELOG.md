@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- "Find loop points": one button searches the whole clip, frame-accurate, for the smoothest start/end pairs within a
+  loop-length range (motion across the join, cached small frames, leaders re-checked at higher resolution); the top 5
+  with first/last frame thumbnails, length and seam score; "Use" applies one exactly.
+- "Best that fits" chooses the JPEG quality and the fine-detail simplification together and shows what it chose; the
+  Simplify slider is only in Custom.
+- Rounded corners round the visible picture (inset by the notch band).
+- Screen not responding: "Restart screen" (banner and Settings > Screen) sends the restart command, waits for the screen to
+  come back and checks it; a check or upload start that gets no reply restarts the screen once automatically. A send now
+  ends by restarting the screen (instead of the "play now" command, after which the screen once stopped answering) and a
+  final check.
+
 - Loop editing: frame-accurate start/end (source frame / screen frames), frame nudge buttons and arrow keys (Shift = 10),
   a filmstrip trim track with "Zoom to the selection", "play the seam" preview mode, a seam check (onion skin, side by
   side, difference, similarity score), "Find best loop point" (±2 s search), and "Blend the end into the start"

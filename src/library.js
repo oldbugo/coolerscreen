@@ -9,7 +9,8 @@ const crypto = require('crypto');
 const paths = require('./paths');
 const settings = require('./settings');
 const slots = require('./slots');
-const { findLoopPoint: findLoop, convert, estimate, qualityFromQ, normFrame, bandPx, DEVICE_FPS } = require('./convert');
+const { findLoops } = require('./loopsearch');
+const { sampleBytesPerSecond, findLoopPoint: findLoop, convert, estimate, qualityFromQ, normFrame, bandPx, DEVICE_FPS } = require('./convert');
 
 const ID_RE = /^[a-z0-9]{8,32}$/;
 const O_FILES = new Set(['thumb.jpg', 'frame.jpg', 'proxy.mp4', 'proxy.jpg']);
@@ -160,7 +161,8 @@ function cleanSettings(o, s, maxSeconds, cornersDefault) {
   const avail = o.isImage || !o.duration ? Infinity : o.duration - start;
   if (!(length > 0)) length = o.isImage ? 3 : Math.min(maxSeconds, avail);
   length = r3(Math.max(0.05, Math.min(length, avail, 120)));
-  const detail = Math.round(Math.min(100, Math.max(0, Number(s.detail) || 0)));
+  // Auto chooses the detail level itself (convert.chooseAuto); only Custom uses the slider.
+  const detail = quality === 'auto' ? 0 : Math.round(Math.min(100, Math.max(0, Number(s.detail) || 0)));
   const blend = o.isImage ? 0 : r3(Math.min(1.5, Math.max(0, Number(s.blend) || 0)));
   return { start, length, quality, frame: normFrame(s.frame), corners: cleanCorners(s.corners || cornersDefault), detail, blend };
 }
@@ -262,7 +264,7 @@ async function runVersion(vid, onProgress) {
     if (!findVersion(vid)) { throw new Error('This version was deleted.'); }
     return patchVersion(vid, {
       status: 'ready', error: null,
-      result: { size: r.size, q: r.q, quality: r.quality, fps: r.fps, start: r.start, length: r.length, tooBig: r.tooBig, budgetBytes: budget },
+      result: { size: r.size, q: r.q, quality: r.quality, detail: r.detail || 0, fps: r.fps, start: r.start, length: r.length, tooBig: r.tooBig, budgetBytes: budget },
     });
   } catch (e) {
     if (findVersion(vid)) patchVersion(vid, { status: 'error', error: e.message, errorCode: e.code || null, maxFitLength: e.maxFitLength || null });
@@ -296,6 +298,34 @@ async function findLoopPoint(oid, body) {
   if (o.isImage) throw new Error('A still image always loops seamlessly.');
   const st = cleanSettings(o, body, 120);
   return findLoop(src, { start: st.start, end: st.start + st.length, duration: o.duration, fps: o.fps });
+}
+
+/**
+ * Whole-clip loop search (src/loopsearch.js). maxLen defaults to the longest loop that fits the space on the screen at a
+ * sensible quality (measured on a sample), within the clip.
+ */
+async function searchLoops(oid, body, onProgress) {
+  const o = readOriginal(oid);
+  const src = sourcePath(o);
+  if (!src) throw new Error('The original file is missing.');
+  if (o.isImage) throw new Error('A still image always loops seamlessly.');
+  const ctx = context();
+  const dur = o.duration || 0;
+  const minLen = Math.max(0.5, Math.min(Number(body.minLen) || 3, dur - 0.2));
+  let maxLen = Number(body.maxLen);
+  let suggestedMax = null;
+  if (!(maxLen > 0)) {
+    onProgress && onProgress(0.005, 'Working out the longest loop that fits');
+    const draft = o.draft || {};
+    const bps = await sampleBytesPerSecond(src, oDir(oid), { start: draft.start || 0, length: Math.min(2, dur), frame: draft.frame,
+      mask: ctx.mask, corners: draft.corners, budgetBytes: ctx.budget });
+    suggestedMax = Math.floor((ctx.budget * 0.94 / bps) * 2) / 2;
+    // ... but never shorter than the current selection plus a second, so its own loop is still found.
+    maxLen = Math.max(suggestedMax, (Number(draft.length) || 0) + 1);
+  }
+  maxLen = Math.max(minLen, Math.min(maxLen, dur - 0.2, 30));
+  const r = await findLoops(src, oDir(oid), { duration: dur, fps: o.fps, minLen, maxLen, onProgress });
+  return { ...r, suggestedMax };
 }
 
 /** At startup: versions that were queued or converting when the app closed did not finish. */
@@ -370,5 +400,5 @@ module.exports = {
   isId, isSourceName, newId, oDir, vDir, rev, bump,
   readOriginal, writeOriginal, patchOriginal, listOriginals, sourcePath, removeOriginalCache, summary, detail, context,
   versions, findVersion, writeVersion, patchVersion, deleteVersion, devicePath, createVersion, runVersion, remakeVersion,
-  estimateFor, findLoopPoint, resetInterrupted, migrate, mediaPathO, mediaPathV, notchKey, cleanSettings,
+  estimateFor, findLoopPoint, searchLoops, resetInterrupted, migrate, mediaPathO, mediaPathV, notchKey, cleanSettings,
 };
