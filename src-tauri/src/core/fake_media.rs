@@ -1,7 +1,7 @@
 //! A stand-in media engine (no ffmpeg) for tests and for running the UI before WS2 lands:
 //! `COOLERSCREEN_FAKE_MEDIA=1`. Its device.mp4 files are NOT real videos, so with fake media the device is always
 //! the fake device too (enforced in `App::new`): nothing it makes can reach the real screen.
-use super::api::{EncodeReq, LoopPointReq, LoopSearchReq, MediaEngine, ProbeInfo, SourceAssets};
+use super::api::{EncodeReq, LoopCardsReq, LoopPointReq, LoopSearchReq, MediaEngine, ProbeInfo, SourceAssets};
 use super::error::{CoreError, CoreResult};
 use super::js::num;
 use super::scheduler::TaskCtx;
@@ -90,6 +90,7 @@ impl MediaEngine for FakeMedia {
             codec: ok.then(|| if img { "png".into() } else { "h264".into() }),
             has_video: ok,
             is_image: img,
+            rotated: false,
         })
     }
 
@@ -111,12 +112,19 @@ impl MediaEngine for FakeMedia {
         for i in 0..3 {
             let start = 0.5 + i as f64;
             let length = (req.min_len + i as f64).min(req.max_len);
-            let _ = std::fs::copy(&req.file, req.dir.join(format!("loop-{i}.mp4")));
             cs.push(json!({ "start": num(start), "startFrame": (start * 25.0) as u64, "length": num(length), "frames": (length * 18.0) as u64,
                 "end": num(start + length), "endFrame": ((start + length) * 25.0) as u64 - 1, "cost": 3.2, "ratio": num(0.9 + i as f64 * 0.4),
                 "similarity": 98.7 }));
         }
         Ok(json!({ "frames": 300, "searched": { "minLen": num(req.min_len), "maxLen": num(req.max_len), "truncated": false }, "candidates": cs }))
+    }
+
+    fn loop_cards(&self, ctx: &TaskCtx, req: &LoopCardsReq) -> CoreResult<()> {
+        for i in 0..req.candidates.as_array().map(Vec::len).unwrap_or(0) {
+            ctx.sleep(self.delay / 8)?;
+            let _ = std::fs::copy(&req.file, req.dir.join(format!("loop-{i}.mp4")));
+        }
+        Ok(())
     }
 
     fn loop_point(&self, ctx: &TaskCtx, req: &LoopPointReq) -> CoreResult<Value> {

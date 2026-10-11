@@ -1,6 +1,7 @@
 //! Shared core for the Tauri app and the cs2 CLI.
 pub mod core;
 pub mod device;
+pub mod media;
 pub mod sources;
 
 use crate::core::api::Backends;
@@ -16,8 +17,14 @@ pub fn backends() -> Backends {
         sources_dir: paths::sources_dir(),
         ffmpeg: paths::ffmpeg(),
     }));
-    if std::env::var("COOLERSCREEN_FAKE_MEDIA").is_ok_and(|v| !v.is_empty() && v != "0") {
-        b.media = Arc::new(crate::core::fake_media::FakeMedia::default());
-    }
+    b.media = if std::env::var("COOLERSCREEN_FAKE_MEDIA").is_ok_and(|v| !v.is_empty() && v != "0") {
+        Arc::new(crate::core::fake_media::FakeMedia::default())
+    } else {
+        Arc::new(crate::media::core_engine::CoreMedia::new(crate::media::MediaConfig {
+            ffmpeg: paths::ffmpeg(),
+            base_dir: paths::base(),
+            work_dir: std::env::temp_dir().join("CoolerScreen-media"),
+        }))
+    };
     b
 }

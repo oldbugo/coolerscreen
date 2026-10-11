@@ -72,6 +72,8 @@ pub struct App {
     pub(crate) gallery: GalleryState,
     pub app_version: String,
     pub media_base: Mutex<String>,
+    /// Originals whose loop cards job has not finished (the media server waits for those files).
+    pub cards_pending: Mutex<std::collections::HashSet<String>>,
     pub(crate) me: Mutex<Weak<App>>,
 }
 
@@ -107,6 +109,7 @@ impl App {
             gallery: GalleryState::default(),
             app_version: app_version.to_string(),
             media_base: Mutex::new(String::new()),
+            cards_pending: Mutex::new(Default::default()),
             me: Mutex::new(Weak::new()),
         });
         *app.me.lock().unwrap() = Arc::downgrade(&app);

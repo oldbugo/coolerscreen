@@ -41,6 +41,7 @@ fn probe_of(o: &Value) -> ProbeInfo {
         codec: o["codec"].as_str().map(String::from),
         has_video: true,
         is_image: truthy(o.get("isImage")),
+        rotated: truthy(o.get("rotated")),
     }
 }
 
@@ -335,7 +336,16 @@ impl App {
             max_len = s;
         }
         let max_len = max_len.min(dur - 0.2).min(30.0).max(min_len);
-        let req = LoopSearchReq { file: src, dir: self.lib.o_dir(oid), original_id: oid.into(), duration: dur, fps: o["fps"].as_f64(), min_len, max_len };
+        let req = LoopSearchReq {
+            file: src.clone(),
+            dir: self.lib.o_dir(oid),
+            original_id: oid.into(),
+            duration: dur,
+            fps: o["fps"].as_f64(),
+            min_len,
+            max_len,
+            budget_bytes: ctx.budget.max(0.0) as u64,
+        };
         let mut r = self.media.loop_search(tctx, &req)?;
         let t = now_ms();
         if let Some(cs) = r.get_mut("candidates").and_then(Value::as_array_mut) {
@@ -362,7 +372,8 @@ impl App {
             stored.insert(k.clone(), v.clone());
         }
         self.lib.patch_original(oid, &json!({ "loops": stored }))?;
-        // The UI gets absolute card URLs.
+        self.cards_job(oid, &src, dur, o["fps"].as_f64(), result.get("candidates").cloned().unwrap_or(json!([])));
+        // The UI gets absolute card URLs (the media server holds a card request until the cards job made it).
         let mut out = Value::Object(result);
         if let Some(cs) = out.get_mut("candidates").and_then(Value::as_array_mut) {
             for c in cs {
@@ -371,6 +382,31 @@ impl App {
             }
         }
         Ok(out)
+    }
+
+    /// Loop card previews as their own job, so the size meter for the picked loop runs alongside.
+    fn cards_job(&self, oid: &str, src: &Path, duration: f64, fps: Option<f64>, candidates: Value) {
+        let dir = self.lib.o_dir(oid);
+        // Old cards belong to the previous search.
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.filter_map(Result::ok) {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.starts_with("loop-") && n.ends_with(".mp4") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        self.cards_pending.lock().unwrap().insert(oid.to_string());
+        let req = super::api::LoopCardsReq { file: src.to_path_buf(), dir, candidates, duration, fps };
+        let o = self.lib.read_original(oid);
+        let res = self.media.resources(MediaTask::Cards, o.as_ref().map(probe_of).as_ref());
+        let spec = TaskSpec::new("cards", "Making the loop previews", res).original(oid).priority(Priority::Selected).auto_priority();
+        let (app, oid2) = (self.arc(), oid.to_string());
+        self.sched.submit(spec, move |ctx| {
+            let r = app.media.loop_cards(ctx, &req);
+            app.cards_pending.lock().unwrap().remove(&oid2);
+            r.map(|_| Value::Null)
+        });
     }
 
     // ---------- versions ----------
@@ -840,7 +876,19 @@ impl App {
     pub fn resolve_media(&self, path: &str, query: &str) -> Option<(PathBuf, bool)> {
         let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
         match parts.as_slice() {
-            ["media", "o", oid, file] => self.lib.media_path_o(oid, file).map(|p| (p, false)),
+            ["media", "o", oid, file] => {
+                // A loop card still being rendered: hold the request (up to 30 s) instead of a 404 the <video> keeps.
+                if file.starts_with("loop-") {
+                    let end = std::time::Instant::now() + Duration::from_secs(30);
+                    // (cards are written in place, so wait for the whole job, not just the file)
+                    while self.cards_pending.lock().unwrap().contains(*oid)
+                        && std::time::Instant::now() < end
+                    {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+                self.lib.media_path_o(oid, file).map(|p| (p, false))
+            }
             ["media", "v", vid, file] => self.lib.media_path_v(vid, file).map(|p| (p, false)),
             ["sources", sid, "thumb"] => {
                 let item = super::media_server::query_param(query, "item")?;

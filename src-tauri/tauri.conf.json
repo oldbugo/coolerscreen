@@ -10,6 +10,6 @@
   },
   "bundle": {
     "active": true, "targets": ["nsis"], "icon": ["icons/icon.ico", "icons/icon.png"],
-    "resources": { "../scripts/setup-winusb.ps1": "scripts/setup-winusb.ps1", "../scripts/restore-serial.ps1": "scripts/restore-serial.ps1", "../scripts/reconnect.ps1": "scripts/reconnect.ps1" }
+    "resources": { "../node_modules/ffmpeg-static/ffmpeg.exe": "ffmpeg.exe", "../scripts/setup-winusb.ps1": "scripts/setup-winusb.ps1", "../scripts/restore-serial.ps1": "scripts/restore-serial.ps1", "../scripts/reconnect.ps1": "scripts/reconnect.ps1" }
   }
 }

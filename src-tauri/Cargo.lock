@@ -605,6 +605,8 @@ dependencies = [
  "notify",
  "nusb",
  "raw-window-handle",
+ "rayon",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

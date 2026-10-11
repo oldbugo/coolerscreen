@@ -102,6 +102,9 @@ fn whole_flow_import_tune_save_send() {
     assert!(j["result"]["suggestedMax"].as_f64().unwrap() >= 1.0);
     assert_eq!(app.original_get(&oid).unwrap()["loops"]["candidates"].as_array().unwrap().len(), 3);
     assert_eq!(c0["blend"], json!(0), "ratio 0.9: no blend");
+    // cards come from their own job; the media server waits for them
+    let (p, _) = app.resolve_media(&format!("/media/o/{oid}/loop-2.mp4"), "").expect("card served once made");
+    assert!(p.exists());
 
     // save a version
     let r = app.version_create(&oid, &json!({ "start": 1, "length": 5, "quality": "auto" })).unwrap();

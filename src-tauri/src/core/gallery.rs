@@ -173,7 +173,7 @@ impl App {
                 "created": existing.map(|e| e["created"].clone()).unwrap_or(json!(iso_now())),
                 "duration": if info.is_image { Value::Null } else { info.duration.map(js::num).unwrap_or(Value::Null) },
                 "isImage": info.is_image,
-                "width": info.width, "height": info.height, "codec": info.codec, "fps": info.fps.map(js::num),
+                "width": info.width, "height": info.height, "codec": info.codec, "fps": info.fps.map(js::num), "rotated": info.rotated,
                 "assets": "pending", "assetsError": null, "proxy": null, "missing": null,
                 "sourceChanged": existing.is_some() && !self.lib.versions(&id).is_empty(),
             });

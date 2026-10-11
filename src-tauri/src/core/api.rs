@@ -26,6 +26,9 @@ pub struct ProbeInfo {
     pub codec: Option<String>,
     pub has_video: bool,
     pub is_image: bool,
+    /// The source carries a 90°/270° rotation (width/height are the displayed size).
+    #[serde(default)]
+    pub rotated: bool,
 }
 
 /// `makeSourceAssets` result: thumb.jpg and frame.jpg are always written to the dir; `proxy` names the proxy file
@@ -71,6 +74,19 @@ pub struct LoopSearchReq {
     pub fps: Option<f64>,
     pub min_len: f64,
     pub max_len: f64,
+    /// Space for the loop on the screen (the search may use it to prefer loops that fit).
+    pub budget_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopCardsReq {
+    pub file: PathBuf,
+    pub dir: PathBuf,
+    /// The search result's `candidates` (start, length, blend, ...).
+    pub candidates: Value,
+    pub duration: f64,
+    pub fps: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,6 +110,8 @@ pub enum MediaTask {
     Estimate,
     Convert,
     Splash,
+    /// Loop card previews (loop-<i>.mp4), a separate job so the size meter can run alongside.
+    Cards,
 }
 
 pub trait MediaEngine: Send + Sync + 'static {
@@ -119,6 +137,12 @@ pub trait MediaEngine: Send + Sync + 'static {
     fn convert(&self, ctx: &TaskCtx, req: &EncodeReq, out_dir: &Path) -> CoreResult<Value>;
     /// The boot splash (SPLASH v1, ~1.5 s MJPEG) written to `out`.
     fn splash(&self, ctx: &TaskCtx, out: &Path) -> CoreResult<()>;
+    /// Render the loop card previews `dir/loop-<i>.mp4` (320x144) for the candidates `loop_search` returned
+    /// (in order, with their `blend`). Run as its own `cards` job after the search.
+    fn loop_cards(&self, ctx: &TaskCtx, req: &LoopCardsReq) -> CoreResult<()> {
+        let _ = (ctx, req);
+        Ok(())
+    }
     /// Splash version: the cached file is `splash-v<version>.mp4` in the app folder.
     fn splash_version(&self) -> u32 {
         1

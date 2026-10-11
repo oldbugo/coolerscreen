@@ -15,6 +15,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 nusb = "0.2.7"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls", "gzip"] }
+rayon = "1.12"
+regex = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.152", features = ["preserve_order"] }
 serialport = "4.10.1"
@@ -41,3 +43,7 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+[[bench]]
+name = "media_bench"
+harness = false
