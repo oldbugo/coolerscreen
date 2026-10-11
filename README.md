@@ -22,10 +22,10 @@ keeps playing on its own, even after you restart or shut down the PC.
      driver**. Only the screen's own USB entry is changed, nothing else on your PC.
    - *Why:* the screen's firmware turns its display off about 30 seconds after Windows closes the serial port. With
      WinUSB that never happens, so you do not need to keep any program running.
-5. **Add** a video, GIF, image or vendor theme `.ht` file (drop it on the window or click **+ Add clip**). It plays right away in a
-   screen-shaped preview. Pick the part you want, adjust size/position and quality in **Tune** (the defaults are good), press
-   **Save as version**, then **Send to screen** on that version. The upload takes **about 3 minutes** for a full-size clip
-   (the screen's built-in memory writes slowly); the picture appears when it ends.
+5. **Add** a video, GIF, image or vendor theme `.ht` file (drop it on the window or click **Add clip**) and open it. CoolerScreen
+   finds the smoothest loops in it and picks the best one (click another card to change it); adjust size and position if you
+   like, then press **Push to screen**. The upload takes **about 3 minutes** for a full-size clip (the screen's built-in
+   memory writes slowly); the screen restarts and shows the clip when it ends.
 6. **Close the app** (close the window). Done: the screen loops your clip forever.
 
 To change the picture later, just start the app again.
@@ -34,9 +34,10 @@ To change the picture later, just start the app again.
 
 ## Using it
 
-The window has the **Library** (your clips) on the left and the selected clip on the right: a preview shaped like the
-screen, **Tune**, and its **Versions**. The bar at the top shows the screen's status and what is **on screen now**; the
-gear opens **Settings**.
+The app opens on the **Gallery**: every clip as a large picture (hover to play it), with "On screen", "File missing" or
+"Needs re-make" where it applies, and an **Add clip** tile. Click a clip to open it: a preview shaped like the screen, the
+**Loop** choices, **Size and position**, and the space it needs; the clip list stays on the left and "‹ Gallery" goes back.
+The bar at the top shows the screen's status and what is **on screen now**; the gear opens **Settings**.
 
 - **Adding clips:** videos, GIFs, images, the vendor app's downloaded **theme files (`.ht`)** and plain `.zip` files
   containing a video or image. Drop files anywhere on the window (several at once is fine) or use **+ Add clip**. Nothing
@@ -44,35 +45,26 @@ gear opens **Settings**.
 - **Gallery folder:** your clips are the files in `Documents\CoolerScreen\Gallery` ("Open Gallery folder"). Any file you
   put there appears in the app automatically; adding through the app copies the file there (same name, "name (2)" if
   taken). Renaming a clip in the app renames its file. The folder can be changed in Settings.
-- **Tune: the loop.** Choose the part of the clip that loops. Everything is frame-accurate: the start is a source frame,
-  the length a number of screen frames (18 per second). Drag the handles on the filmstrip, use "◀ frame / frame ▶"
-  (Shift = 10 frames) or the arrow keys on a handle, or type the numbers; "Zoom to the selection" makes single frames
-  easy to hit on long clips. The preview can play **the selection** or **the seam** (the last second, then the first second,
-  over and over) so you can judge the join.
-  - **Check the seam** compares the last frame with the first: onion skin (first frame over the last, adjustable), side by
-    side, or difference (black = identical), with a similarity score.
-  - **Find loop points** searches the whole clip, frame by frame, for the start/end pairs that join most smoothly, within
-    "loop length between X and Y s" (default 3 s to the longest that fits on the screen at a sensible quality, and at least
-    the current length + 1 s). Each result shows its first and last frame, its length and how big the jump looks compared
-    with a normal frame step (1.0x or less = seamless); **Use** applies it exactly. It compares motion across the join
-    (the frames before and after), not just one frame, on small cached frames, and re-checks the best ones at higher
-    resolution; a 25 s clip takes a few seconds. "Only near the current end" is the quick ±2 s search.
-  - **Blend the end into the start** (0-1.5 s) cross-fades the last moments into the frames just before the start (the
-    classic seamless-loop trick; the length stays the same). It needs that much clip before the start.
-- **Tune: size, corners and quality.** Size and position on the screen (zoom, left-right, up-down, or drag the preview;
-  "Fill the screen" is the default, "Show the whole picture" adds black bars). **Rounded corners** with an adjustable radius
-  (per version; the last choice is the default for the next clip); they round the visible picture, so with the notch band
-  on the left the left corners are rounded at the band's edge. Quality: **Best that fits** chooses the JPEG quality and how
-  much fine detail to simplify by itself (it says what it chose, e.g. "Auto chose: quality 40, simplify 60"); **Custom**
-  gives you the quality and "Simplify fine detail" sliders. The preview shows all of it, including the notch.
-- **Space on the screen** shows the estimated size against the screen's real free space, measured at each screen check
-  (free storage + what the app's two clips occupy, minus the start-up logo and a 160 KB margin; about 10.9 MB on the
-  tested screen; 9.5 MB minus the logo until the first check). If nothing fits, it offers to shorten the part to a length
-  that does.
-- **Versions:** **Save as version** prepares a copy for the screen (a few seconds). A clip can have several versions, so you
-  can compare them (click one to preview it) and send any of them. Versions are kept in `%APPDATA%\CoolerScreen`.
-- **Send to screen** replaces what is on the screen. Keep the app open until the bar at the bottom says it is done. At the
-  end the screen restarts to show the new clip (start-up logo, then your loop), and the app checks that it answers.
+- **Loop:** when you open a clip, CoolerScreen searches the whole clip, frame by frame, for the places where it can
+  loop most smoothly and shows the best ones as cards, each playing its own loop, with its length and "Seamless", "Nearly
+  seamless" or "Small jump". The best one is chosen for you; click another card to choose it (the preview plays it and the
+  line under the preview shows where it sits in the clip). "Shortest loop" / "Longest loop" (the ⓘ explains them; empty =
+  the longest that looks good in the space on your screen) and "Search again" change the search. When the best join is not
+  quite seamless, the end is cross-faded into the start automatically. The results are remembered. (Exact frame editing is
+  still there for special cases: ⋯ > "Edit loop manually…".)
+- **Size and position** on the screen (zoom, left-right, up-down, or drag the preview; "Fill the screen" is the default,
+  "Show the whole picture" adds black bars) and **Rounded corners** with an adjustable radius (per version; they round the
+  visible picture, so with the notch band on the left the left corners are rounded at the band's edge).
+- **Quality** is always "Best that fits": CoolerScreen picks the finest compression that fills about 98% of the space on the
+  screen (it says what it chose). The space is measured at each screen check (free storage + what the app's two clips
+  occupy, minus the start-up logo and a 160 KB margin; about 10.9 MB on the tested screen; 9.5 MB minus the logo before
+  the first check). If even the coarsest compression doesn't fit, it offers to shorten the loop.
+- **Push to screen** (bottom right) puts the current loop on the screen: it saves it as a version (if it isn't one yet),
+  prepares it and sends it, after one confirmation. Keep the app open until the bar at the bottom says it is done; the
+  screen then restarts to show the new clip and the app checks that it answers. **Save as version** keeps a copy without
+  sending it.
+- **Versions** (the "Versions" button at the top right of a clip): every saved version with its picture, date and "On
+  screen" badge, and Preview, Push to screen, Rename, Delete.
 - **Frame rate:** the screen always plays about 18 frames per second, whatever the file says, so every version is made at
   18 fps and plays at real speed. Versions made by CoolerScreen 1.1 or earlier (other rates) are marked "plays too
   fast/slow – re-make"; **Re-make** creates a corrected copy with the same settings.

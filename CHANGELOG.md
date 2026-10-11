@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Simpler, "we pick for you" UI:
+  - The app opens on a **Gallery** of all clips (large pictures, hover to play, status chips, Add clip tile); clicking a clip
+    opens it, "‹ Gallery" goes back.
+  - **Loop cards** are the only loop control: the whole-clip search runs automatically the first time a clip is opened
+    (results remembered), the best loop is chosen, each card plays its own loop with "Seamless / Nearly seamless / Small
+    jump"; a cross-fade is added automatically when the best join isn't seamless. "Shortest loop" / "Longest loop" with ⓘ
+    tooltips. Manual frame editing only via ⋯ > "Edit loop manually…".
+  - **Quality** is always "Best that fits" (no Custom/Simplify controls). **Versions** moved into a dropdown in the clip
+    header; a bottom bar has "Save as version" and **"Push to screen"** (saves if needed, prepares, sends).
+- Best that fits, re-benchmarked (SSIM vs the unblurred source at the same size, pink-blue 8.5 s / 4 s, Coast 8 s): one
+  fixed JPEG quantiser with the range extended past 31 up to 69 and **no blur** beats blur + q<=31, 1- and 2-pass rate
+  control and trellis. Auto now uses it and fills ~97-99% of the space (blur only as a last resort).
+
 - "Find loop points": one button searches the whole clip, frame-accurate, for the smoothest start/end pairs within a
   loop-length range (motion across the join, cached small frames, leaders re-checked at higher resolution); the top 5
   with first/last frame thumbnails, length and seam score; "Use" applies one exactly.

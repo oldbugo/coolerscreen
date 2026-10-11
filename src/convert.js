@@ -203,7 +203,7 @@ function baseGraph(o) {
 function deviceArgs(file, src, o, q, out) {
   const g = `${baseGraph(o)};${maskGraph(o.mask)};${cornersGraph(o.cornerFile)};[mc]transpose=1,format=yuvj420p[out]`;
   return [...inputArgs(file, { ...src, ...o }), '-filter_complex', g, '-map', '[out]', '-an',
-    '-c:v', 'mjpeg', '-q:v', String(q), '-r', String(o.fps), '-movflags', '+faststart', '-y', out];
+    '-c:v', 'mjpeg', '-q:v', String(q), ...(q > 31 ? ['-qmax', String(Q_MAX), '-lmax', '30000'] : []), '-r', String(o.fps), '-movflags', '+faststart', '-y', out];
 }
 
 async function encodeDevice(file, src, o, q, out, onTime) {
@@ -257,8 +257,11 @@ async function makeSourceAssets(file, dir, info, onTime) {
 }
 
 // Friendly quality 1-100 (higher = better) <-> ffmpeg mjpeg -q:v 31..3
-const qFromQuality = Q => Math.round(31 - ((Math.min(100, Math.max(1, Number(Q))) - 1) * 28) / 99);
-const qualityFromQ = q => Math.round(1 + ((31 - q) * 99) / 28);
+// The JPEG quantiser runs from Q_MIN (finest) to Q_MAX (coarsest). ffmpeg's mjpeg normally stops at 31; with -qmax/-lmax
+// raised it goes to 69, still standard baseline JPEG (quant tables stay 8-bit), which fits long clips without blurring.
+const Q_MIN = 2, Q_MAX = 69;
+const qFromQuality = Q => Math.round(Q_MAX - ((Math.min(100, Math.max(1, Number(Q))) - 1) * (Q_MAX - Q_MIN)) / 99);
+const qualityFromQ = q => Math.max(1, Math.min(100, Math.round(1 + ((Q_MAX - q) * 99) / (Q_MAX - Q_MIN))));
 
 const rnd = () => Math.random().toString(36).slice(2, 8);
 
@@ -310,54 +313,50 @@ function maxFitLength(c, bytesAtWorst) {
 async function findQRange(c, lo, hi) {
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if ((await sampleEstimate(c, mid)) <= c.budget * 0.96) hi = mid; else lo = mid + 1;
+    if ((await sampleEstimate(c, mid)) <= c.budget * 0.97) hi = mid; else lo = mid + 1;
   }
   return lo;
 }
 
-// Smallest q (best quality) whose estimate fits, or null if even q=31 does not; also the q=31 estimate.
+// Smallest q (best quality) whose estimate fits, or null if even Q_MAX does not; also the Q_MAX estimate.
 async function findQ(c) {
-  const worst = await sampleEstimate(c, 31);
+  const worst = await sampleEstimate(c, Q_MAX);
   if (worst > c.budget * 1.15) return { q: null, worst };
-  return { q: await findQRange(c, 3, 31), worst };
+  return { q: await findQRange(c, Q_MIN, Q_MAX), worst };
 }
 
 /**
- * "Best that fits", fully automatic: chooses the "simplify fine detail" level and the JPEG quality together.
- * Rule (from measurements on anime-style and photographic clips, 2026-10-11): sharpness from a finer JPEG quantiser is
- * worth more than a little blur, until the quality would drop below AUTO_MIN_QUALITY; from there a mild blur buys back
- * far more quality than it costs. So: the least blur that still allows quality >= AUTO_MIN_QUALITY; if no level up to
- * 60 gets there, the level with the best (quality - 0.5 x detail) among those that fit; levels 80/100 only when
- * nothing else fits. Returns { detail, q } or { q: null, worst } when even detail 100 at q=31 is too big.
+ * "Best that fits" (the only quality setting in the UI). Benchmark 2026-10-11 (SSIM against the unblurred source at the
+ * same file size; pink-blue 8.5 s / 4 s and Coast 8 s; see CHANGELOG): a single fixed JPEG quantiser for the whole clip,
+ * with the quantiser range extended past ffmpeg's usual 31 up to 69 and no blur, beat every alternative: blur + q<=31,
+ * 1-pass and 2-pass rate control (per-frame quantiser), and trellis quantisation. Blur never improved quality at a given
+ * size, so it is used only as a last resort when even q=69 is too big. Returns { detail, q } or { q: null, worst }.
  */
-const AUTO_LEVELS = [0, 15, 30, 45, 60], AUTO_LAST_RESORT = [80, 100], AUTO_MIN_QUALITY = 45;
+const AUTO_LEVELS = [0], AUTO_LAST_RESORT = [30, 60, 100], AUTO_MIN_QUALITY = 45;
 async function chooseAuto(c, report = () => {}) {
   const at = d => ({ ...c, base: { ...c.base, detail: d } });
-  const qT = qFromQuality(AUTO_MIN_QUALITY);
-  for (const d of AUTO_LEVELS) {
-    report(d);
-    const cd = at(d);
-    if ((await sampleEstimate(cd, qT)) <= c.budget * 0.96) return { detail: d, q: await findQRange(cd, 3, qT) };
-  }
-  let best = null, worst = null;
+  let worst = null;
   for (const d of [...AUTO_LEVELS, ...AUTO_LAST_RESORT]) {
-    if (best && AUTO_LAST_RESORT.includes(d)) break;
     report(d);
-    const cd = at(d);
-    worst = await sampleEstimate(cd, 31);
-    if (worst > c.budget * 0.96) continue;
-    const q = await findQRange(cd, qT, 31);
-    const score = qualityFromQ(q) - 0.5 * d;
-    if (best && score <= best.score) break; // more blur stopped paying off
-    best = { detail: d, q, score };
+    const f = await findQ(at(d));
+    if (f.q != null) return { detail: d, q: f.q };
+    if (d === 0) worst = f.worst;
   }
-  return best ? { detail: best.detail, q: best.q } : { q: null, worst };
+  return { q: null, worst };
 }
 
-/** Bytes per second of output at a "sensible" quality (AUTO_MIN_QUALITY, no blur): sizes loop-length suggestions. */
-async function sampleBytesPerSecond(file, dir, opts) {
-  const c = await prepare(file, dir, { ...opts, quality: AUTO_MIN_QUALITY });
-  return (await sampleEstimate({ ...c, base: { ...c.base, detail: 0 } }, qFromQuality(AUTO_MIN_QUALITY))) / c.length;
+/** Bytes per second of output at a given quality and simplify level (sizes loop-length suggestions). */
+async function sampleBytesPerSecond(file, dir, opts, quality = AUTO_MIN_QUALITY, detail = 0) {
+  const c = await prepare(file, dir, { ...opts, quality });
+  return (await sampleEstimate({ ...c, base: { ...c.base, detail } }, qFromQuality(quality))) / c.length;
+}
+
+/** A small (320x144) H.264 preview of one loop candidate, made exactly like a version (frame rate, blend). */
+async function renderLoopPreview(file, out, { start, length, blend = 0, srcFps }) {
+  const o = { start, length, blend, fps: DEVICE_FPS, frame: FRAME_DEFAULT, srcFps, isImage: false, detail: 0 };
+  const g = `${baseGraph(o)};[base]scale=320:144:flags=bicubic,format=yuv420p[out]`;
+  await runFfmpeg([...inputArgs(file, o), '-filter_complex', g, '-map', '[out]', '-an', '-c:v', 'libx264', '-preset', 'veryfast',
+    '-crf', '26', '-movflags', '+faststart', '-y', out]);
 }
 
 /** Predict the result without writing output. opts as convert(). */
@@ -375,7 +374,7 @@ async function estimate(file, dir, opts) {
     const bytes = await sampleEstimate({ ...c, base: { ...c.base, detail: a.detail } }, a.q);
     return { ...common, mode: 'auto', q: a.q, detail: a.detail, bytes: Math.round(bytes), fits: true };
   }
-  return { ...common, mode: 'auto', q: 31, detail: 100, bytes: Math.round(a.worst), fits: false, maxFitLength: maxFitLength(c, a.worst) };
+  return { ...common, mode: 'auto', q: Q_MAX, detail: 0, bytes: Math.round(a.worst), fits: false, maxFitLength: maxFitLength(c, a.worst) };
 }
 
 /**
@@ -411,11 +410,20 @@ async function convert(file, dir, opts) {
         await makePreview(file, c.src, base, dir, t => report(0.25 + 0.15 * Math.min(1, t / c.length), 'Making the preview'));
         for (;;) {
           const size = await encodeDevice(file, c.src, base, q, tmp, t => report(0.4 + 0.58 * Math.min(1, t / c.length), 'Preparing'));
-          if (size <= c.budget) { fs.renameSync(tmp, out); result = { size, q, detail: base.detail, tooBig: false }; break; }
-          if (q < 31) { q++; continue; }
+          if (size <= c.budget) {
+            fs.renameSync(tmp, out); result = { size, q, detail: base.detail, tooBig: false };
+            // fill the space: one step finer while the file would still fit (the estimate is a little conservative)
+            while (result.q > Q_MIN && result.size < c.budget * 0.97) {
+              const s2 = await encodeDevice(file, c.src, base, result.q - 1, tmp, t => report(0.9 + 0.09 * Math.min(1, t / c.length), 'Using the remaining space'));
+              if (s2 > c.budget) break;
+              fs.renameSync(tmp, out); result = { size: s2, q: result.q - 1, detail: base.detail, tooBig: false };
+            }
+            break;
+          }
+          if (q < Q_MAX) { q++; continue; }
           if (++li >= levels.length) break;
           base = { ...c.base, detail: levels[li] };
-          q = (await findQ({ ...c, base })).q ?? 31;
+          q = (await findQ({ ...c, base })).q ?? Q_MAX;
           await makePreview(file, c.src, base, dir);
         }
       }
@@ -514,6 +522,6 @@ async function makeSplash(out) {
 }
 
 module.exports = {
-  convert, estimate, probe, cornerMaskFile, visibleRect, grayFrames, sampleBytesPerSecond, AUTO_MIN_QUALITY, detailSigma, findLoopPoint, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
+  convert, estimate, probe, renderLoopPreview, Q_MIN, Q_MAX, cornerMaskFile, visibleRect, grayFrames, sampleBytesPerSecond, AUTO_MIN_QUALITY, detailSigma, findLoopPoint, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
   bandPx, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H, DEVICE_FPS, IMAGE_SECONDS, FRAME_DEFAULT, SPLASH,
 };

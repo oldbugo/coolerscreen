@@ -10,7 +10,7 @@ const paths = require('./paths');
 const settings = require('./settings');
 const slots = require('./slots');
 const { findLoops } = require('./loopsearch');
-const { sampleBytesPerSecond, findLoopPoint: findLoop, convert, estimate, qualityFromQ, normFrame, bandPx, DEVICE_FPS } = require('./convert');
+const { renderLoopPreview, sampleBytesPerSecond, findLoopPoint: findLoop, convert, estimate, qualityFromQ, normFrame, bandPx, DEVICE_FPS } = require('./convert');
 
 const ID_RE = /^[a-z0-9]{8,32}$/;
 const O_FILES = new Set(['thumb.jpg', 'frame.jpg', 'proxy.mp4', 'proxy.jpg']);
@@ -124,7 +124,7 @@ const devicePath = vid => { const f = findVersion(vid); const p = f && path.join
 function mediaPathO(oid, file) {
   if (!isId(oid)) return null;
   if (file === 'source') { const o = readOriginal(oid); return sourcePath(o); }
-  if (!O_FILES.has(file)) return null;
+  if (!O_FILES.has(file) && !/^loop-\d\.mp4$/.test(file)) return null;
   const p = path.join(oDir(oid), file);
   return fs.existsSync(p) ? p : null;
 }
@@ -164,7 +164,7 @@ function cleanSettings(o, s, maxSeconds, cornersDefault) {
   // Auto chooses the detail level itself (convert.chooseAuto); only Custom uses the slider.
   const detail = quality === 'auto' ? 0 : Math.round(Math.min(100, Math.max(0, Number(s.detail) || 0)));
   const blend = o.isImage ? 0 : r3(Math.min(1.5, Math.max(0, Number(s.blend) || 0)));
-  return { start, length, quality, frame: normFrame(s.frame), corners: cleanCorners(s.corners || cornersDefault), detail, blend };
+  return { start, length, quality, frame: normFrame(s.frame), corners: cleanCorners(s.corners || cornersDefault), detail, blend, manualLoop: !!s.manualLoop };
 }
 /** A version's settings with the fields older versions don't have filled in (corners came from the global mask then). */
 function effectiveSettings(v) {
@@ -208,7 +208,16 @@ function summary(o, ctx = context()) {
     busy: vs.some(v => v.status === 'queued' || v.status === 'converting'),
     failed: vs.some(v => v.status === 'error'),
     onScreen: vs.some(v => ctx.standby && ctx.standby.versionId === v.id),
+    // for the Gallery: large still, hover preview, and whether any version should be re-made
+    frameUrl: o.assets === 'ready' ? `/media/o/${o.id}/frame.jpg` : null,
+    previewUrl: previewUrlOf(o),
+    needsRemake: vs.some(v => { const d = decorateVersion(v, ctx); return d.oldNotch || !!d.speed; }),
   };
+}
+function previewUrlOf(o) {
+  if (o.assets !== 'ready') return null;
+  if (o.proxy) return `/media/o/${o.id}/${o.proxy}`;
+  return sourcePath(o) ? `/media/o/${o.id}/source` : null;
 }
 
 function detail(oid) {
@@ -220,6 +229,7 @@ function detail(oid) {
     ...summary(o, ctx), file: o.file, extracted: !!o.extracted, draft: o.draft || null, canTune: !!src && o.assets === 'ready',
     previewUrl: o.assets !== 'ready' ? null : o.proxy ? `/media/o/${o.id}/${o.proxy}` : src ? `/media/o/${o.id}/source` : null,
     previewKind: o.isImage ? 'image' : 'video', fps: o.fps || null,
+    loops: o.loops && o.loops.key === String(o.fileMtime) ? o.loops : null,
     versions: versions(oid).map(v => decorateVersion(v, ctx)),
   };
 }
@@ -315,17 +325,35 @@ async function searchLoops(oid, body, onProgress) {
   let maxLen = Number(body.maxLen);
   let suggestedMax = null;
   if (!(maxLen > 0)) {
+    // "Auto": the longest loop Best that fits can still make look good (quality 25 on the extended quantiser scale).
     onProgress && onProgress(0.005, 'Working out the longest loop that fits');
     const draft = o.draft || {};
     const bps = await sampleBytesPerSecond(src, oDir(oid), { start: draft.start || 0, length: Math.min(2, dur), frame: draft.frame,
-      mask: ctx.mask, corners: draft.corners, budgetBytes: ctx.budget });
-    suggestedMax = Math.floor((ctx.budget * 0.94 / bps) * 2) / 2;
-    // ... but never shorter than the current selection plus a second, so its own loop is still found.
-    maxLen = Math.max(suggestedMax, (Number(draft.length) || 0) + 1);
+      mask: ctx.mask, corners: draft.corners, budgetBytes: ctx.budget }, 25, 0);
+    suggestedMax = Math.max(1, Math.floor((ctx.budget * 0.94 / bps) * 2) / 2);
+    maxLen = suggestedMax;
   }
   maxLen = Math.max(minLen, Math.min(maxLen, dur - 0.2, 30));
-  const r = await findLoops(src, oDir(oid), { duration: dur, fps: o.fps, minLen, maxLen, onProgress });
-  return { ...r, suggestedMax };
+  const r = await findLoops(src, oDir(oid), { duration: dur, fps: o.fps, minLen, maxLen, onProgress: (f, m) => onProgress && onProgress(f * 0.9, m) });
+  // Blend automatically when the join is not seamless on its own; then a small preview of each loop, made the same way.
+  onProgress && onProgress(0.92, 'Making the loop previews');
+  for (let i = 0; i < r.candidates.length; i++) {
+    const c = r.candidates[i];
+    c.blend = autoBlend(c, o.fps);
+    await renderLoopPreview(src, path.join(oDir(oid), `loop-${i}.mp4`), { start: c.start, length: c.length, blend: c.blend, srcFps: o.fps });
+    c.preview = `/media/o/${oid}/loop-${i}.mp4?t=${Date.now()}`;
+  }
+  const result = { ...r, suggestedMax, minLen: body.minLen || null, maxLen: body.maxLen || null };
+  patchOriginal(oid, { loops: { key: String(o.fileMtime), at: new Date().toISOString(), ...result } });
+  return result;
+}
+
+/** Blend length for a loop candidate: none when the join already looks like a normal frame step (ratio <= 1). */
+function autoBlend(c, srcFps) {
+  if (!(c.ratio > 1.0)) return 0;
+  const want = c.ratio <= 1.6 ? 0.33 : 0.5;
+  const b = Math.min(want, c.start, c.length / 2);
+  return Math.round(Math.floor(b * DEVICE_FPS + 1e-6) / DEVICE_FPS * 1000) / 1000;
 }
 
 /** At startup: versions that were queued or converting when the app closed did not finish. */

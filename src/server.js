@@ -330,7 +330,7 @@ async function handle(req, res) {
 
   if (m !== 'GET') return json(res, 405, { error: 'Method not allowed' });
 
-  if ((mm = /^\/media\/o\/([a-z0-9]+)\/([a-z0-9.]+)$/.exec(p))) {
+  if ((mm = /^\/media\/o\/([a-z0-9]+)\/([a-z0-9.-]+)$/.exec(p))) {
     const f = lib.mediaPathO(mm[1], mm[2]);
     if (!f) { res.writeHead(404); return res.end(); }
     return serveFile(req, res, f);

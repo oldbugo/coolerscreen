@@ -24,7 +24,9 @@
 
 <div id="banners" class="banners"></div>
 
-<div class="panes">
+<main id="galleryView" class="gallery-view" aria-label="Gallery"></main>
+
+<div class="panes" hidden>
   <aside class="library" aria-labelledby="libHead">
     <div class="pane-head">
       <h2 id="libHead">Library</h2>
@@ -39,7 +41,7 @@
     <div id="dropHint" class="drop-hint" hidden>Drop to add</div>
   </aside>
 
-  <main id="detail" class="detail" aria-live="off"></main>
+  <div id="detail" class="detail" role="main" aria-live="off"></div>
 </div>
 
 <div id="activity" class="activity" role="status" aria-live="polite" hidden></div>

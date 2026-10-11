@@ -73,6 +73,8 @@ const S = {
   showing: null, // null = the tuning (original), or a version id
   draft: null, est: { state: 'idle' }, adding: [],
   missingDismissed: false, outcomes: new Map(), dismissed: new Set(), loadedAt: Date.now(),
+  view: 'gallery', // 'gallery' (home) | 'detail'
+  manualLoop: false, // "Edit loop manually…" panel open
 };
 const DEFAULT_FRAME = { zoom: 1, x: 0.5, y: 0.5 };
 
@@ -130,7 +132,7 @@ function renderBanners() {
   const os = S.app && S.app.onScreen;
   if (os && os.incomplete && !S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'))) {
     add('danger', `The last upload of "${os.originalName} · ${os.label}" didn't finish, so the screen may show a broken picture.`,
-      os.exists ? el('button', { class: 'btn primary', text: 'Send again', onclick: () => confirmSend(os.versionId) }) : null);
+      os.exists ? el('button', { class: 'btn primary', text: 'Push again', onclick: () => confirmSend(os.versionId) }) : null);
   }
   if (S.longMissing.length && !S.missingDismissed) {
     const n = S.longMissing.length;
@@ -183,11 +185,11 @@ async function loadApp() {
 async function loadOriginals() {
   const r = await api('/api/originals');
   S.originals = r.originals; S.longMissing = r.longMissing; S.rev = r.rev;
-  if (S.sel && !S.originals.find(o => o.id === S.sel)) { S.sel = null; S.detail = null; }
-  if (!S.sel && S.originals.length) S.sel = S.originals[0].id;
+  if (S.sel && !S.originals.find(o => o.id === S.sel)) { S.sel = null; S.detail = null; if (S.view === 'detail') setView('gallery'); }
   renderLibrary();
   renderBanners();
-  await loadDetail();
+  renderGallery();
+  if (S.view === 'detail') await loadDetail();
 }
 let detailFor = null;
 async function loadDetail() {
@@ -218,11 +220,13 @@ function initialDraft(d) {
   const length = d.isImage ? len0 : Math.max(1, Math.floor(len0 * of + 1e-6)) / of;
   const cd = (S.app && S.app.cornersDefault) || { on: false, r: 80 };
   return { start: Math.round(start * 1000) / 1000, length: Math.round(length * 1000) / 1000, quality: dr.quality ?? 'auto', frame: { ...DEFAULT_FRAME, ...(dr.frame || {}) },
-    corners: { on: !!(dr.corners || cd).on, r: (dr.corners || cd).r ?? 80 }, detail: dr.detail || 0, blend: dr.blend || 0 };
+    corners: { on: !!(dr.corners || cd).on, r: (dr.corners || cd).r ?? 80 }, detail: dr.detail || 0, blend: dr.blend || 0, manualLoop: !!dr.manualLoop };
 }
 
 async function select(id, showVersion = null) {
-  if (S.sel !== id) {
+  const wasGallery = S.view !== 'detail';
+  if (wasGallery) setView('detail');
+  if (S.sel !== id || wasGallery) {
     S.sel = id;
     detailFor = null;
     renderLibrary();
@@ -307,6 +311,63 @@ window.addEventListener('drop', e => {
   importFiles([...(e.dataTransfer?.files || [])]);
 });
 
+// ---------- gallery (home) ----------
+function setView(v) {
+  S.view = v;
+  $('galleryView').hidden = v !== 'gallery';
+  document.querySelector('.panes').hidden = v !== 'detail';
+  if (v === 'gallery') { stopPreviewLoop(); renderGallery(); }
+}
+function showGallery() {
+  setView('gallery');
+  const card = S.sel && document.querySelector(`.g-card[data-id="${S.sel}"]`);
+  (card || $('galleryView').querySelector('.g-card')).focus();
+}
+function renderGallery() {
+  const box = $('galleryView');
+  if (box.hidden) return;
+  box.textContent = '';
+  box.append(el('div', { class: 'g-head' }, el('h1', { class: 'g-title', text: 'Gallery' }),
+    el('span', { class: 'muted small', text: S.originals.length ? `${S.originals.length} clip${S.originals.length > 1 ? 's' : ''}` : '' }),
+    el('span', { class: 'grow' }), el('button', { class: 'btn ghost', text: 'Open Gallery folder', onclick: () => $('openFolder').click() })));
+  if (!S.originals.length && !S.adding.length) box.append(el('p', { class: 'muted g-empty', text: 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). You\'ll pick the loop and preview it before anything is sent.' }));
+  const ul = el('ul', { class: 'g-grid', 'aria-label': 'Clips' });
+  for (const a of S.adding) {
+    ul.append(el('li', {}, el('div', { class: 'g-card adding', 'aria-busy': 'true' }, el('div', { class: 'g-thumb skeleton' }),
+      el('div', { class: 'g-name', text: a.name }), el('div', { class: 'g-chips' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'small muted', text: 'Adding…' })))));
+  }
+  for (const o of S.originals) {
+    const thumb = el('div', { class: 'g-thumb' + (o.assets === 'pending' ? ' skeleton' : '') },
+      o.frameUrl ? el('img', { src: o.frameUrl, alt: '', loading: 'lazy' }) : null);
+    const chips = el('div', { class: 'g-chips' });
+    if (o.onScreen) chips.append(el('span', { class: 'chip ok', text: 'On screen' }));
+    if (o.missing) chips.append(el('span', { class: 'chip warn', text: 'File missing' }));
+    if (o.needsRemake) chips.append(el('span', { class: 'chip warn', text: 'Needs re-make' }));
+    if (o.busy) chips.append(el('span', { class: 'chip accent', text: 'Preparing…' }));
+    if (o.assets === 'error' && !o.versionCount) chips.append(el('span', { class: 'chip danger', text: 'Can\'t read this file' }));
+    if (!chips.childElementCount) chips.append(el('span', { class: 'small muted', text: o.versionCount ? `${o.versionCount} version${o.versionCount > 1 ? 's' : ''}` : 'Not sent yet' }));
+    const card = el('button', { class: 'g-card', 'data-id': o.id, 'aria-label': `${o.name}${o.onScreen ? ', on screen' : ''}`, onclick: () => select(o.id) },
+      thumb, el('div', { class: 'g-name', text: o.name, title: o.name }), chips);
+    // hover (or keyboard focus) plays a muted preview
+    let v = null;
+    const play = () => {
+      if (v || !o.previewUrl || o.isImage) return;
+      v = el('video', { src: o.previewUrl, muted: true, loop: true, autoplay: true, playsInline: true, 'aria-hidden': 'true' });
+      v.muted = true;
+      thumb.append(v);
+      v.play().catch(() => {});
+    };
+    const stop = () => { if (v) { v.remove(); v = null; } };
+    card.addEventListener('mouseenter', play); card.addEventListener('mouseleave', stop);
+    card.addEventListener('focus', play); card.addEventListener('blur', stop);
+    ul.append(el('li', {}, card));
+  }
+  ul.append(el('li', {}, el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
+    el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
+    el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' }))));
+  box.append(ul);
+}
+
 // ---------- detail ----------
 let refs = {}; // elements of the current detail view
 function renderDetail(full) {
@@ -316,21 +377,10 @@ function renderDetail(full) {
     stopPreviewLoop();
     refs = {};
     main.textContent = '';
-    if (!S.originals.length && !S.adding.length) main.append(emptyState());
     return;
   }
   if (full || !refs.root) buildDetail(d);
   updateDetail(d);
-}
-
-function emptyState() {
-  return el('div', { class: 'empty' },
-    el('div', { class: 'screenframe', 'aria-hidden': 'true' }),
-    el('h2', { text: 'Put your own picture on the cooler screen' }),
-    el('p', { class: 'muted', text: 'Drop a video, GIF, image or LOVINGCOOL theme (.ht) here,' }),
-    el('div', { class: 'row' }, el('button', { class: 'btn primary', text: 'Add clip', onclick: () => $('fileInput').click() }),
-      el('button', { class: 'btn ghost', text: 'Open Gallery folder', onclick: () => $('openFolder').click() })),
-    el('p', { class: 'muted small', text: 'You\'ll adjust it and preview it before anything is sent.' }));
 }
 
 function buildDetail(d) {
@@ -338,7 +388,7 @@ function buildDetail(d) {
   const main = $('detail');
   main.textContent = '';
   refs = { root: main }; // root marks a built view: later updates re-render parts, not the whole view
-  // header
+  // header: back to Gallery · title · Rename · Versions ▾ · ⋯
   refs.title = el('h1', { class: 'detail-title', tabindex: '-1' });
   refs.meta = el('div', { class: 'meta' });
   refs.titles = el('div', { class: 'titles' }, refs.title, refs.meta);
@@ -347,14 +397,22 @@ function buildDetail(d) {
     const o = S.detail;
     const items = [];
     if (o.file && !o.missing) items.push({ label: 'Show in Gallery folder', run: () => api(`/api/originals/${o.id}/reveal`, 'POST') });
+    if (!o.isImage && o.canTune) items.push({ label: S.manualLoop ? 'Hide manual loop editing' : 'Edit loop manually…', run: () => { S.manualLoop = !S.manualLoop; buildTune(S.detail); } });
     items.push({ label: o.missing ? 'Remove from library…' : 'Delete…', danger: true, run: confirmDeleteOriginal });
     return items;
   });
-  main.append(el('div', { class: 'detail-head' }, refs.titles, refs.renameBtn, refs.more));
+  refs.versionsBtn = el('button', { class: 'btn secondary', 'aria-haspopup': 'dialog', 'aria-expanded': 'false', onclick: toggleVersions });
+  refs.versions = el('div', { class: 'versions-pop', role: 'dialog', 'aria-label': 'Versions', hidden: true });
+  refs.versions.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); closeVersions(true); } });
+  main.append(el('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
+    el('button', { class: 'btn ghost back', text: '‹ Gallery', onclick: showGallery }), el('span', { class: 'muted', 'aria-hidden': 'true', text: '/' }),
+    el('span', { class: 'muted small crumb-name', text: d.name })));
+  main.append(el('div', { class: 'detail-head' }, refs.titles, refs.renameBtn,
+    el('div', { class: 'menu-wrap' }, refs.versionsBtn, refs.versions), refs.more));
   refs.notices = el('div');
   main.append(refs.notices);
 
-  // preview
+  // preview + read-only timeline of the chosen loop
   refs.stage = el('div', { class: 'screenframe', tabindex: '0', role: 'group', 'aria-label': 'Preview of the screen. Space plays or pauses.' });
   refs.notch = el('div', { class: 'notch', hidden: true, title: 'Your screen\'s camera hole is here. This area is kept black.' });
   refs.corners = makeCornersOverlay();
@@ -364,18 +422,27 @@ function buildDetail(d) {
   refs.notchToggle = el('input', { type: 'checkbox', id: 'notchOutline' });
   refs.notchToggle.onchange = () => refs.stage.classList.toggle('outline', refs.notchToggle.checked);
   refs.backToTune = el('button', { class: 'btn ghost', text: 'Back to your tuning', hidden: true, onclick: () => showPreview(null) });
-  main.append(el('div', { class: 'preview-wrap' }, refs.stage,
+  refs.tlRange = el('div', { class: 'tl-range' });
+  refs.tlHead = el('div', { class: 'tl-head' });
+  refs.timeline = el('div', { class: 'timeline', role: 'img', hidden: d.isImage }, refs.tlRange, refs.tlHead);
+  main.append(el('div', { class: 'preview-wrap' }, refs.stage, refs.timeline,
     el('div', { class: 'preview-bar' }, refs.playBtn, refs.time, refs.showing, refs.backToTune,
       el('label', { class: 'check', title: 'Your screen\'s camera hole is here. This area is kept black.' }, refs.notchToggle, 'Show notch'))));
   refs.stage.addEventListener('keydown', e => { if (e.key === ' ') { e.preventDefault(); togglePlay(); } });
   setupPan();
 
-  // tune + versions
-  refs.tune = el('section', { class: 'panel', 'aria-labelledby': 'hTune' });
-  refs.versions = el('section', { class: 'panel', 'aria-labelledby': 'hVersions' });
-  main.append(el('div', { class: 'work' }, refs.tune, refs.versions));
+  refs.tune = el('section', { class: 'panel tune-panel', 'aria-labelledby': 'hTune' });
+  main.append(refs.tune);
+  // bottom action bar
+  refs.saveBtn = el('button', { class: 'btn secondary big', text: 'Save as version', onclick: saveVersion });
+  refs.pushBtn = el('button', { class: 'btn primary big', text: 'Push to screen', onclick: pushToScreen });
+  refs.saveReason = el('span', { class: 'reason', role: 'status' });
+  refs.saveFix = el('button', { class: 'btn secondary', hidden: true });
+  refs.actionBar = el('div', { class: 'action-bar' }, refs.saveReason, refs.saveFix, el('span', { class: 'grow' }), refs.saveBtn, refs.pushBtn);
+  main.append(refs.actionBar);
   buildTune(d);
   showPreview(S.showing, true);
+  maybeAutoSearchLoops(d);
 }
 
 function updateDetail(d) {
@@ -385,7 +452,8 @@ function updateDetail(d) {
   if (d.width) parts.push(`${d.width}x${d.height}`);
   refs.meta.textContent = parts.filter(Boolean).join(' · ');
   refs.renameBtn.disabled = false;
-  // notices
+  const n = d.versions.length, busy = d.versions.some(v => v.status === 'queued' || v.status === 'converting');
+  refs.versionsBtn.textContent = `Versions (${n})${busy ? ' · preparing…' : ''} ▾`;
   refs.notices.textContent = '';
   if (d.missing) refs.notices.append(el('div', { class: 'notice' },
     `The original file is no longer in the Gallery folder (missing since ${fmtDate(d.missing.since)}). Its versions are kept and can still be sent` +
@@ -394,8 +462,208 @@ function updateDetail(d) {
   if (d.assets === 'error') refs.notices.append(el('div', { class: 'notice danger' }, 'CoolerScreen can\'t read this file. It may be damaged or in a format that isn\'t supported.',
     el('details', {}, el('summary', { text: 'Show details' }), el('pre', { text: d.assetsError || '' }))));
   renderVersions(d);
+  renderLoopCards();
+  updateTimeline();
   updateTuneState();
+  if (!d.canTune) { refs.saveBtn.disabled = true; refs.pushBtn.disabled = true; }
   updateShowingLabel();
+}
+
+// ----- versions dropdown -----
+let versionsOutside = null;
+function toggleVersions() { if (refs.versions.hidden) openVersions(); else closeVersions(true); }
+function openVersions() {
+  refs.versions.hidden = false;
+  refs.versionsBtn.setAttribute('aria-expanded', 'true');
+  renderVersions(S.detail);
+  const f = refs.versions.querySelector('button');
+  if (f) f.focus();
+  versionsOutside = e => { if (!refs.versions.contains(e.target) && e.target !== refs.versionsBtn) closeVersions(false); };
+  document.addEventListener('mousedown', versionsOutside, true);
+}
+function closeVersions(focusBtn) {
+  if (!refs.versions || refs.versions.hidden) return;
+  refs.versions.hidden = true;
+  refs.versionsBtn.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('mousedown', versionsOutside, true);
+  if (focusBtn) refs.versionsBtn.focus();
+}
+
+// ----- the timeline under the preview (read-only: the loop is chosen with the cards) -----
+function updateTimeline() {
+  const d = S.detail, dr = S.draft;
+  if (!refs.timeline || !d || d.isImage || !d.duration || !dr) return;
+  refs.tlRange.style.left = (dr.start / d.duration) * 100 + '%';
+  refs.tlRange.style.width = (dr.length / d.duration) * 100 + '%';
+  refs.timeline.setAttribute('aria-label', `The loop: ${fmtT2(dr.start)} to ${fmtT2(dr.start + dr.length)} of ${fmtT2(d.duration)}`);
+}
+
+// ----- loop cards -----
+const SMOOTH = r => (r <= 1.05 ? 'Seamless' : r <= 1.6 ? 'Nearly seamless' : 'Small jump');
+const loopJobs = new Map(); // originalId -> running search
+function sameLoop(c, dr) { return dr && Math.abs(c.start - dr.start) < 0.0015 && Math.abs(c.length - dr.length) < 0.0015; }
+function maybeAutoSearchLoops(d) {
+  if (!d || d.isImage || !d.canTune || d.previewKind !== 'video') return;
+  if (d.loops) { autoPickLoop(); return; }
+  if (!loopJobs.has(d.id)) runLoopSearch(d, {});
+}
+async function runLoopSearch(d, { minLen, maxLen }) {
+  if (loopJobs.has(d.id)) return;
+  const st = { status: 'Starting…' };
+  loopJobs.set(d.id, st);
+  renderLoopCards();
+  try {
+    const { jobId } = await api(`/api/originals/${d.id}/loopsearch`, 'POST', { minLen: minLen || null, maxLen: maxLen || null });
+    await pollJob(jobId, j => { st.status = j.status === 'waiting' ? plainWait(j.message) : `${j.message || 'Searching'}… ${Math.round((j.progress || 0) * 100)}%`; if (S.detail && S.detail.id === d.id) renderLoopCards(); });
+    loopJobs.delete(d.id);
+    if (S.detail && S.detail.id === d.id) { await loadDetail(); autoPickLoop(true); }
+  } catch (e) {
+    loopJobs.delete(d.id);
+    st.error = e.message;
+    if (S.detail && S.detail.id === d.id) { refs.loopStatus && (refs.loopStatus.textContent = e.message); }
+  }
+}
+/** Select the best loop unless the current tuning already is one of the results (or was edited by hand). */
+function autoPickLoop(fresh = false) {
+  const d = S.detail, L = d && d.loops;
+  if (!L || !L.candidates.length || !S.draft || S.draft.manualLoop) return;
+  if (L.candidates.some(c => sameLoop(c, S.draft))) { renderLoopCards(); return; }
+  if (!fresh && d.draft && d.versions.length) { renderLoopCards(); return; } // keep an existing tuning on reopen
+  pickLoop(L.candidates[0], false);
+}
+function pickLoop(c, focusPreview = true) {
+  if (S.showing) showPreview(null);
+  S.draft.manualLoop = false;
+  setTrim(c.startFrame / srcFps(), c.frames / OUT_FPS(), c.startFrame / srcFps(), false);
+  S.draft.blend = c.blend || 0;
+  if (refs.blend) { refs.blend.value = S.draft.blend; updateLoopInfo(); }
+  if (media && media.tagName === 'VIDEO') { play.mode = 'selection'; media.play().catch(() => {}); }
+  updateTimeline();
+  renderLoopCards();
+  draftChanged();
+  if (focusPreview && refs.stage) refs.stage.scrollIntoView({ block: 'nearest' });
+}
+let loopSig = '';
+function renderLoopCards() {
+  const box = refs.loopCards;
+  if (!box) return;
+  const d = S.detail, L = d.loops, job = loopJobs.get(d.id);
+  // re-render only when something changed (re-creating the card videos would restart them)
+  const sig = JSON.stringify([d.id, L && L.at, job && (job.error || job.status), S.draft && [S.draft.start, S.draft.length, S.draft.manualLoop], box.isConnected]);
+  if (sig === loopSig && box.childElementCount) return;
+  loopSig = sig;
+  box.textContent = '';
+  if (job && !job.error) {
+    refs.loopStatus.textContent = job.status;
+    for (let i = 0; i < 3; i++) box.append(el('li', {}, el('div', { class: 'loop-card skeleton-card', 'aria-hidden': 'true' })));
+    return;
+  }
+  if (!L) { refs.loopStatus.textContent = job && job.error ? job.error : ''; return; }
+  refs.loopStatus.textContent = L.candidates.length ? '' : 'No seamless loop found in that length range. Try other lengths.';
+  if (refs.lsMin && document.activeElement !== refs.lsMin) refs.lsMin.value = L.minLen || L.searched.minLen || 3;
+  if (refs.lsMax && document.activeElement !== refs.lsMax) { refs.lsMax.value = L.maxLen || ''; refs.lsMax.placeholder = `auto (${L.searched.maxLen})`; }
+  L.candidates.forEach((c, i) => {
+    const selected = sameLoop(c, S.draft) && !S.draft.manualLoop;
+    const v = el('video', { src: c.preview, muted: true, loop: true, autoplay: true, playsInline: true, 'aria-hidden': 'true' });
+    v.muted = true;
+    const card = el('button', { class: 'loop-card' + (selected ? ' selected' : ''), role: 'radio', 'aria-checked': String(selected),
+      'aria-label': `Loop ${i + 1}: ${fmtSecs(c.length)}, ${SMOOTH(c.ratio).toLowerCase()}${i === 0 ? ', best' : ''}`, onclick: () => pickLoop(c) },
+      el('div', { class: 'loop-video' }, v),
+      el('div', { class: 'loop-meta' }, el('b', { class: 'num', text: fmtSecs(c.length) }),
+        el('span', { class: 'chip ' + (c.ratio <= 1.05 ? 'ok' : c.ratio <= 1.6 ? 'accent' : 'warn'), text: SMOOTH(c.ratio) }),
+        i === 0 ? el('span', { class: 'small muted', text: 'Best' }) : null));
+    box.append(el('li', {}, card));
+  });
+}
+function infoTip(id, text) {
+  return el('span', { class: 'info', tabindex: '0', role: 'button', 'aria-label': 'More information', 'aria-describedby': id }, 'ⓘ',
+    el('span', { class: 'tip', role: 'tooltip', id, text }));
+}
+function buildLoopCards(d) {
+  const g = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Loop' }));
+  refs.loopStatus = el('p', { class: 'small muted', role: 'status' });
+  refs.loopCards = el('ul', { class: 'loop-cards', role: 'radiogroup', 'aria-label': 'Loops found in this clip' });
+  refs.lsMin = el('input', { type: 'number', id: 'lsMin', min: '0.5', max: '30', step: '0.5', value: '3' });
+  refs.lsMax = el('input', { type: 'number', id: 'lsMax', min: '0.5', max: '30', step: '0.5', placeholder: 'auto' });
+  refs.lsAgain = el('button', { class: 'btn ghost', text: 'Search again', onclick: () => {
+    const minLen = Number(refs.lsMin.value) || 3, maxLen = Number(refs.lsMax.value) || null;
+    if (maxLen && maxLen < minLen) { refs.loopStatus.textContent = 'The longest loop must be at least as long as the shortest.'; return; }
+    runLoopSearch(S.detail, { minLen, maxLen });
+  } });
+  g.append(refs.loopCards, refs.loopStatus,
+    el('div', { class: 'row ls-range' },
+      el('label', { for: 'lsMin', class: 'small', text: 'Shortest loop' }), refs.lsMin, el('span', { class: 'small muted', text: 's' }),
+      infoTip('tipMin', 'Loops shorter than this are not suggested. Very short loops repeat often and are easy to notice.'),
+      el('label', { for: 'lsMax', class: 'small', text: 'Longest loop' }), refs.lsMax, el('span', { class: 'small muted', text: 's' }),
+      infoTip('tipMax', 'Leave empty ("auto") for the longest loop that still looks good in the space on your screen. Longer loops need stronger compression.'),
+      refs.lsAgain));
+  return g;
+}
+
+// ---------- tune ----------
+function buildTune(d) {
+  const t = refs.tune;
+  t.textContent = '';
+  t.append(el('h3', { id: 'hTune', class: 'sr-only', text: 'Tune' }));
+  if (!d.canTune) {
+    t.append(el('p', { class: 'muted small', text: d.assets === 'pending' ? 'Preparing the preview… You can tune the clip in a moment.' :
+      d.missing ? 'The original file is missing, so new versions can\'t be made.' : 'This file can\'t be read, so versions can\'t be made.' }));
+    return;
+  }
+  const dr = S.draft;
+  dr.quality = 'auto'; // Best that fits is the only choice in the UI (Custom stays in the code)
+  // 1. loop: the cards are the control; manual editing only on request (⋯ > Edit loop manually…)
+  refs.trim = null; refs.blend = null;
+  if (!d.isImage && d.duration) {
+    t.append(buildLoopCards(d));
+    if (S.manualLoop) t.append(buildLoopGroup(d));
+  } else {
+    t.append(el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Loop' }),
+      el('p', { class: 'muted small', text: `Still image: it is shown as a ${fmtSecs(dr.length)} clip that repeats.` })));
+  }
+  // 2. framing ("size") and rounded corners
+  const fg = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Size and position on the screen' }));
+  refs.zoom = el('input', { type: 'range', id: 'fZoom', min: '0.2', max: '4', step: '0.01' });
+  refs.zoomVal = el('span', { class: 'num small muted', style: 'min-width:48px' });
+  refs.posX = el('input', { type: 'range', id: 'fX', min: '0', max: '1', step: '0.001' });
+  refs.posY = el('input', { type: 'range', id: 'fY', min: '0', max: '1', step: '0.001' });
+  refs.cornersOn = el('input', { type: 'checkbox', id: 'cOn' });
+  refs.cornersR = el('input', { type: 'range', id: 'cR', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius (pixels)' });
+  refs.cornersRN = el('input', { type: 'number', id: 'cRN', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius in pixels' });
+  refs.cornersRow = el('div', { class: 'slider-row' }, el('label', { for: 'cR', class: 'small muted', text: 'Corner radius' }), refs.cornersR, refs.cornersRN);
+  fg.append(
+    el('div', { class: 'slider-row' }, el('label', { for: 'fZoom', class: 'small muted', text: 'Zoom' }), refs.zoom, refs.zoomVal),
+    el('div', { class: 'slider-row' }, el('label', { for: 'fX', class: 'small muted', text: 'Left – right' }), refs.posX),
+    el('div', { class: 'slider-row' }, el('label', { for: 'fY', class: 'small muted', text: 'Up – down' }), refs.posY),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn secondary', text: 'Fill the screen', onclick: () => { dr.frame = { ...DEFAULT_FRAME }; applyGeometry(); draftChanged(); } }),
+      el('button', { class: 'btn secondary', text: 'Show the whole picture', onclick: () => { dr.frame = { zoom: Math.round(fitZoom(natural.w, natural.h) * 1000) / 1000, x: 0.5, y: 0.5 }; applyGeometry(); draftChanged(); } }),
+      el('span', { class: 'muted small', text: 'Tip: drag the preview to move the picture.' })),
+    el('label', { class: 'check' }, refs.cornersOn, 'Rounded corners'), refs.cornersRow);
+  refs.zoom.oninput = () => { dr.frame.zoom = Number(refs.zoom.value); applyGeometry(); };
+  refs.posX.oninput = () => { dr.frame.x = Number(refs.posX.value); applyGeometry(); };
+  refs.posY.oninput = () => { dr.frame.y = Number(refs.posY.value); applyGeometry(); };
+  for (const r of [refs.zoom, refs.posX, refs.posY]) r.onchange = draftChanged;
+  const onCorners = (fromNum) => {
+    if (fromNum) refs.cornersR.value = refs.cornersRN.value; else refs.cornersRN.value = refs.cornersR.value;
+    dr.corners = { on: refs.cornersOn.checked, r: clamp(Math.round(Number(refs.cornersR.value) || 0), 0, 300) };
+    refs.cornersRow.hidden = !dr.corners.on;
+    applyCorners();
+  };
+  refs.cornersOn.onchange = () => { onCorners(false); draftChanged(); };
+  refs.cornersR.oninput = () => onCorners(false);
+  refs.cornersRN.oninput = () => onCorners(true);
+  refs.cornersR.onchange = refs.cornersRN.onchange = draftChanged;
+  t.append(fg);
+  // 3. quality: always Best that fits; the meter says what it chose
+  refs.meterState = el('span', { class: 'meter-state' });
+  refs.meter = el('div', { class: 'meter', role: 'img' }, el('div', { class: 'fill' }), el('div', { class: 'over', hidden: true }));
+  refs.meterText = el('div', { class: 'small muted num' });
+  refs.meterNote = el('div', { class: 'small muted' });
+  refs.meterRetry = el('button', { class: 'btn ghost', text: 'Retry', hidden: true, onclick: () => scheduleEstimate(0) });
+  t.append(el('div', { class: 'group' }, el('div', { class: 'meter-head' }, el('span', { class: 'group-label', text: 'Quality and space on the screen' }), refs.meterState),
+    el('div', { class: 'meter-wrap' }, refs.meter), refs.meterText, refs.meterNote, refs.meterRetry));
+  syncTuneControls();
 }
 
 // ----- rename (inline) -----
@@ -602,6 +870,7 @@ function tickBody() {
   const rel = media.currentTime - start;
   refs.time.textContent = `${fmtT2(Math.max(0, rel))} / ${fmtT2(length)} · frame ${Math.min(Math.round(length * OUT_FPS()), Math.floor(Math.max(0, rel) * OUT_FPS() + 1e-6) + 1)}`;
   if (refs.playhead && S.detail.duration) { refs.playhead.style.left = trackPct(media.currentTime); }
+  if (refs.tlHead && S.detail.duration) refs.tlHead.style.left = (media.currentTime / S.detail.duration) * 100 + '%';
 }
 
 /** Effective blend (as the converter will apply it): whole output frames, <= half the selection, <= time before start. */
@@ -697,101 +966,6 @@ function grabFrame(time, w, h) {
   });
   grabChain = grabChain.then(run, run);
   return grabChain;
-}
-
-// ---------- tune ----------
-function buildTune(d) {
-  const t = refs.tune;
-  t.textContent = '';
-  t.append(el('h3', { id: 'hTune', text: 'Tune' }));
-  if (!d.canTune) {
-    t.append(el('p', { class: 'muted small', text: d.assets === 'pending' ? 'Preparing the preview… You can tune the clip in a moment.' :
-      d.missing ? 'The original file is missing, so new versions can\'t be made.' : 'This file can\'t be read, so versions can\'t be made.' }));
-    return;
-  }
-  const dr = S.draft;
-  // 1. loop: trim, play modes, seam check, blend
-  if (!d.isImage && d.duration) t.append(buildLoopGroup(d));
-  else {
-    t.append(el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Part of the clip' }),
-      el('p', { class: 'muted small', text: `Still image: it is shown as a ${fmtSecs(dr.length)} clip that repeats.` })));
-  }
-  // 2. framing ("size") and rounded corners
-  const fg = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Size and position on the screen' }));
-  refs.zoom = el('input', { type: 'range', id: 'fZoom', min: '0.2', max: '4', step: '0.01' });
-  refs.zoomVal = el('span', { class: 'num small muted', style: 'min-width:48px' });
-  refs.posX = el('input', { type: 'range', id: 'fX', min: '0', max: '1', step: '0.001' });
-  refs.posY = el('input', { type: 'range', id: 'fY', min: '0', max: '1', step: '0.001' });
-  refs.cornersOn = el('input', { type: 'checkbox', id: 'cOn' });
-  refs.cornersR = el('input', { type: 'range', id: 'cR', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius (pixels)' });
-  refs.cornersRN = el('input', { type: 'number', id: 'cRN', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius in pixels' });
-  refs.cornersRow = el('div', { class: 'slider-row' }, el('label', { for: 'cR', class: 'small muted', text: 'Corner radius' }), refs.cornersR, refs.cornersRN);
-  fg.append(
-    el('div', { class: 'slider-row' }, el('label', { for: 'fZoom', class: 'small muted', text: 'Zoom' }), refs.zoom, refs.zoomVal),
-    el('div', { class: 'slider-row' }, el('label', { for: 'fX', class: 'small muted', text: 'Left – right' }), refs.posX),
-    el('div', { class: 'slider-row' }, el('label', { for: 'fY', class: 'small muted', text: 'Up – down' }), refs.posY),
-    el('div', { class: 'row' },
-      el('button', { class: 'btn secondary', text: 'Fill the screen', onclick: () => { dr.frame = { ...DEFAULT_FRAME }; applyGeometry(); draftChanged(); } }),
-      el('button', { class: 'btn secondary', text: 'Show the whole picture', onclick: () => { dr.frame = { zoom: Math.round(fitZoom(natural.w, natural.h) * 1000) / 1000, x: 0.5, y: 0.5 }; applyGeometry(); draftChanged(); } }),
-      el('span', { class: 'muted small', text: 'Tip: drag the preview to move the picture.' })),
-    el('label', { class: 'check' }, refs.cornersOn, 'Rounded corners'), refs.cornersRow);
-  refs.zoom.oninput = () => { dr.frame.zoom = Number(refs.zoom.value); applyGeometry(); };
-  refs.posX.oninput = () => { dr.frame.x = Number(refs.posX.value); applyGeometry(); };
-  refs.posY.oninput = () => { dr.frame.y = Number(refs.posY.value); applyGeometry(); };
-  for (const r of [refs.zoom, refs.posX, refs.posY]) r.onchange = draftChanged;
-  const onCorners = (fromNum) => {
-    if (fromNum) refs.cornersR.value = refs.cornersRN.value; else refs.cornersRN.value = refs.cornersR.value;
-    dr.corners = { on: refs.cornersOn.checked, r: clamp(Math.round(Number(refs.cornersR.value) || 0), 0, 300) };
-    refs.cornersRow.hidden = !dr.corners.on;
-    applyCorners();
-  };
-  refs.cornersOn.onchange = () => { onCorners(false); draftChanged(); };
-  refs.cornersR.oninput = () => onCorners(false);
-  refs.cornersRN.oninput = () => onCorners(true);
-  refs.cornersR.onchange = refs.cornersRN.onchange = draftChanged;
-  t.append(fg);
-  // 3. quality + simplify fine detail
-  const qg = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Quality' }));
-  refs.qAuto = el('input', { type: 'radio', name: 'q', value: 'auto' });
-  refs.qCustom = el('input', { type: 'radio', name: 'q', value: 'custom' });
-  refs.qSlider = el('input', { type: 'range', id: 'qVal', min: '1', max: '100', step: '1', 'aria-label': 'Custom quality' });
-  refs.qNum = el('span', { class: 'num', style: 'min-width:28px' });
-  refs.qRow = el('div', { class: 'slider-row' }, el('span', { class: 'small muted', text: 'Smaller file' }), refs.qSlider, el('span', { class: 'small muted', text: 'Sharper' }), refs.qNum);
-  refs.detail = el('input', { type: 'range', id: 'dVal', min: '0', max: '100', step: '5' });
-  refs.detailNum = el('span', { class: 'num', style: 'min-width:28px' });
-  refs.detailBox = el('div', {},
-    el('div', { class: 'slider-row', style: 'margin-top:8px' }, el('label', { for: 'dVal', class: 'small muted', text: 'Simplify fine detail' }), refs.detail, refs.detailNum),
-    el('p', { class: 'muted small', text: 'Softens tiny detail so more of the clip fits (0 = off). The preview shows the effect.' }));
-  qg.append(el('label', { class: 'radio' }, refs.qAuto, 'Best that fits (recommended: chooses quality and detail for you)'),
-    el('label', { class: 'radio' }, refs.qCustom, 'Custom'), refs.qRow, refs.detailBox);
-  const onQ = () => {
-    dr.quality = refs.qAuto.checked ? 'auto' : Number(refs.qSlider.value);
-    refs.qRow.hidden = refs.detailBox.hidden = refs.qAuto.checked;
-    applyGeometry();
-    refs.qNum.textContent = refs.qSlider.value;
-    draftChanged();
-  };
-  refs.qAuto.onchange = refs.qCustom.onchange = onQ;
-  refs.qSlider.oninput = () => { refs.qNum.textContent = refs.qSlider.value; };
-  refs.qSlider.onchange = onQ;
-  refs.detail.oninput = () => { dr.detail = Number(refs.detail.value); refs.detailNum.textContent = dr.detail || 'off'; applyGeometry(); };
-  refs.detail.onchange = draftChanged;
-  t.append(qg);
-  // 4. fit meter
-  refs.meterState = el('span', { class: 'meter-state' });
-  refs.meter = el('div', { class: 'meter', role: 'img' }, el('div', { class: 'fill' }), el('div', { class: 'over', hidden: true }));
-  refs.meterText = el('div', { class: 'small muted num' });
-  refs.meterNote = el('div', { class: 'small muted' });
-  refs.meterRetry = el('button', { class: 'btn ghost', text: 'Retry', hidden: true, onclick: () => scheduleEstimate(0) });
-  t.append(el('div', { class: 'group' }, el('div', { class: 'meter-head' }, el('span', { class: 'group-label', text: 'Space on the screen' }), refs.meterState),
-    el('div', { class: 'meter-wrap' }, refs.meter), refs.meterText, refs.meterNote, refs.meterRetry));
-  // 5. actions
-  refs.saveBtn = el('button', { class: 'btn primary big', text: 'Save as version', onclick: saveVersion });
-  refs.saveReason = el('span', { class: 'reason', role: 'status' });
-  refs.saveFix = el('button', { class: 'btn secondary', hidden: true });
-  t.append(el('div', { class: 'actions' }, refs.saveBtn,
-    el('button', { class: 'btn ghost', text: 'Reset', onclick: resetDraft }), refs.saveReason, refs.saveFix));
-  syncTuneControls();
 }
 
 // ----- loop editing -----
@@ -910,12 +1084,14 @@ function syncTuneControls() {
   const dr = S.draft;
   if (!dr || !refs.saveBtn) return;
   if (refs.trim) { refs.blend.value = dr.blend || 0; updateLoopInfo(); positionTrim(); }
-  refs.qAuto.checked = dr.quality === 'auto'; refs.qCustom.checked = dr.quality !== 'auto';
-  refs.qSlider.value = dr.quality === 'auto' ? 80 : dr.quality;
-  refs.qNum.textContent = refs.qSlider.value;
-  refs.qRow.hidden = dr.quality === 'auto';
-  refs.detail.value = dr.detail || 0; refs.detailNum.textContent = dr.detail || 'off';
-  refs.detailBox.hidden = dr.quality === 'auto';
+  if (refs.qAuto) { // Custom quality controls exist only if re-enabled
+    refs.qAuto.checked = dr.quality === 'auto'; refs.qCustom.checked = dr.quality !== 'auto';
+    refs.qSlider.value = dr.quality === 'auto' ? 80 : dr.quality;
+    refs.qNum.textContent = refs.qSlider.value;
+    refs.qRow.hidden = dr.quality === 'auto';
+    refs.detail.value = dr.detail || 0; refs.detailNum.textContent = dr.detail || 'off';
+    refs.detailBox.hidden = dr.quality === 'auto';
+  }
   refs.cornersOn.checked = !!dr.corners.on; refs.cornersR.value = refs.cornersRN.value = dr.corners.r;
   refs.cornersRow.hidden = !dr.corners.on;
   applyCorners();
@@ -968,14 +1144,16 @@ function positionTrim() {
 }
 
 /** Start snaps to source frames; the length is a whole number of screen frames (1/18 s). */
-function setTrim(start, length, seekTo) {
+function setTrim(start, length, seekTo, manual = true) {
   const d = S.detail;
   const sf = srcFps(), of = OUT_FPS();
   start = clamp(Math.round(start * sf) / sf, 0, Math.max(0, d.duration - 0.05));
   const maxN = Math.max(1, Math.floor(Math.min(S.app.maxSeconds, d.duration - start) * of + 1e-6));
   const n = clamp(Math.round(length * of), 1, maxN);
   S.draft.start = r3(start); S.draft.length = r3(n / of);
+  if (manual) S.draft.manualLoop = true; // edited by hand: don't replace it with a found loop
   positionTrim();
+  updateTimeline();
   if (media && media.tagName === 'VIDEO' && !S.showing) media.currentTime = seekTo != null ? seekTo : S.draft.start;
 }
 // Nudge by whole frames and show the frame that moved (paused), so 1-frame changes can be seen.
@@ -1177,6 +1355,7 @@ let draftSaveT, draftKeyT;
 function draftChangedSoon() { clearTimeout(draftKeyT); draftKeyT = setTimeout(draftChanged, 300); }
 function draftChanged() {
   updateFrameControls();
+  updateTimeline();
   updateSeamSoon();
   S.est = { ...S.est, state: 'checking' };
   updateTuneState();
@@ -1277,7 +1456,9 @@ function updateTuneState() {
     } else reason = `Too big.${r.maxFitLength ? ` Shorten to about ${fmtSecs(r.maxFitLength)} or` : ''} choose Best that fits.`;
   }
   refs.saveBtn.disabled = disabled;
-  refs.saveReason.textContent = reason;
+  // Push sends the saved twin of this tuning if there is one, else makes a version first.
+  refs.pushBtn.disabled = dup ? dup.status === 'error' || (dup.status === 'ready' && dup.tooBig) : disabled;
+  refs.saveReason.textContent = dup && !danger ? '' : reason;
   refs.saveReason.className = 'reason' + (danger ? ' danger' : '');
 }
 
@@ -1326,7 +1507,7 @@ function renderVersions(d) {
   const box = refs.versions;
   box.textContent = '';
   box.append(el('h3', { id: 'hVersions', text: `Versions (${d.versions.length})` }));
-  if (!d.versions.length) { box.append(el('p', { class: 'muted small', text: 'No versions yet. Adjust the clip and press Save as version.' })); return; }
+  if (!d.versions.length) { box.append(el('p', { class: 'muted small', text: 'No versions yet. "Push to screen" or "Save as version" keeps one here.' })); return; }
   const ul = el('ul', { class: 'vlist' });
   const deviceRunning = S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'));
   for (const v of d.versions) {
@@ -1354,10 +1535,10 @@ function renderVersions(d) {
     }
     const btns = el('div', { class: 'vbtns' });
     if (v.status === 'ready') {
-      btns.append(el('button', { class: 'btn secondary', text: '▶ Preview', 'aria-label': `Preview ${name}`, onclick: e => { e.stopPropagation(); showPreview(v.id); refs.stage.scrollIntoView({ block: 'nearest' }); } }));
+      btns.append(el('button', { class: 'btn secondary', text: '▶ Preview', 'aria-label': `Preview ${name}`, onclick: e => { e.stopPropagation(); closeVersions(false); showPreview(v.id); refs.stage.scrollIntoView({ block: 'nearest' }); } }));
       if (sendJob) btns.append(el('span', { class: 'small muted', text: sendJob.status === 'waiting' ? 'Waiting to send…' : 'Sending…' }));
       else {
-        const label = v.onScreen ? 'Send again' : deviceRunning ? 'Send (after current update)' : 'Send to screen';
+        const label = v.onScreen ? 'Push again' : deviceRunning ? 'Push (after current update)' : 'Push to screen';
         btns.append(el('button', { class: 'btn ' + (v.onScreen ? 'secondary' : 'primary'), text: label, disabled: v.tooBig, title: v.tooBig ? 'Too big for the screen. Make a shorter version or choose Best that fits.' : '',
           onclick: e => { e.stopPropagation(); confirmSend(v.id); } }));
       }
@@ -1376,7 +1557,7 @@ function renderVersions(d) {
     main.append(btns);
     const thumb = v.status === 'ready' ? el('img', { class: 'vthumb', src: `/media/v/${v.id}/thumb.jpg`, alt: '' }) : el('div', { class: 'vthumb' });
     const li = el('li', { class: 'vrow', 'data-vid': v.id }, thumb, main);
-    li.onclick = () => { if (v.status === 'ready') showPreview(v.id); };
+    li.onclick = () => { if (v.status === 'ready') { closeVersions(false); showPreview(v.id); } };
     ul.append(li);
   }
   box.append(ul);
@@ -1434,14 +1615,60 @@ async function confirmSend(vid) {
       el('span', { 'aria-hidden': 'true', text: '→' }), el('span', { class: 'small muted', text: 'replaces' }), curFig),
     el('p', { text: `This takes ${fmtDuration(secs)}. Keep CoolerScreen open until it finishes.` }),
     el('p', { class: 'muted small', text: 'The screen restarts to show the new clip. If LOVINGCOOL MONITOR is running, close it first.' }));
-  const ok = await openDialog({ title: 'Send to the screen?', body, wide: true,
-    actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Send to screen', value: true, kind: 'primary' }] });
-  if (!ok) return;
+  if (!(await confirmPushDialog(body))) return;
+  await startSend(vid);
+}
+function confirmPushDialog(body) {
+  return openDialog({ title: 'Push to the screen?', body, wide: true,
+    actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Push to screen', value: true, kind: 'primary' }] });
+}
+async function startSend(vid) {
   try {
     const { jobId } = await api(`/api/versions/${vid}/send`, 'POST');
     sendJobs.add(jobId);
     await poll();
   } catch (e) { toast(e.message, true); }
+}
+
+/**
+ * "Push to screen": sends the current tuning. If it is already saved as a version, that version is sent; otherwise a
+ * version is made first and sent as soon as it is ready (same confirmation as sending a version).
+ */
+let pendingPush = null; // { oid, vid }
+async function pushToScreen() {
+  const d = S.detail;
+  const dup = duplicateOf();
+  if (dup && dup.status === 'ready') return confirmSend(dup.id);
+  const os = S.app.onScreen;
+  const est = S.est.r && S.est.state === 'done' ? S.est.r : null;
+  const secs = (est ? est.bytes : 9e6) / (S.app.uploadRate || 50000) + 25;
+  const curFig = el('figure', {}, os && os.thumbUrl ? el('img', { src: os.thumbUrl, alt: '' }) : el('div', { class: 'noimg' }),
+    el('figcaption', { text: os ? (os.known ? `${os.originalName} · ${os.label}` : 'Unknown (sent with another app)') : 'Unknown' }));
+  const body = el('div', {},
+    el('div', { class: 'swap' },
+      el('figure', {}, d.frameUrl ? el('img', { src: d.frameUrl, alt: '' }) : el('div', { class: 'noimg' }),
+        el('figcaption', { text: `${d.name} · new version${est ? ` (about ${mb(est.bytes)})` : ''}` })),
+      el('span', { 'aria-hidden': 'true', text: '→' }), el('span', { class: 'small muted', text: 'replaces' }), curFig),
+    el('p', { text: `CoolerScreen prepares it, then sends it: ${fmtDuration(secs)} in all. Keep CoolerScreen open until it finishes.` }),
+    el('p', { class: 'muted small', text: 'The screen restarts to show the new clip. If LOVINGCOOL MONITOR is running, close it first.' }));
+  if (!(await confirmPushDialog(body))) return;
+  try {
+    let vid = dup && dup.id;
+    if (!vid) vid = (await api(`/api/originals/${d.id}/versions`, 'POST', JSON.parse(JSON.stringify(S.draft)))).versionId;
+    pendingPush = { oid: d.id, vid };
+    toast('Preparing the version; it is sent as soon as it is ready.');
+    await loadDetail();
+    pollSoon();
+  } catch (e) { toast(e.message, true); }
+}
+async function checkPendingPush() {
+  if (!pendingPush) return;
+  const p = pendingPush;
+  let v = S.detail && S.detail.id === p.oid ? S.detail.versions.find(x => x.id === p.vid) : null;
+  if (!v) { try { v = (await api('/api/originals/' + p.oid)).versions.find(x => x.id === p.vid); } catch { v = null; } }
+  if (!v) { pendingPush = null; return; }
+  if (v.status === 'ready') { pendingPush = null; if (v.tooBig) { toast('The version came out too big for the screen, so it was not sent.', true, 10000); return; } await startSend(v.id); }
+  else if (v.status === 'error') { pendingPush = null; toast('Couldn\'t prepare the version, so nothing was sent: ' + (v.error || ''), true, 12000); }
 }
 
 // ---------- activity strip ----------
@@ -1557,6 +1784,7 @@ async function poll() {
       // progress only: refresh the versions list in place
       if (busy || before.size !== a.jobs.length) renderVersions(S.detail);
     }
+    await checkPendingPush();
     if (reloadApp) await loadApp();
     if (S.est.state === 'paused' && !a.deviceBusy) scheduleEstimate(0);
     if (S.screen.retry && !a.deviceBusy) { S.screen.retry = false; checkScreen(); }
@@ -1743,6 +1971,7 @@ $('aSave').onclick = async () => {
 
 // ---------- start ----------
 (async function init() {
+  setView('gallery'); // the app opens on the Gallery
   await loadApp();
   await loadOriginals();
   renderActivity();
