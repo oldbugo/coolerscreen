@@ -9,6 +9,10 @@
 <body>
 <header class="topbar">
   <span class="appname">CoolerScreen</span>
+  <nav class="tabs" aria-label="Views">
+    <button type="button" id="tabGallery" class="tab" aria-current="page">Gallery</button>
+    <button type="button" id="tabThemes" class="tab" aria-current="false">Lovingcool themes</button>
+  </nav>
   <button type="button" id="pill" class="pill" data-state="checking" aria-describedby="pillHint"><span class="dot" aria-hidden="true"></span><span id="pillText">Checking screen…</span></button>
   <span id="pillHint" class="sr-only">Opens the screen settings</span>
   <span class="spacer"></span>
@@ -25,6 +29,7 @@
 <div id="banners" class="banners"></div>
 
 <main id="galleryView" class="gallery-view" aria-label="Gallery"></main>
+<main id="themesView" class="gallery-view" aria-label="Lovingcool themes" hidden></main>
 
 <div class="panes" hidden>
   <aside class="library" aria-labelledby="libHead">

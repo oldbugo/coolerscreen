@@ -14,6 +14,7 @@ const setup = require('./setup');
 const slots = require('./slots');
 const { DEVICE_FPS, IMAGE_SECONDS } = require('./convert');
 const pkg = require('../package.json');
+const themes = require('./themes');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const TYPES = {
@@ -49,9 +50,18 @@ function gatedJob(gateKind, kind, info, fn) {
   return job;
 }
 
+// A job that does not wait in the queue (downloads); anything heavy inside it still goes through the gate.
+function runJob(job, fn) {
+  Promise.resolve().then(() => fn(job)).then(
+    r => { job.status = 'done'; job.progress = 1; job.result = r; job.finishedAt = Date.now(); },
+    e => { job.status = 'error'; job.error = e.message || String(e); job.finishedAt = Date.now(); },
+  );
+  return job;
+}
+
 const publicJob = j => {
   const { result, ...rest } = j;
-  if (j.kind === 'loopsearch') return { ...rest, result };
+  if (j.kind === 'loopsearch' || j.kind === 'theme') return { ...rest, result };
   return { ...rest, result: result && typeof result === 'object' ? { warning: result.warning, serialWarning: result.serialWarning, name: result.name, label: result.label, restarted: !!result.restarted, restartFailed: result.restartFailed || null } : undefined };
 };
 
@@ -284,6 +294,31 @@ async function handle(req, res) {
       return json(res, 404, { error: 'Not found' });
     }
 
+    // ----- Lovingcool online themes (read-only catalogue; downloads only when the user adds one) -----
+    if (p === '/api/themes' && m === 'GET') {
+      try {
+        const r = await themes.list(url.searchParams.get('page') || 1, { refresh: url.searchParams.get('refresh') === '1' });
+        const have = lib.listOriginals();
+        const inGallery = t => { const o = have.find(x => (x.fileName || '').includes(t.themeId)); return o ? o.id : null; };
+        return json(res, 200, { ...r, themes: r.themes.map(t => ({ ...t, inGallery: inGallery(t) })) });
+      } catch (e) { return json(res, 502, { error: e.message }); }
+    }
+    if ((mm = /^\/api\/themes\/([A-Za-z0-9_-]{4,64})\/add$/.exec(p)) && m === 'POST') {
+      const t = themes.findCached(mm[1]);
+      if (!t) return json(res, 404, { error: 'Unknown theme. Refresh the list and try again.' });
+      const job = newJob('theme', { label: `Adding "${t.name}"`, themeId: t.themeId });
+      runJob(job, async j => {
+        const dir = path.join(paths.base, 'downloads');
+        j.message = 'Downloading';
+        const file = await themes.download(t, dir, f => { j.progress = f * 0.85; });
+        try {
+          j.message = 'Adding to the gallery'; j.progress = 0.9;
+          const id = await gallery.addFile(file, t.file.name || `${t.themeId}.ht`);
+          return { originalId: id, name: t.name };
+        } finally { fs.rmSync(file, { force: true }); }
+      });
+      return json(res, 200, { jobId: job.id });
+    }
     // ----- gallery folder -----
     if (p === '/api/gallery' && m === 'PUT') {
       try { await gallery.setDir((await readBody(req)).dir); return json(res, 200, appState()); }

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Lovingcool themes** tab: the vendor's online theme catalogue for this screen (cover pictures, paging as you scroll,
+  cached list with Refresh, "In your gallery" badge), one-click "Add to gallery" with progress (downloads the `.ht` into
+  the Gallery folder; the existing import does the rest). CLI: `coolerscreen themes [--page n] [--download id]`.
+- Layout stability: changing numbers use tabular figures, time read-outs and status lines have fixed widths/heights and
+  never wrap, the activity bar is always one fixed-height line, the Versions button keeps its size while preparing, so
+  nothing moves while a clip plays or a job runs.
+
 - Simpler, "we pick for you" UI:
   - The app opens on a **Gallery** of all clips (large pictures, hover to play, status chips, Add clip tile); clicking a clip
     opens it, "‹ Gallery" goes back.

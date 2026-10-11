@@ -315,9 +315,16 @@ window.addEventListener('drop', e => {
 function setView(v) {
   S.view = v;
   $('galleryView').hidden = v !== 'gallery';
+  $('themesView').hidden = v !== 'themes';
   document.querySelector('.panes').hidden = v !== 'detail';
-  if (v === 'gallery') { stopPreviewLoop(); renderGallery(); }
+  $('tabGallery').setAttribute('aria-current', v === 'themes' ? 'false' : 'page');
+  $('tabThemes').setAttribute('aria-current', v === 'themes' ? 'page' : 'false');
+  if (v !== 'detail') stopPreviewLoop();
+  if (v === 'gallery') renderGallery();
+  if (v === 'themes') renderThemes();
 }
+$('tabGallery').onclick = () => showGallery();
+$('tabThemes').onclick = () => showThemes();
 function showGallery() {
   setView('gallery');
   const card = S.sel && document.querySelector(`.g-card[data-id="${S.sel}"]`);
@@ -366,6 +373,86 @@ function renderGallery() {
     el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
     el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' }))));
   box.append(ul);
+}
+
+// ---------- Lovingcool themes (online catalogue) ----------
+const TH = { themes: [], total: null, page: 0, loading: false, error: null, jobs: new Map(), observer: null };
+async function loadThemesPage(refresh = false) {
+  if (TH.loading) return;
+  if (refresh) { TH.themes = []; TH.total = null; TH.page = 0; TH.error = null; }
+  if (TH.total != null && TH.themes.length >= TH.total) return;
+  TH.loading = true; renderThemes();
+  try {
+    const r = await api(`/api/themes?page=${TH.page + 1}${refresh ? '&refresh=1' : ''}`);
+    TH.page = r.page; TH.total = r.total;
+    const seen = new Set(TH.themes.map(t => t.themeId));
+    TH.themes.push(...r.themes.filter(t => !seen.has(t.themeId)));
+    if (!r.themes.length) TH.total = TH.themes.length; // nothing more
+  } catch (e) { TH.error = e.message; }
+  TH.loading = false;
+  renderThemes();
+}
+async function addTheme(t) {
+  const st = { progress: 0, status: 'Starting…' };
+  TH.jobs.set(t.themeId, st);
+  renderThemes();
+  try {
+    const { jobId } = await api(`/api/themes/${encodeURIComponent(t.themeId)}/add`, 'POST');
+    const r = await pollJob(jobId, j => { st.progress = j.progress || 0; st.status = j.message || 'Working'; updateThemeCard(t.themeId); });
+    TH.jobs.delete(t.themeId);
+    t.inGallery = r.originalId;
+    toast(`"${t.name}" is in your gallery.`);
+    await loadOriginals();
+  } catch (e) { st.error = e.message; }
+  renderThemes();
+}
+function themeAction(t) {
+  const job = TH.jobs.get(t.themeId);
+  if (job && !job.error) {
+    const pct = Math.round(job.progress * 100);
+    return el('div', { class: 'th-action' }, el('div', { class: 'progress th-progress', role: 'progressbar', 'aria-label': `Adding ${t.name}`, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, el('div', { style: `width:${pct}%` })),
+      el('span', { class: 'small muted num one-line th-pct', text: `${job.status} ${pct}%` }));
+  }
+  if (t.inGallery) return el('div', { class: 'th-action' }, el('span', { class: 'chip ok', text: 'In your gallery' }), el('button', { class: 'btn ghost', text: 'Open', onclick: () => select(t.inGallery) }));
+  return el('div', { class: 'th-action' }, el('button', { class: 'btn secondary', text: job && job.error ? 'Try again' : 'Add to gallery', onclick: () => addTheme(t) }),
+    job && job.error ? el('span', { class: 'small one-line th-err', text: job.error, title: job.error }) : null);
+}
+function updateThemeCard(id) {
+  const card = document.querySelector(`.th-card[data-theme="${CSS.escape(id)}"]`);
+  const t = TH.themes.find(x => x.themeId === id);
+  if (card && t) card.querySelector('.th-action').replaceWith(themeAction(t));
+}
+function renderThemes() {
+  const box = $('themesView');
+  if (box.hidden) return;
+  box.textContent = '';
+  box.append(el('div', { class: 'g-head' }, el('h1', { class: 'g-title', text: 'Lovingcool themes' }),
+    el('span', { class: 'muted small one-line', text: `Themes from Lovingcool's online library for your ${2400} × ${1080} screen${TH.total != null ? ` · ${TH.total}` : ''}` }),
+    el('span', { class: 'grow' }), el('button', { class: 'btn ghost', text: 'Refresh', disabled: TH.loading, onclick: () => loadThemesPage(true) })));
+  const ul = el('ul', { class: 'g-grid', 'aria-label': 'Lovingcool themes', 'aria-busy': String(TH.loading) });
+  for (const t of TH.themes) {
+    ul.append(el('li', {}, el('div', { class: 'g-card th-card', 'data-theme': t.themeId },
+      el('div', { class: 'g-thumb' }, t.cover ? el('img', { src: t.cover, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null),
+      el('div', { class: 'g-name', text: t.name, title: t.name }), themeAction(t))));
+  }
+  if (TH.loading) for (let i = 0; i < 4; i++) ul.append(el('li', {}, el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' }))));
+  box.append(ul);
+  if (TH.error) box.append(el('div', { class: 'notice danger' }, `Couldn't load the theme library: ${TH.error} `, el('button', { class: 'btn secondary', text: 'Try again', onclick: () => { TH.error = null; loadThemesPage(); } })));
+  // more pages load as you scroll
+  const more = el('div', { class: 'th-sentinel', 'aria-hidden': 'true' });
+  box.append(more);
+  if (TH.observer) TH.observer.disconnect();
+  TH.observer = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && !TH.loading && !TH.error) loadThemesPage(); }, { root: box, rootMargin: '400px' });
+  TH.observer.observe(more);
+}
+// fallback for when the observer doesn't fire (e.g. a throttled window): near the bottom also loads more
+$('themesView').addEventListener('scroll', () => {
+  const b = $('themesView');
+  if (!TH.loading && !TH.error && b.scrollTop + b.clientHeight > b.scrollHeight - 400) loadThemesPage();
+}, { passive: true });
+function showThemes() {
+  setView('themes');
+  if (!TH.themes.length && !TH.loading) loadThemesPage();
 }
 
 // ---------- detail ----------
@@ -417,8 +504,8 @@ function buildDetail(d) {
   refs.notch = el('div', { class: 'notch', hidden: true, title: 'Your screen\'s camera hole is here. This area is kept black.' });
   refs.corners = makeCornersOverlay();
   refs.playBtn = el('button', { class: 'iconbtn', 'aria-label': 'Pause', onclick: togglePlay }, '❚❚');
-  refs.time = el('span', { class: 'num' });
-  refs.showing = el('span', { class: 'grow' });
+  refs.time = el('span', { class: 'num time-readout' });
+  refs.showing = el('span', { class: 'grow one-line' });
   refs.notchToggle = el('input', { type: 'checkbox', id: 'notchOutline' });
   refs.notchToggle.onchange = () => refs.stage.classList.toggle('outline', refs.notchToggle.checked);
   refs.backToTune = el('button', { class: 'btn ghost', text: 'Back to your tuning', hidden: true, onclick: () => showPreview(null) });
@@ -453,7 +540,9 @@ function updateDetail(d) {
   refs.meta.textContent = parts.filter(Boolean).join(' · ');
   refs.renameBtn.disabled = false;
   const n = d.versions.length, busy = d.versions.some(v => v.status === 'queued' || v.status === 'converting');
-  refs.versionsBtn.textContent = `Versions (${n})${busy ? ' · preparing…' : ''} ▾`;
+  // same width whether or not a version is being prepared: the spinner slot is always there
+  refs.versionsBtn.replaceChildren(el('span', { class: 'spinner' + (busy ? '' : ' invisible'), 'aria-hidden': 'true' }), `Versions (${n}) ▾`);
+  refs.versionsBtn.setAttribute('aria-label', `Versions (${n})${busy ? ', one is being prepared' : ''}`);
   refs.notices.textContent = '';
   if (d.missing) refs.notices.append(el('div', { class: 'notice' },
     `The original file is no longer in the Gallery folder (missing since ${fmtDate(d.missing.since)}). Its versions are kept and can still be sent` +
@@ -581,7 +670,7 @@ function infoTip(id, text) {
 }
 function buildLoopCards(d) {
   const g = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Loop' }));
-  refs.loopStatus = el('p', { class: 'small muted', role: 'status' });
+  refs.loopStatus = el('p', { class: 'small muted one-line status-line-fixed', role: 'status' });
   refs.loopCards = el('ul', { class: 'loop-cards', role: 'radiogroup', 'aria-label': 'Loops found in this clip' });
   refs.lsMin = el('input', { type: 'number', id: 'lsMin', min: '0.5', max: '30', step: '0.5', value: '3' });
   refs.lsMax = el('input', { type: 'number', id: 'lsMax', min: '0.5', max: '30', step: '0.5', placeholder: 'auto' });
@@ -658,8 +747,8 @@ function buildTune(d) {
   // 3. quality: always Best that fits; the meter says what it chose
   refs.meterState = el('span', { class: 'meter-state' });
   refs.meter = el('div', { class: 'meter', role: 'img' }, el('div', { class: 'fill' }), el('div', { class: 'over', hidden: true }));
-  refs.meterText = el('div', { class: 'small muted num' });
-  refs.meterNote = el('div', { class: 'small muted' });
+  refs.meterText = el('div', { class: 'small muted num one-line' });
+  refs.meterNote = el('div', { class: 'small muted one-line' });
   refs.meterRetry = el('button', { class: 'btn ghost', text: 'Retry', hidden: true, onclick: () => scheduleEstimate(0) });
   t.append(el('div', { class: 'group' }, el('div', { class: 'meter-head' }, el('span', { class: 'group-label', text: 'Quality and space on the screen' }), refs.meterState),
     el('div', { class: 'meter-wrap' }, refs.meter), refs.meterText, refs.meterNote, refs.meterRetry));
@@ -1682,8 +1771,12 @@ function renderActivity() {
   const finishedSends = S.jobs.filter(j => j.kind === 'send' && sendJobs.has(j.id) && (j.status === 'done' || j.status === 'error') && !S.dismissed.has(j.id));
   const outcome = finishedSends[finishedSends.length - 1];
   const rows = [];
-  for (const j of active.slice(0, 3)) rows.push(activityRow(j));
-  if (active.length > 3) rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt muted', text: `+${active.length - 3} more waiting` })));
+  // One line, always the same height (the bar is always there, so nothing above it moves when jobs come and go).
+  if (active.length) {
+    const row = activityRow(active[0]);
+    if (active.length > 1) row.insertBefore(el('span', { class: 'act-more muted', text: `+${active.length - 1} waiting` }), row.querySelector('.bar'));
+    rows.push(row);
+  }
   if (!active.length && outcome) {
     if (outcome.status === 'error') {
       box.classList.add('danger');
@@ -1708,8 +1801,9 @@ function renderActivity() {
       setTimeout(renderActivity, 8000 - (now - outcome.finishedAt) + 50);
     }
   }
-  box.hidden = !rows.length;
+  box.hidden = false;
   box.append(...rows);
+  for (const t of box.querySelectorAll('.txt')) t.title = t.textContent;
 }
 
 function activityRow(j) {

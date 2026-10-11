@@ -39,6 +39,10 @@ The app opens on the **Gallery**: every clip as a large picture (hover to play i
 **Loop** choices, **Size and position**, and the space it needs; the clip list stays on the left and "‹ Gallery" goes back.
 The bar at the top shows the screen's status and what is **on screen now**; the gear opens **Settings**.
 
+- **Lovingcool themes** (tab next to Gallery): the vendor's free online theme library for this screen (about 50 themes at
+  2400x1080), with pictures, loaded as you scroll. **Add to gallery** downloads that theme's `.ht` file into your Gallery
+  folder (with progress); after that it is a clip like any other. Nothing is downloaded unless you click; the list is
+  cached for a day ("Refresh" reloads it). Themes come from Lovingcool's library and remain theirs.
 - **Adding clips:** videos, GIFs, images, the vendor app's downloaded **theme files (`.ht`)** and plain `.zip` files
   containing a video or image. Drop files anywhere on the window (several at once is fine) or use **+ Add clip**. Nothing
   is converted when you add a clip.
@@ -144,6 +148,7 @@ Set `COOLERSCREEN_HOME` to keep library/settings in another folder.
     node bin/coolerscreen.js clear startup|standby
     node bin/coolerscreen.js slots
     node bin/coolerscreen.js info
+    node bin/coolerscreen.js themes [--page n] [--download <themeId>]   # Lovingcool's online themes for this screen
 
 Testing without a screen: set `COOLERSCREEN_FAKE_DEVICE=1` (or `serial`, `none`, `failedusb`, `busy` to simulate those
 states; `COOLERSCREEN_FAKE_FAIL=1` makes uploads fail halfway). Nothing then touches USB, the COM port or the driver

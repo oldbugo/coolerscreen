@@ -39,6 +39,8 @@ const usage = `CoolerScreen CLI
   coolerscreen clear startup|standby   Upload a 1-frame black clip to that slot (maintenance).
   coolerscreen slots     Show what this app last wrote to the screen and the space for a clip.
   coolerscreen info      Show screen info.
+  coolerscreen themes [--page n] [--download <themeId>]
+                         List Lovingcool's online themes for this screen, or add one to the Gallery folder.
 Versions are always made at ${DEVICE_FPS} frames per second, the rate the screen plays at.
 For the app run "npm run app" (window) or "npm start" (browser).`;
 
@@ -104,6 +106,22 @@ async function sendIt(vid) {
         if (v.status === 'ready' && r.size > ctx.budget) flagsTxt.push('TOO BIG');
         console.log(`    ${v.id}  ${v.label || 'v' + v.n}  ${v.status === 'ready' ? `${mb(r.size)} ${r.length} s quality ${r.quality}` : v.status}${flagsTxt.length ? '  [' + flagsTxt.join(', ') + ']' : ''}`);
       }
+    }
+  } else if (cmd === 'themes') {
+    const themes = require('../src/themes');
+    const os = require('os');
+    if (flags.download) {
+      let t = themes.findCached(flags.download);
+      for (let pg = 1; !t && pg <= 20; pg++) { const r = await themes.list(pg); t = r.themes.find(x => x.themeId === flags.download); if (!r.themes.length) break; }
+      if (!t) throw new Error('No theme with that id. See "coolerscreen themes".');
+      await gallery.init();
+      const file = await themes.download(t, os.tmpdir(), f => bar('Downloading')(f));
+      try { const id = await gallery.addFile(file, t.file.name); console.log(`\nAdded "${t.name}" to the gallery (clip id ${id}).`); }
+      finally { require('fs').rmSync(file, { force: true }); }
+    } else {
+      const r = await themes.list(flags.page || 1);
+      console.log(`Lovingcool themes for 2400x1080: ${r.total} (page ${r.page}, ${r.pageSize} per page)`);
+      for (const t of r.themes) console.log(`  ${t.themeId}  ${t.name}`);
     }
   } else if (cmd === 'slots') {
     const b = slots.budgets();
