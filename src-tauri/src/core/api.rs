@@ -97,6 +97,10 @@ pub enum MediaTask {
 }
 
 pub trait MediaEngine: Send + Sync + 'static {
+    /// True only for core's test engine (its files must never reach the real screen).
+    fn is_fake(&self) -> bool {
+        false
+    }
     /// ffprobe-like facts about a file (never fails on unreadable input: `has_video: false`).
     fn probe(&self, ctx: &TaskCtx, file: &Path) -> CoreResult<ProbeInfo>;
     /// thumb.jpg (240x108 cover), frame.jpg (1200x540 cover) and, if needed, a proxy, written into `dir`.

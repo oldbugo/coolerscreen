@@ -21,6 +21,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
 dirs = "6"
 notify = "8"
+miniz_oxide = "0.8"
+sha1_smol = "1"
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]

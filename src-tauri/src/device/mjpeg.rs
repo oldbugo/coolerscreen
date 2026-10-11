@@ -74,3 +74,22 @@ mod tests {
         assert!(!is_mjpeg_mp4(&mp4(b"........", b"mp4v")));
     }
 }
+
+/// Fixtures for other modules' tests.
+#[cfg(test)]
+pub mod tests_support {
+    fn fbox(t: &[u8], body: &[u8]) -> Vec<u8> {
+        let mut v = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(t);
+        v.extend_from_slice(body);
+        v
+    }
+
+    /// A tiny file the MJPEG guard accepts ('jpeg' sample entry in a top-level moov).
+    pub fn tiny_mjpeg_mp4() -> Vec<u8> {
+        let mut v = fbox(b"ftyp", b"isom\0\0\x02\0");
+        v.extend(fbox(b"mdat", &[0u8; 64]));
+        v.extend(fbox(b"moov", &fbox(b"trak", b"....jpeg....")));
+        v
+    }
+}
