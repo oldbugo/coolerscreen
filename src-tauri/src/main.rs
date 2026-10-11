@@ -1,18 +1,21 @@
-// CoolerScreen 2.0 spike shell: Tauri 2 + system WebView2, seamless frameless window.
-// Phase 0: the existing Node backend runs as a sidecar (`node`, serving public/ and /api on 127.0.0.1),
-// the window shows it unchanged; device commands are also available natively (Rust, see src/device).
+// CoolerScreen 2.0 shell: Tauri 2 + system WebView2, seamless frameless window.
+// Backend (COOLERSCREEN_BACKEND):
+//   node (default until the Phase 1 workstreams land): the 1.2 Node backend runs as a sidecar and serves public/
+//        and /api on 127.0.0.1; the Rust core is created but not started (no watcher, one writer only).
+//   rust: the Rust core (src/core) serves the UI through Tauri commands/events and a local media server.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use cs_core::device::{self, ops, Slot};
+use cs_core::core::commands::{self as cc, Core, EventRelay, TauriEvents};
+use cs_core::core::media_server::MediaServer;
+use cs_core::core::App;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
-static DEVICE_BUSY: AtomicBool = AtomicBool::new(false);
 static FORCE_CLOSE: AtomicBool = AtomicBool::new(false);
 const BG: (u8, u8, u8) = (0x0f, 0x11, 0x15); // public/style.css --bg
 
@@ -20,6 +23,13 @@ const BG: (u8, u8, u8) = (0x0f, 0x11, 0x15); // public/style.css --bg
 struct Sidecar {
     child: Mutex<Option<Child>>,
     url: Mutex<Option<String>>,
+}
+
+/// Keeps the media server alive for the app's lifetime.
+struct Media(#[allow(dead_code)] Mutex<Option<MediaServer>>);
+
+fn rust_backend() -> bool {
+    std::env::var("COOLERSCREEN_BACKEND").map(|v| v.eq_ignore_ascii_case("rust")).unwrap_or(false)
 }
 
 // ---------- window chrome ----------
@@ -57,82 +67,13 @@ fn win_force_close(window: WebviewWindow) {
     let _ = window.close();
 }
 
-// ---------- device (native) ----------
-
-struct BusyGuard;
-impl BusyGuard {
-    fn take() -> Result<BusyGuard, String> {
-        if DEVICE_BUSY.swap(true, Ordering::SeqCst) {
-            return Err("The screen is busy with another operation.".into());
-        }
-        Ok(BusyGuard)
-    }
-}
-impl Drop for BusyGuard {
-    fn drop(&mut self) {
-        DEVICE_BUSY.store(false, Ordering::SeqCst);
-    }
-}
-
-fn err_json(e: device::DevErr) -> Value {
-    serde_json::to_value(e).unwrap_or(Value::Null)
-}
-
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, Value> + Send + 'static) -> Result<T, Value> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| json!({ "message": e.to_string() }))?
-}
-
-#[tauri::command]
-async fn device_state() -> Result<Value, Value> {
-    blocking(|| Ok(serde_json::to_value(ops::state()).unwrap())).await
-}
-
-#[tauri::command]
-async fn device_info(app: tauri::AppHandle) -> Result<Value, Value> {
-    blocking(move || {
-        let _g = BusyGuard::take().map_err(|m| json!({ "message": m }))?;
-        ops::check_screen(&mut |p, t| {
-            let _ = app.emit("device-progress", json!({ "p": p, "text": t }));
-        })
-        .map_err(err_json)
-    })
-    .await
-}
-
-#[tauri::command]
-async fn device_restart(app: tauri::AppHandle) -> Result<Value, Value> {
-    blocking(move || {
-        let _g = BusyGuard::take().map_err(|m| json!({ "message": m }))?;
-        ops::restart_screen(&mut |p, t| {
-            let _ = app.emit("device-progress", json!({ "p": p, "text": t }));
-        })
-        .map_err(err_json)
-    })
-    .await
-}
-
-/// Upload one MJPEG clip into a slot ("loop"/"standby" or "intro"/"startup"); a loop upload ends with a restart.
-#[tauri::command]
-async fn device_upload(app: tauri::AppHandle, file: String, slot: String) -> Result<Value, Value> {
-    let slot = Slot::parse(&slot).ok_or_else(|| json!({ "message": "slot must be loop or intro" }))?;
-    blocking(move || {
-        let _g = BusyGuard::take().map_err(|m| json!({ "message": m }))?;
-        let r = ops::send_files(&[(file.into(), slot)], slot == Slot::Standby, &mut |p, t, a, b| {
-            let _ = app.emit("device-progress", json!({ "p": p, "text": t, "sent": a, "total": b }));
-        })
-        .map_err(err_json)?;
-        Ok(serde_json::to_value(r).unwrap())
-    })
-    .await
-}
-
-// ---------- Node sidecar (Phase 0 only) ----------
+// ---------- Node sidecar (COOLERSCREEN_BACKEND=node) ----------
 
 fn repo_dir() -> std::path::PathBuf {
     if let Some(p) = std::env::var_os("COOLERSCREEN_REPO") {
         return p.into();
     }
-    // Spike: the repo this exe was built from. Phase 1 replaces the sidecar with Rust commands.
+    // The repo this exe was built from (development); the Rust backend replaces the sidecar.
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
@@ -188,6 +129,8 @@ fn sidecar_uploading(url: &str) -> bool {
 }
 
 fn main() {
+    let relay = Arc::new(EventRelay::default());
+    let core = App::new(cs_core::core::paths::base(), cs_core::backends(), relay.clone(), env!("CARGO_PKG_VERSION"));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
@@ -197,18 +140,55 @@ fn main() {
             }
         }))
         .manage(Sidecar::default())
+        .manage(Core(core.clone()))
+        .manage(Media(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             win_minimize,
             win_toggle_maximize,
             win_state,
             win_close,
             win_force_close,
-            device_state,
-            device_info,
-            device_restart,
-            device_upload
+            cc::app_state,
+            cc::settings_update,
+            cc::activity,
+            cc::job_get,
+            cc::job_cancel,
+            cc::set_focus,
+            cc::originals_list,
+            cc::import_bytes,
+            cc::import_path,
+            cc::missing_delete,
+            cc::original_get,
+            cc::original_patch,
+            cc::original_delete,
+            cc::original_reveal,
+            cc::estimate,
+            cc::loop_search,
+            cc::loop_point,
+            cc::version_create,
+            cc::version_patch,
+            cc::version_delete,
+            cc::version_send,
+            cc::version_remake,
+            cc::version_retry,
+            cc::sources_list,
+            cc::browse_set,
+            cc::link_add,
+            cc::source_set,
+            cc::source_items,
+            cc::source_add,
+            cc::gallery_set_dir,
+            cc::gallery_open,
+            cc::gallery_sync,
+            cc::device_state,
+            cc::device_check,
+            cc::device_restart,
+            cc::device_setup,
+            cc::device_restore,
+            cc::device_reconnect
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));
             let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("CoolerScreen")
                 .inner_size(1280.0, 860.0)
@@ -229,8 +209,9 @@ fn main() {
                     if FORCE_CLOSE.load(Ordering::SeqCst) {
                         return;
                     }
-                    let url = w2.app_handle().state::<Sidecar>().url.lock().unwrap().clone();
-                    let busy = DEVICE_BUSY.load(Ordering::SeqCst) || url.is_some_and(|u| sidecar_uploading(&u));
+                    let h = w2.app_handle();
+                    let url = h.state::<Sidecar>().url.lock().unwrap().clone();
+                    let busy = h.state::<Core>().0.uploading() || url.is_some_and(|u| sidecar_uploading(&u));
                     if busy {
                         api.prevent_close();
                         let _ = w2.emit("close-guard", ());
@@ -239,10 +220,19 @@ fn main() {
                 _ => {}
             });
             win.show()?;
-            if std::env::var_os("CS_NO_SIDECAR").is_none() {
-                if let Err(e) = start_sidecar(app.handle()) {
-                    eprintln!("{e}");
+            if rust_backend() {
+                let c = app.state::<Core>().0.clone();
+                let resolver_app = c.clone();
+                match MediaServer::start(Arc::new(move |p: &str, q: &str| resolver_app.resolve_media(p, q))) {
+                    Ok(srv) => {
+                        c.set_media_base(&srv.base_url());
+                        app.state::<Media>().0.lock().unwrap().replace(srv);
+                    }
+                    Err(e) => eprintln!("Media server failed to start: {e}"),
                 }
+                std::thread::spawn(move || c.startup());
+            } else if let Err(e) = start_sidecar(app.handle()) {
+                eprintln!("{e}");
             }
             Ok(())
         })

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-original-delete"
+description = "Enables the original_delete command without any pre-configured scope."
+commands.allow = ["original_delete"]
+
+[[permission]]
+identifier = "deny-original-delete"
+description = "Denies the original_delete command without any pre-configured scope."
+commands.deny = ["original_delete"]

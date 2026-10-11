@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-originals-list"
+description = "Enables the originals_list command without any pre-configured scope."
+commands.allow = ["originals_list"]
+
+[[permission]]
+identifier = "deny-originals-list"
+description = "Denies the originals_list command without any pre-configured scope."
+commands.deny = ["originals_list"]

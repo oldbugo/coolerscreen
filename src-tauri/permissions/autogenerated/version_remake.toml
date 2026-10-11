@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-version-remake"
+description = "Enables the version_remake command without any pre-configured scope."
+commands.allow = ["version_remake"]
+
+[[permission]]
+identifier = "deny-version-remake"
+description = "Denies the version_remake command without any pre-configured scope."
+commands.deny = ["version_remake"]

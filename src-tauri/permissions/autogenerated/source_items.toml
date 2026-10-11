@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-source-items"
+description = "Enables the source_items command without any pre-configured scope."
+commands.allow = ["source_items"]
+
+[[permission]]
+identifier = "deny-source-items"
+description = "Denies the source_items command without any pre-configured scope."
+commands.deny = ["source_items"]

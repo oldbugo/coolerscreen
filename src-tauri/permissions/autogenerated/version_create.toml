@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-version-create"
+description = "Enables the version_create command without any pre-configured scope."
+commands.allow = ["version_create"]
+
+[[permission]]
+identifier = "deny-version-create"
+description = "Denies the version_create command without any pre-configured scope."
+commands.deny = ["version_create"]

@@ -177,16 +177,58 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-activity",
+          "markdownDescription": "Enables the activity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-state",
+          "markdownDescription": "Enables the app_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the browse_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-browse-set",
+          "markdownDescription": "Enables the browse_set command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-check",
+          "markdownDescription": "Enables the device_check command without any pre-configured scope."
+        },
+        {
           "description": "Enables the device_info command without any pre-configured scope.",
           "type": "string",
           "const": "allow-device-info",
           "markdownDescription": "Enables the device_info command without any pre-configured scope."
         },
         {
+          "description": "Enables the device_reconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-reconnect",
+          "markdownDescription": "Enables the device_reconnect command without any pre-configured scope."
+        },
+        {
           "description": "Enables the device_restart command without any pre-configured scope.",
           "type": "string",
           "const": "allow-device-restart",
           "markdownDescription": "Enables the device_restart command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-restore",
+          "markdownDescription": "Enables the device_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the device_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-device-setup",
+          "markdownDescription": "Enables the device_setup command without any pre-configured scope."
         },
         {
           "description": "Enables the device_state command without any pre-configured scope.",
@@ -199,6 +241,180 @@
           "type": "string",
           "const": "allow-device-upload",
           "markdownDescription": "Enables the device_upload command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the estimate command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-estimate",
+          "markdownDescription": "Enables the estimate command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the gallery_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-gallery-open",
+          "markdownDescription": "Enables the gallery_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the gallery_set_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-gallery-set-dir",
+          "markdownDescription": "Enables the gallery_set_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the gallery_sync command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-gallery-sync",
+          "markdownDescription": "Enables the gallery_sync command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-bytes",
+          "markdownDescription": "Enables the import_bytes command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-path",
+          "markdownDescription": "Enables the import_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the job_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-job-cancel",
+          "markdownDescription": "Enables the job_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the job_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-job-get",
+          "markdownDescription": "Enables the job_get command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the link_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-link-add",
+          "markdownDescription": "Enables the link_add command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the loop_point command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-loop-point",
+          "markdownDescription": "Enables the loop_point command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the loop_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-loop-search",
+          "markdownDescription": "Enables the loop_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the missing_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-missing-delete",
+          "markdownDescription": "Enables the missing_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the original_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-original-delete",
+          "markdownDescription": "Enables the original_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the original_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-original-get",
+          "markdownDescription": "Enables the original_get command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the original_patch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-original-patch",
+          "markdownDescription": "Enables the original_patch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the original_reveal command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-original-reveal",
+          "markdownDescription": "Enables the original_reveal command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the originals_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-originals-list",
+          "markdownDescription": "Enables the originals_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_focus command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-focus",
+          "markdownDescription": "Enables the set_focus command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the settings_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-settings-update",
+          "markdownDescription": "Enables the settings_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the source_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-source-add",
+          "markdownDescription": "Enables the source_add command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the source_items command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-source-items",
+          "markdownDescription": "Enables the source_items command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the source_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-source-set",
+          "markdownDescription": "Enables the source_set command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sources_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sources-list",
+          "markdownDescription": "Enables the sources_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the version_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-version-create",
+          "markdownDescription": "Enables the version_create command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the version_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-version-delete",
+          "markdownDescription": "Enables the version_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the version_patch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-version-patch",
+          "markdownDescription": "Enables the version_patch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the version_remake command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-version-remake",
+          "markdownDescription": "Enables the version_remake command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the version_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-version-retry",
+          "markdownDescription": "Enables the version_retry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the version_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-version-send",
+          "markdownDescription": "Enables the version_send command without any pre-configured scope."
         },
         {
           "description": "Enables the win_close command without any pre-configured scope.",
@@ -231,16 +447,58 @@
           "markdownDescription": "Enables the win_toggle_maximize command without any pre-configured scope."
         },
         {
+          "description": "Denies the activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-activity",
+          "markdownDescription": "Denies the activity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-state",
+          "markdownDescription": "Denies the app_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the browse_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-browse-set",
+          "markdownDescription": "Denies the browse_set command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-check",
+          "markdownDescription": "Denies the device_check command without any pre-configured scope."
+        },
+        {
           "description": "Denies the device_info command without any pre-configured scope.",
           "type": "string",
           "const": "deny-device-info",
           "markdownDescription": "Denies the device_info command without any pre-configured scope."
         },
         {
+          "description": "Denies the device_reconnect command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-reconnect",
+          "markdownDescription": "Denies the device_reconnect command without any pre-configured scope."
+        },
+        {
           "description": "Denies the device_restart command without any pre-configured scope.",
           "type": "string",
           "const": "deny-device-restart",
           "markdownDescription": "Denies the device_restart command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_restore command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-restore",
+          "markdownDescription": "Denies the device_restore command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the device_setup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-device-setup",
+          "markdownDescription": "Denies the device_setup command without any pre-configured scope."
         },
         {
           "description": "Denies the device_state command without any pre-configured scope.",
@@ -253,6 +511,180 @@
           "type": "string",
           "const": "deny-device-upload",
           "markdownDescription": "Denies the device_upload command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the estimate command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-estimate",
+          "markdownDescription": "Denies the estimate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the gallery_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-gallery-open",
+          "markdownDescription": "Denies the gallery_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the gallery_set_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-gallery-set-dir",
+          "markdownDescription": "Denies the gallery_set_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the gallery_sync command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-gallery-sync",
+          "markdownDescription": "Denies the gallery_sync command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_bytes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-bytes",
+          "markdownDescription": "Denies the import_bytes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-path",
+          "markdownDescription": "Denies the import_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the job_cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-job-cancel",
+          "markdownDescription": "Denies the job_cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the job_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-job-get",
+          "markdownDescription": "Denies the job_get command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the link_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-link-add",
+          "markdownDescription": "Denies the link_add command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the loop_point command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-loop-point",
+          "markdownDescription": "Denies the loop_point command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the loop_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-loop-search",
+          "markdownDescription": "Denies the loop_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the missing_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-missing-delete",
+          "markdownDescription": "Denies the missing_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the original_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-original-delete",
+          "markdownDescription": "Denies the original_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the original_get command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-original-get",
+          "markdownDescription": "Denies the original_get command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the original_patch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-original-patch",
+          "markdownDescription": "Denies the original_patch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the original_reveal command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-original-reveal",
+          "markdownDescription": "Denies the original_reveal command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the originals_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-originals-list",
+          "markdownDescription": "Denies the originals_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_focus command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-focus",
+          "markdownDescription": "Denies the set_focus command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the settings_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-settings-update",
+          "markdownDescription": "Denies the settings_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the source_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-source-add",
+          "markdownDescription": "Denies the source_add command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the source_items command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-source-items",
+          "markdownDescription": "Denies the source_items command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the source_set command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-source-set",
+          "markdownDescription": "Denies the source_set command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sources_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sources-list",
+          "markdownDescription": "Denies the sources_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the version_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-version-create",
+          "markdownDescription": "Denies the version_create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the version_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-version-delete",
+          "markdownDescription": "Denies the version_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the version_patch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-version-patch",
+          "markdownDescription": "Denies the version_patch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the version_remake command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-version-remake",
+          "markdownDescription": "Denies the version_remake command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the version_retry command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-version-retry",
+          "markdownDescription": "Denies the version_retry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the version_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-version-send",
+          "markdownDescription": "Denies the version_send command without any pre-configured scope."
         },
         {
           "description": "Denies the win_close command without any pre-configured scope.",

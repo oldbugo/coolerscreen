@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-job-get"
+description = "Enables the job_get command without any pre-configured scope."
+commands.allow = ["job_get"]
+
+[[permission]]
+identifier = "deny-job-get"
+description = "Denies the job_get command without any pre-configured scope."
+commands.deny = ["job_get"]
