@@ -42,7 +42,7 @@ Folder ownership: `core/` + `device/` + `lib.rs`/`main.rs` = WS1; `media/` = WS2
 | PATCH /api/originals/:id | `original_patch` | `{ originalId, name?, draft? }` (`draft: null` clears) | `Detail` |
 | DELETE /api/originals/:id | `original_delete` | `{ originalId }` | `{ ok: true }` (file → Recycle Bin; cancels its jobs first) |
 | POST …/reveal | `original_reveal` | `{ originalId }` | `{ ok: true }` |
-| POST …/estimate | `estimate` | `{ originalId, settings }` | `Estimate` or `{ stale: true }` when a newer estimate for the same clip superseded it. No longer 409 during a screen upload (it waits or runs, see 3.3). |
+| POST …/estimate | `estimate` | `{ originalId, settings }` | `Estimate` or `{ stale: true }` when a newer estimate for the same clip superseded it; 409 `busy` while a screen job is active (as 1.2, unless `allowMediaDuringUpload`). |
 | POST …/loopsearch | `loop_search` | `{ originalId, minLen, maxLen }` | `{ jobId }` (result in `job.result`, as 1.2) |
 | POST …/looppoint | `loop_point` | `{ originalId, start, length }` | `{ best, current, alternatives, searched }` |
 | POST …/versions | `version_create` | `{ originalId, settings }` (settings = 1.2 body incl. `force`) | `{ versionId, jobId }`; 400 `duplicate` + `versionId` |
