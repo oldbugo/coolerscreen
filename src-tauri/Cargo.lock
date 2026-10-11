@@ -506,12 +506,14 @@ name = "coolerscreen"
 version = "2.0.0-alpha.0"
 dependencies = [
  "nusb",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "serialport",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

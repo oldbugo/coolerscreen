@@ -3,6 +3,8 @@
 // the window shows it unchanged; device commands are also available natively (Rust, see src/device).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod window;
+
 use cs_core::device::{self, ops, Slot};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -10,51 +12,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 static DEVICE_BUSY: AtomicBool = AtomicBool::new(false);
-static FORCE_CLOSE: AtomicBool = AtomicBool::new(false);
-const BG: (u8, u8, u8) = (0x0f, 0x11, 0x15); // public/style.css --bg
 
 #[derive(Default)]
 struct Sidecar {
     child: Mutex<Option<Child>>,
     url: Mutex<Option<String>>,
-}
-
-// ---------- window chrome ----------
-
-#[tauri::command]
-fn win_minimize(window: WebviewWindow) {
-    let _ = window.minimize();
-}
-
-/// Maximise to the work area (taskbar stays visible); returns the new maximised state.
-#[tauri::command]
-fn win_toggle_maximize(window: WebviewWindow) -> bool {
-    if window.is_maximized().unwrap_or(false) {
-        let _ = window.unmaximize();
-        false
-    } else {
-        let _ = window.maximize();
-        true
-    }
-}
-
-#[tauri::command]
-fn win_state(window: WebviewWindow) -> bool {
-    window.is_maximized().unwrap_or(false)
-}
-
-#[tauri::command]
-fn win_close(window: WebviewWindow) {
-    let _ = window.close(); // goes through the close guard
-}
-
-#[tauri::command]
-fn win_force_close(window: WebviewWindow) {
-    FORCE_CLOSE.store(true, Ordering::SeqCst);
-    let _ = window.close();
 }
 
 // ---------- device (native) ----------
@@ -198,35 +163,22 @@ fn main() {
         }))
         .manage(Sidecar::default())
         .invoke_handler(tauri::generate_handler![
-            win_minimize,
-            win_toggle_maximize,
-            win_state,
-            win_close,
-            win_force_close,
+            window::win_minimize,
+            window::win_toggle_maximize,
+            window::win_state,
+            window::win_close,
+            window::win_force_close,
             device_state,
             device_info,
             device_restart,
             device_upload
         ])
         .setup(|app| {
-            let win = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("CoolerScreen")
-                .inner_size(1280.0, 860.0)
-                .min_inner_size(900.0, 640.0)
-                .decorations(false)
-                .shadow(true)
-                .background_color(tauri::webview::Color(BG.0, BG.1, BG.2, 255))
-                .disable_drag_drop_handler() // HTML5 drop reaches the page, as in Electron
-                .initialization_script(include_str!("../shell/titlebar.js"))
-                .visible(false)
-                .build()?;
+            let win = window::create(app)?;
             let w2 = win.clone();
             win.on_window_event(move |e| match e {
-                WindowEvent::Resized(_) => {
-                    let _ = w2.emit("window-state", json!({ "maximized": w2.is_maximized().unwrap_or(false) }));
-                }
                 WindowEvent::CloseRequested { api, .. } => {
-                    if FORCE_CLOSE.load(Ordering::SeqCst) {
+                    if window::force_close_requested() {
                         return;
                     }
                     let url = w2.app_handle().state::<Sidecar>().url.lock().unwrap().clone();

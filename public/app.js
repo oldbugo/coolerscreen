@@ -1,6 +1,7 @@
 // CoolerScreen UI: Library (originals) | Detail (preview, Tune, Versions) | Activity strip | Settings drawer.
 import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, styleCorners } from './js/frame.js';
 import { openDialog } from './js/dialog.js';
+import './js/titlebar.js';
 
 // ---------- small helpers ----------
 const $ = id => document.getElementById(id);
