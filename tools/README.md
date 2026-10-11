@@ -1,18 +1,36 @@
 # Developer and recovery tools
 
-Small scripts used while reverse-engineering the screen. They are not part of the app. Run them
-with Node from the project folder (PowerShell: one command per line, no `&&`). Close
-CoolerScreen first, since only one program can talk to the screen at a time.
+## Recovery: `cs2.exe`
+
+`cs2.exe` is installed next to `CoolerScreen.exe` (and is in the portable zip). It is a small command-line program for a
+screen that an interrupted or bad upload left stuck. **Close CoolerScreen first**: only one program can talk to the screen at a
+time. In PowerShell, from the install folder (`%LOCALAPPDATA%\CoolerScreen` for the setup .exe):
+
+| Command | What it does |
+|---|---|
+| `.\cs2.exe info` | Asks the screen for its status (restarts it once if it does not answer) and prints it. |
+| `.\cs2.exe state` | What is reachable (WinUSB / COM port), without sending anything. |
+| `.\cs2.exe restart` | Restarts the screen and waits for it to come back. |
+| `.\cs2.exe unstick` | Feeds filler bytes when an interrupted upload left the screen waiting for the rest of the data. |
+| `.\cs2.exe recover-race-delete` | **Recovery.** If an unplayable loop clip freezes the screen on every boot, this restarts it and deletes `/data/video/sleep_video.mp4` in the window right after boot (before the player opens it). Then send a clip with the app. |
+| `.\cs2.exe delete-ota` | Deletes the leftover `/data/ota.cpio` firmware package (about 0.68 MB). Keep a copy of the vendor's `APP_OTA_*.bin` first. |
+| `.\cs2.exe upload <file.mp4> [--intro]` | Test upload of an MJPEG clip (developer use). |
+| `.\cs2.exe poll <count> <seconds>` | `info` every few seconds (watchdog / stability tests). |
+| `.\cs2.exe core-check`, `core-state`, `core-restart`, `core-send <library>/<oid>/versions/<vid>` | The same through the app's own core (set `COOLERSCREEN_HOME` to a scratch folder for `core-send`). |
+
+Only `unstick`, `recover-race-delete` and `delete-ota` send commands the app itself never sends (the screen's delete
+command); each touches exactly the one path named above.
+
+## Scripts in this folder (not part of the app)
+
+Small scripts used while reverse-engineering the screen. The 1.x Node tools that talked to the screen (`winusb.js`,
+`probe.js`, `send.js`, `unstick.js`, `recover-race-delete.js`, `delete-ota.js`) were replaced by `cs2` and removed with
+the Node backend; they are in the 1.2.0 release commit (`3eb5b69`).
 
 | Script | What it does |
 |---|---|
-| `winusb.js info\|restart\|play [path]\|desc` | Talk to the screen over WinUSB (after the one-time setup). |
-| `probe.js`, `send.js <key-hex> [bytes]` | Same over the COM port, for a screen still on the standard serial driver. |
-| `unstick.js` | Feeds filler bytes when an interrupted upload left the screen waiting for data. |
-| `recover-race-delete.js` | **Recovery.** If an unplayable loop clip freezes the screen on every boot, this restarts it and deletes `/data/video/sleep_video.mp4` in the window right after boot. Then send a clip with the app. |
-| `delete-ota.js` | Deletes the leftover `/data/ota.cpio` firmware package (about 0.68 MB) from the screen. Keep a copy of the vendor's `APP_OTA_*.bin` first. |
 | `cycle-port.ps1` | Power-cycles the screen's USB port (admin). The app's Reconnect button does the same. |
-| `make-calibration.js`, `make-notch-ruler.js` | Build the calibration clips used to find the orientation and notch position. |
+| `make-calibration.js`, `make-notch-ruler.js` | Build the calibration clips used to find the orientation and notch position. Run with Node after `npm install` (they use `ffmpeg-static`). |
 
-Findings behind these (orientation, 18 fps playback, DTR watchdog, WinUSB fix, H.264 freeze) are
-summarised in the main README under "For developers".
+Findings behind these (orientation, 18 fps playback, DTR watchdog, WinUSB fix, H.264 freeze) are summarised in the main
+README under "For developers" and in `docs/roadmap/phase0-results.md`.

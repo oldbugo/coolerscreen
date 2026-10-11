@@ -1,7 +1,12 @@
 //! Invisible native child window over the maximise button: answers WM_NCHITTEST with HTMAXBUTTON so
 //! Windows 11 shows Snap Layouts, and reports mouse state to the page (`cs-snap`: enter/leave/down/click/up).
+//!
+//! Rules for the window procedures (they are called by Windows, synchronously, from inside other calls):
+//! the STATE lock is never held while calling emit / SetWindowPos / DestroyWindow (those can re-enter a window
+//! procedure), a poisoned lock is recovered instead of panicking, and no panic may cross the FFI boundary.
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::sync::Mutex;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{Emitter, WebviewWindow};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
@@ -12,10 +17,10 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT},
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, GetClientRect, RegisterClassExW, SetWindowPos, CS_HREDRAW, CS_VREDRAW,
-            HTMAXBUTTON, HWND_TOP, SWP_NOACTIVATE, SWP_SHOWWINDOW, WM_DPICHANGED, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-            WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_SIZE, WNDCLASSEXW, WS_CHILD, WS_CLIPSIBLINGS,
-            WS_VISIBLE,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, RegisterClassExW, SetWindowPos, CS_HREDRAW,
+            CS_VREDRAW, HTMAXBUTTON, HWND_TOP, SWP_NOACTIVATE, SWP_SHOWWINDOW, WM_DPICHANGED, WM_NCHITTEST,
+            WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_SIZE, WNDCLASSEXW, WS_CHILD,
+            WS_CLIPSIBLINGS, WS_VISIBLE,
         },
     },
 };
@@ -25,6 +30,8 @@ const CLASS: &[u16] = &[
 ];
 const SUBCLASS_ID: usize = 0x4353_534e; // "CSSN"
 
+type Emit = Arc<dyn Fn(&'static str) + Send + Sync>;
+
 struct State {
     parent: isize,
     overlay: isize,
@@ -32,9 +39,13 @@ struct State {
     width: u32,
     right: u32,
     pressing: bool,
-    emit: Box<dyn Fn(&'static str) + Send>,
+    emit: Emit,
 }
 static STATE: Mutex<Option<State>> = Mutex::new(None); // one main window
+
+fn state() -> MutexGuard<'static, Option<State>> {
+    STATE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 pub fn install(win: &WebviewWindow, height: u32, width: u32, right: u32) {
     let Ok(h) = win.window_handle() else { return };
@@ -44,6 +55,11 @@ pub fn install(win: &WebviewWindow, height: u32, width: u32, right: u32) {
     // Window creation and subclassing must happen on the thread that owns the window.
     let _ = win.run_on_main_thread(move || unsafe {
         register_class();
+        // Idempotent: a second install replaces (destroys) the previous overlay.
+        let old = state().take();
+        if let Some(o) = old {
+            DestroyWindow(o.overlay as HWND);
+        }
         let overlay = CreateWindowExW(
             0, CLASS.as_ptr(), CLASS.as_ptr(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0, 0,
             parent as HWND, std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null(),
@@ -51,13 +67,11 @@ pub fn install(win: &WebviewWindow, height: u32, width: u32, right: u32) {
         if overlay.is_null() {
             return;
         }
-        *STATE.lock().unwrap() = Some(State {
-            parent, overlay: overlay as isize, height, width, right, pressing: false,
-            emit: Box::new(move |ev| {
-                let _ = w.emit("cs-snap", ev);
-            }),
+        let emit: Emit = Arc::new(move |ev| {
+            let _ = w.emit("cs-snap", ev);
         });
-        SetWindowSubclass(parent as HWND, Some(parent_proc), SUBCLASS_ID, 0);
+        *state() = Some(State { parent, overlay: overlay as isize, height, width, right, pressing: false, emit });
+        SetWindowSubclass(parent as HWND, Some(parent_proc), SUBCLASS_ID, 0); // same id: replaces, never stacks
         position();
     });
 }
@@ -77,71 +91,81 @@ unsafe fn register_class() {
         lpszClassName: CLASS.as_ptr(),
         hIconSm: std::ptr::null_mut(),
     };
-    RegisterClassExW(&class);
+    RegisterClassExW(&class); // fails harmlessly with "class exists" on a second install
 }
 
 /// Maximise button = the button just left of the `right` buttons, measured from the right client edge.
 unsafe fn position() {
-    let g = STATE.lock().unwrap();
-    let Some(s) = g.as_ref() else { return };
+    // Copy what is needed and release the lock before any Win32 call.
+    let (parent, overlay, width, height, right) = {
+        let g = state();
+        let Some(s) = g.as_ref() else { return };
+        (s.parent, s.overlay, s.width, s.height, s.right)
+    };
     let mut rc = std::mem::zeroed();
-    if GetClientRect(s.parent as HWND, &mut rc) == 0 {
+    if GetClientRect(parent as HWND, &mut rc) == 0 {
         return;
     }
-    let dpi = GetDpiForWindow(s.parent as HWND).max(96) as u64;
+    let dpi = GetDpiForWindow(parent as HWND).max(96) as u64;
     let sc = |v: u32| ((v as u64 * dpi + 48) / 96) as i32;
-    let (w, h) = (sc(s.width), sc(s.height));
-    let x = rc.right - w * (s.right as i32 + 1);
-    SetWindowPos(s.overlay as HWND, HWND_TOP, x, 0, w, h, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    let (w, h) = (sc(width), sc(height));
+    let x = rc.right - w * (right as i32 + 1);
+    SetWindowPos(overlay as HWND, HWND_TOP, x, 0, w, h, SWP_SHOWWINDOW | SWP_NOACTIVATE);
 }
 
 unsafe extern "system" fn parent_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _r: usize) -> LRESULT {
     if msg == WM_SIZE || msg == WM_DPICHANGED {
-        position();
+        let _ = catch_unwind(AssertUnwindSafe(|| position()));
     }
     DefSubclassProc(hwnd, msg, wp, lp)
 }
 
 fn notify(ev: &'static str) {
-    if let Some(s) = STATE.lock().unwrap().as_ref() {
-        (s.emit)(ev);
+    let emit = state().as_ref().map(|s| s.emit.clone()); // lock released before emitting
+    if let Some(e) = emit {
+        e(ev);
     }
 }
 
+fn set_pressing(v: bool) -> bool {
+    state().as_mut().map(|s| std::mem::replace(&mut s.pressing, v)).unwrap_or(false)
+}
+
 unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    match msg {
-        WM_NCHITTEST => return HTMAXBUTTON as LRESULT,
-        WM_NCMOUSEMOVE => {
-            let mut t = TRACKMOUSEEVENT {
-                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                dwFlags: TME_LEAVE | TME_NONCLIENT,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            };
-            TrackMouseEvent(&mut t);
-            notify("enter");
-            return 0;
-        }
-        WM_NCMOUSELEAVE => {
-            if let Some(s) = STATE.lock().unwrap().as_mut() {
-                s.pressing = false;
+    let handled = catch_unwind(AssertUnwindSafe(|| -> Option<LRESULT> {
+        match msg {
+            WM_NCHITTEST => Some(HTMAXBUTTON as LRESULT),
+            WM_NCMOUSEMOVE => {
+                let mut t = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE | TME_NONCLIENT,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                TrackMouseEvent(&mut t);
+                notify("enter");
+                Some(0)
             }
-            notify("leave");
-            return 0;
-        }
-        WM_NCLBUTTONDOWN => {
-            if let Some(s) = STATE.lock().unwrap().as_mut() {
-                s.pressing = true;
+            WM_NCMOUSELEAVE => {
+                set_pressing(false);
+                notify("leave");
+                Some(0)
             }
-            notify("down");
-            return 0;
+            WM_NCLBUTTONDOWN => {
+                set_pressing(true);
+                notify("down");
+                Some(0)
+            }
+            WM_NCLBUTTONUP => {
+                let click = set_pressing(false);
+                notify(if click { "click" } else { "up" });
+                Some(0)
+            }
+            _ => None,
         }
-        WM_NCLBUTTONUP => {
-            let click = STATE.lock().unwrap().as_mut().map(|s| std::mem::take(&mut s.pressing)).unwrap_or(false);
-            notify(if click { "click" } else { "up" });
-            return 0;
-        }
-        _ => {}
+    }));
+    match handled {
+        Ok(Some(r)) => r,
+        _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
-    DefWindowProcW(hwnd, msg, wp, lp)
 }

@@ -706,6 +706,11 @@ impl App {
         Ok(json!({ "jobId": id }))
     }
 
+    /// App exit: cancel every queued and running task (kills their ffmpeg children; a running device upload cannot be cut off).
+    pub fn shutdown(&self) {
+        self.sched.cancel_where(|_| true);
+    }
+
     /// True while something is being written to the screen (close guard).
     pub fn uploading(&self) -> bool {
         self.sched.running_kind(&["send", "setup"])

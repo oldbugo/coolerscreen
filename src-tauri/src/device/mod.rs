@@ -251,4 +251,24 @@ impl Screen {
     }
 }
 
+/// Unrestricted access for the `cs2` recovery tools only (unstick, recover-race-delete, delete-ota). The app never
+/// calls these: it can only send the allow-listed keys through `cmd`.
+impl Screen {
+    pub fn recovery_cmd(&mut self, key: u8, payload: &[u8], timeout: Duration) -> Result<Value, DevErr> {
+        while self.rx.try_recv().is_ok() {}
+        self.raw(&frame::frame(key, payload))?;
+        self.reply(timeout)
+    }
+    pub fn recovery_raw(&mut self, buf: &[u8]) -> Result<(), DevErr> {
+        self.raw(buf)
+    }
+    /// Next reply frame, if one arrives in time.
+    pub fn recovery_poll(&mut self, timeout: Duration) -> Option<Value> {
+        self.rx.recv_timeout(timeout).ok()
+    }
+    pub fn recovery_restart_noreply(&mut self) -> Result<(), DevErr> {
+        self.raw(&frame::frame(KEY_RESTART, &[]))
+    }
+}
+
 pub mod ops;

@@ -1,12 +1,12 @@
 {
   "name": "coolerscreen",
-  "version": "1.2.0",
+  "version": "2.0.0",
+  "private": true,
   "description": "Unofficial open-source tool to put your own videos/GIFs/images on the Lovingcool SC70 AIO cooler USB screen",
-  "main": "electron/main.js",
   "scripts": {
-    "start": "node bin/serve.js",
-    "cli": "node bin/coolerscreen.js",
-    "app": "electron electron/main.js"
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "release": "powershell -ExecutionPolicy Bypass -File scripts/make-release.ps1"
   },
   "keywords": [
     "lovingcool",
@@ -14,27 +14,13 @@
     "aio-cooler",
     "usb-screen",
     "winusb",
-    "ffmpeg"
+    "ffmpeg",
+    "tauri"
   ],
   "author": "oldbugo",
   "license": "MIT",
-  "type": "commonjs",
-  "dependencies": {
-    "ffmpeg-static": "^5.3.0",
-    "serialport": "^12.0.0",
-    "usb": "^2.19.1"
-  },
   "allowScripts": {
-    "ffmpeg-static@5.3.0": true,
-    "@serialport/bindings-cpp@12.0.1": true,
-    "usb@2.19.1": true,
-    "electron@44.7.0": true
-  },
-  "bin": {
-    "coolerscreen": "bin/coolerscreen.js"
-  },
-  "engines": {
-    "node": ">=18"
+    "ffmpeg-static@5.3.0": true
   },
   "repository": {
     "type": "git",
@@ -44,17 +30,8 @@
   "bugs": {
     "url": "https://github.com/oldbugo/coolerscreen/issues"
   },
-  "files": [
-    "bin",
-    "src",
-    "public",
-    "scripts",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
-    "electron"
-  ],
   "devDependencies": {
-    "electron": "^44.7.0"
+    "@tauri-apps/cli": "^2.0.0",
+    "ffmpeg-static": "^5.3.0"
   }
 }

@@ -3,6 +3,7 @@
 // No-op outside Tauri (browser, Electron). The Rust side (src-tauri/src/window) keeps an invisible native
 // window over the maximise button so Windows 11 Snap Layouts work; that window swallows the mouse, so hover,
 // pressed and click for that one button arrive as `cs-snap` events instead of DOM events.
+import { openDialog } from './dialog.js';
 const T = window.__TAURI_INTERNALS__;
 const BTN_W = 46, BAR_H = 32;
 
@@ -69,9 +70,18 @@ if (T) {
       else if (ev === 'up') maxBtn.classList.remove('down');
       else if (ev === 'click') { maxBtn.classList.remove('down'); toggle(); }
     });
-    listen('close-guard', () => {
-      if (confirm('An upload is in progress.\n\nIf you close now, the screen may show a broken picture until you send again.\n\nClose anyway?'))
-        inv('win_force_close');
+    // An upload is running: the app's own dialog (never a native one) asks before closing.
+    let asking = false;
+    listen('close-guard', async () => {
+      if (asking) return;
+      asking = true;
+      const ok = await openDialog({
+        title: 'An upload is in progress',
+        body: 'If you close now, the screen may show a broken picture until you send again. Close anyway?',
+        actions: [{ label: 'Keep uploading', value: false, kind: 'primary' }, { label: 'Close anyway', value: true, kind: 'danger' }],
+      });
+      asking = false;
+      if (ok) inv('win_force_close');
     });
     inv('win_state').then(setMax).catch(() => {});
   };
