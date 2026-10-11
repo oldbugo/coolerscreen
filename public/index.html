@@ -9,10 +9,6 @@
 <body>
 <header class="topbar">
   <span class="appname">CoolerScreen</span>
-  <nav class="tabs" aria-label="Views">
-    <button type="button" id="tabGallery" class="tab" aria-current="page">Gallery</button>
-    <button type="button" id="tabThemes" class="tab" aria-current="false">Lovingcool themes</button>
-  </nav>
   <button type="button" id="pill" class="pill" data-state="checking" aria-describedby="pillHint"><span class="dot" aria-hidden="true"></span><span id="pillText">Checking screen…</span></button>
   <span id="pillHint" class="sr-only">Opens the screen settings</span>
   <span class="spacer"></span>
@@ -28,8 +24,7 @@
 
 <div id="banners" class="banners"></div>
 
-<main id="galleryView" class="gallery-view" aria-label="Gallery"></main>
-<main id="themesView" class="gallery-view" aria-label="Lovingcool themes" hidden></main>
+<main id="galleryView" class="gallery-view" aria-label="Browse"></main>
 
 <div class="panes" hidden>
   <aside class="library" aria-labelledby="libHead">
@@ -106,6 +101,12 @@
         <p class="muted small">Rounded corners are set per clip, in Tune.</p>
         <div class="row"><button type="button" id="nSave" class="btn primary">Save notch</button></div>
         <p id="nMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setSources" aria-labelledby="hSources">
+        <h3 id="hSources">Sources</h3>
+        <p class="muted small">Extra places to find clips. Each one you turn on gets a checkbox in Browse.</p>
+        <div id="srcList"></div>
       </section>
 
       <section id="setGallery" aria-labelledby="hGallery">

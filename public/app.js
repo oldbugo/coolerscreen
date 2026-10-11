@@ -311,148 +311,244 @@ window.addEventListener('drop', e => {
   importFiles([...(e.dataTransfer?.files || [])]);
 });
 
-// ---------- gallery (home) ----------
+// ---------- Browse (home): My clips + the sources ticked here (only sources enabled in Settings > Sources appear) ----------
 function setView(v) {
   S.view = v;
   $('galleryView').hidden = v !== 'gallery';
-  $('themesView').hidden = v !== 'themes';
   document.querySelector('.panes').hidden = v !== 'detail';
-  $('tabGallery').setAttribute('aria-current', v === 'themes' ? 'false' : 'page');
-  $('tabThemes').setAttribute('aria-current', v === 'themes' ? 'page' : 'false');
   if (v !== 'detail') stopPreviewLoop();
   if (v === 'gallery') renderGallery();
-  if (v === 'themes') renderThemes();
 }
-$('tabGallery').onclick = () => showGallery();
-$('tabThemes').onclick = () => showThemes();
 function showGallery() {
   setView('gallery');
   const card = S.sel && document.querySelector(`.g-card[data-id="${S.sel}"]`);
-  (card || $('galleryView').querySelector('.g-card')).focus();
+  const f = card || $('galleryView').querySelector('.g-card');
+  if (f) f.focus();
 }
+
+const B = { sources: [], ticked: ['mine'], desktopApp: false, data: new Map(), jobs: new Map(), loaded: false };
+const enabledSources = () => B.sources.filter(s => s.enabled && s.kind !== 'action');
+async function loadSources() {
+  try {
+    const r = await api('/api/sources');
+    B.sources = r.sources; B.ticked = r.ticked; B.desktopApp = r.desktopApp; B.pluginsDir = r.pluginsDir; B.loaded = true;
+  } catch (e) { toast(e.message, true); }
+  for (const id of [...B.data.keys()]) if (!enabledSources().some(s => s.id === id)) B.data.delete(id);
+  for (const s of enabledSources()) if (B.ticked.includes(s.id) && !B.data.has(s.id)) loadSourcePage(s.id);
+  renderGallery();
+}
+async function setTicked(id, on) {
+  B.ticked = on ? [...new Set([...B.ticked, id])] : B.ticked.filter(x => x !== id);
+  renderGallery();
+  try { B.ticked = (await api('/api/browse', 'PUT', { ticked: B.ticked })).ticked; } catch {}
+  if (on && id !== 'mine' && !B.data.has(id)) loadSourcePage(id);
+}
+async function loadSourcePage(id, refresh = false) {
+  let d = B.data.get(id);
+  if (refresh || !d) { d = { items: [], page: 0, hasMore: true, loading: false, error: null, total: null }; B.data.set(id, d); }
+  if (d.loading || !d.hasMore) return;
+  d.loading = true; d.error = null; renderGallery();
+  try {
+    const r = await api(`/api/sources/${id}/items?page=${d.page + 1}${refresh ? '&refresh=1' : ''}`);
+    const seen = new Set(d.items.map(i => i.id));
+    d.items.push(...r.items.filter(i => !seen.has(i.id)));
+    d.page = r.page; d.hasMore = r.hasMore && r.items.length > 0; d.total = r.total;
+  } catch (e) { d.error = e.message; }
+  d.loading = false;
+  renderGallery();
+}
+function loadMoreSources() {
+  for (const s of enabledSources()) {
+    const d = B.data.get(s.id);
+    if (B.ticked.includes(s.id) && d && d.hasMore && !d.loading && !d.error) loadSourcePage(s.id);
+  }
+}
+$('galleryView').addEventListener('scroll', () => {
+  const b = $('galleryView');
+  if (b.scrollTop + b.clientHeight > b.scrollHeight - 500) loadMoreSources();
+}, { passive: true });
+
+async function addFromSource(src, item, { record = false } = {}) {
+  let seconds;
+  if (record) {
+    const input = el('input', { type: 'number', id: 'recSecs', min: '3', max: '60', step: '1', value: '20', autofocus: true });
+    const ok = await openDialog({ title: `Record "${item.title}"`, body: el('div', {},
+      el('p', { text: 'This wallpaper is drawn live, so CoolerScreen records it: it opens in a separate Wallpaper Engine window for the length of the recording, then closes that window. Your desktop wallpaper is not changed.' }),
+      el('div', { class: 'field' }, el('label', { for: 'recSecs', text: 'Record for (seconds)' }), input),
+      el('p', { class: 'muted small', text: 'Later you choose the loop from the recording, like with any clip.' })),
+      actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Record', value: true, kind: 'primary' }] });
+    if (!ok) return;
+    seconds = Math.min(60, Math.max(3, Number(input.value) || 20));
+  }
+  const key = `${src.id}/${item.id}`;
+  const st = { progress: 0, status: record ? 'Starting the recording' : 'Starting' };
+  B.jobs.set(key, st);
+  renderGallery();
+  try {
+    const { jobId } = await api(`/api/sources/${src.id}/items/${encodeURIComponent(item.id)}/add`, 'POST', { record, seconds, title: item.title });
+    const r = await pollJob(jobId, j => { st.progress = j.progress || 0; st.status = j.status === 'waiting' ? plainWait(j.message) : j.message || 'Working'; updateSourceCard(key); });
+    B.jobs.delete(key);
+    item.inGallery = r.originalId;
+    toast(`"${item.title}" is in your gallery.`);
+    await loadOriginals();
+  } catch (e) { st.error = e.message; }
+  renderGallery();
+}
+
+async function addFromLink() {
+  const input = el('input', { type: 'url', id: 'linkUrl', placeholder: 'https://…/clip.mp4', autofocus: true, spellcheck: false });
+  const ok = await openDialog({ title: 'Add from link', body: el('div', {},
+    el('div', { class: 'field' }, el('label', { for: 'linkUrl', text: 'Direct link to a video, GIF, image or theme (.ht) file' }), input),
+    el('p', { class: 'muted small', text: 'The link must open the file itself (up to 500 MB), not a web page.' })),
+    actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Add to gallery', value: true, kind: 'primary' }],
+    onOpen: ({ close }) => input.addEventListener('keydown', e => { if (e.key === 'Enter') close(true); }) });
+  if (!ok || !input.value.trim()) return;
+  try {
+    const { jobId } = await api('/api/link', 'POST', { url: input.value.trim() });
+    toast('Downloading…');
+    const r = await pollJob(jobId, () => {});
+    toast(`Added "${r.name}" to your gallery.`);
+    await loadOriginals();
+  } catch (e) { openDialog({ title: 'Couldn\'t add that link', body: e.message, actions: [{ label: 'OK', value: true, kind: 'primary' }] }); }
+}
+
+function sourceAction(src, item) {
+  const key = `${src.id}/${item.id}`;
+  const job = B.jobs.get(key);
+  if (job && !job.error) {
+    const pct = Math.round(job.progress * 100);
+    return el('div', { class: 'th-action' }, el('div', { class: 'progress th-progress', role: 'progressbar', 'aria-label': `Adding ${item.title}`, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, el('div', { style: `width:${pct}%` })),
+      el('span', { class: 'small muted num one-line th-pct', text: `${job.status} ${pct}%` }));
+  }
+  if (item.inGallery) return el('div', { class: 'th-action' }, el('span', { class: 'chip ok', text: 'In your gallery' }), el('button', { class: 'btn ghost', text: 'Open', onclick: () => select(item.inGallery) }));
+  if (item.action === 'none') return el('div', { class: 'th-action' }, el('span', { class: 'chip', text: 'Not supported', title: item.note || '' }), el('span', { class: 'small muted one-line', text: item.note || '' }));
+  const rec = item.action === 'record';
+  const canRec = !rec || B.desktopApp;
+  return el('div', { class: 'th-action' },
+    el('span', { class: 'chip ' + (rec ? 'warn' : ''), text: rec ? 'Needs recording' : 'Not added' }),
+    el('button', { class: 'btn secondary', text: job && job.error ? 'Try again' : rec ? 'Record…' : 'Add to gallery', disabled: !canRec,
+      title: canRec ? '' : 'Recording needs the desktop app (CoolerScreen.exe)', onclick: () => addFromSource(src, item, { record: rec }) }),
+    job && job.error ? el('span', { class: 'small one-line th-err', text: job.error, title: job.error }) : null);
+}
+function updateSourceCard(key) {
+  const card = document.querySelector(`.s-card[data-key="${CSS.escape(key)}"]`);
+  if (!card) return;
+  const [sid, ...rest] = key.split('/');
+  const src = B.sources.find(s => s.id === sid), d = B.data.get(sid);
+  const item = d && d.items.find(i => i.id === rest.join('/'));
+  if (src && item) card.querySelector('.th-action').replaceWith(sourceAction(src, item));
+}
+
 function renderGallery() {
   const box = $('galleryView');
   if (box.hidden) return;
+  const scroll = box.scrollTop;
   box.textContent = '';
-  box.append(el('div', { class: 'g-head' }, el('h1', { class: 'g-title', text: 'Gallery' }),
-    el('span', { class: 'muted small', text: S.originals.length ? `${S.originals.length} clip${S.originals.length > 1 ? 's' : ''}` : '' }),
-    el('span', { class: 'grow' }), el('button', { class: 'btn ghost', text: 'Open Gallery folder', onclick: () => $('openFolder').click() })));
-  if (!S.originals.length && !S.adding.length) box.append(el('p', { class: 'muted g-empty', text: 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). You\'ll pick the loop and preview it before anything is sent.' }));
+  const mine = B.ticked.includes('mine');
+  const link = B.sources.find(s => s.id === 'link' && s.enabled);
+  box.append(el('div', { class: 'g-head' }, el('h1', { class: 'g-title', text: 'Browse' }), el('span', { class: 'grow' }),
+    link ? el('button', { class: 'btn secondary', text: 'Add from link…', onclick: addFromLink }) : null,
+    el('button', { class: 'btn ghost', text: 'Open Gallery folder', onclick: () => $('openFolder').click() })));
+  // source chips: My clips always; others only when enabled in Settings
+  const chip = (id, label, count) => el('label', { class: 'src-chip' + (B.ticked.includes(id) ? ' on' : '') },
+    el('input', { type: 'checkbox', checked: B.ticked.includes(id), onchange: e => setTicked(id, e.target.checked) }), label,
+    count != null ? el('span', { class: 'muted num', text: ` ${count}` }) : null);
+  const chips = el('div', { class: 'src-chips', role: 'group', 'aria-label': 'Show clips from' }, chip('mine', 'My clips', S.originals.length));
+  for (const s of enabledSources()) { const d = B.data.get(s.id); chips.append(chip(s.id, s.name, d && d.total != null ? d.total : null)); }
+  chips.append(el('button', { class: 'btn ghost small-btn', text: 'Sources…', title: 'Settings > Sources', onclick: () => openDrawer('setSources') }));
+  box.append(chips);
   const ul = el('ul', { class: 'g-grid', 'aria-label': 'Clips' });
-  for (const a of S.adding) {
-    ul.append(el('li', {}, el('div', { class: 'g-card adding', 'aria-busy': 'true' }, el('div', { class: 'g-thumb skeleton' }),
-      el('div', { class: 'g-name', text: a.name }), el('div', { class: 'g-chips' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'small muted', text: 'Adding…' })))));
+  if (mine) {
+    if (!S.originals.length && !S.adding.length) box.append(el('p', { class: 'muted g-empty', text: 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). You\'ll pick the loop and preview it before anything is sent.' }));
+    for (const a of S.adding) {
+      ul.append(el('li', {}, el('div', { class: 'g-card adding', 'aria-busy': 'true' }, el('div', { class: 'g-thumb skeleton' }),
+        el('div', { class: 'g-name', text: a.name }), el('div', { class: 'g-chips' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'small muted', text: 'Adding…' })))));
+    }
+    ul.append(el('li', {}, el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
+      el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
+      el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' }))));
+    for (const o of S.originals) ul.append(el('li', {}, myClipCard(o)));
   }
-  for (const o of S.originals) {
-    const thumb = el('div', { class: 'g-thumb' + (o.assets === 'pending' ? ' skeleton' : '') },
-      o.frameUrl ? el('img', { src: o.frameUrl, alt: '', loading: 'lazy' }) : null);
-    const chips = el('div', { class: 'g-chips' });
-    if (o.onScreen) chips.append(el('span', { class: 'chip ok', text: 'On screen' }));
-    if (o.missing) chips.append(el('span', { class: 'chip warn', text: 'File missing' }));
-    if (o.needsRemake) chips.append(el('span', { class: 'chip warn', text: 'Needs re-make' }));
-    if (o.busy) chips.append(el('span', { class: 'chip accent', text: 'Preparing…' }));
-    if (o.assets === 'error' && !o.versionCount) chips.append(el('span', { class: 'chip danger', text: 'Can\'t read this file' }));
-    if (!chips.childElementCount) chips.append(el('span', { class: 'small muted', text: o.versionCount ? `${o.versionCount} version${o.versionCount > 1 ? 's' : ''}` : 'Not sent yet' }));
-    const card = el('button', { class: 'g-card', 'data-id': o.id, 'aria-label': `${o.name}${o.onScreen ? ', on screen' : ''}`, onclick: () => select(o.id) },
-      thumb, el('div', { class: 'g-name', text: o.name, title: o.name }), chips);
-    // hover (or keyboard focus) plays a muted preview
-    let v = null;
-    const play = () => {
-      if (v || !o.previewUrl || o.isImage) return;
-      v = el('video', { src: o.previewUrl, muted: true, loop: true, autoplay: true, playsInline: true, 'aria-hidden': 'true' });
-      v.muted = true;
-      thumb.append(v);
-      v.play().catch(() => {});
-    };
-    const stop = () => { if (v) { v.remove(); v = null; } };
-    card.addEventListener('mouseenter', play); card.addEventListener('mouseleave', stop);
-    card.addEventListener('focus', play); card.addEventListener('blur', stop);
-    ul.append(el('li', {}, card));
+  const notes = [];
+  for (const s of enabledSources()) {
+    if (!B.ticked.includes(s.id)) continue;
+    const d = B.data.get(s.id);
+    if (!d) continue;
+    for (const it of d.items) {
+      const thumb = el('div', { class: 'g-thumb' }, it.thumb ? el('img', { src: it.thumb, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null,
+        el('span', { class: 'src-badge', text: it.badge ? `${s.name} · ${it.badge}` : s.name }));
+      ul.append(el('li', {}, el('div', { class: 'g-card s-card', 'data-key': `${s.id}/${it.id}` }, thumb,
+        el('div', { class: 'g-name', text: it.title, title: it.title }), sourceAction(s, it))));
+    }
+    if (d.loading) for (let i = 0; i < 3; i++) ul.append(el('li', {}, el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' }))));
+    if (d.error) notes.push(el('div', { class: 'notice danger' }, `${s.name}: ${d.error} `, el('button', { class: 'btn secondary', text: 'Try again', onclick: () => { d.error = null; loadSourcePage(s.id, !d.items.length); } })));
+    if (s.id === 'lovingcool' || s.id === 'otherbrands') notes.push(el('p', { class: 'muted small', text: `${s.name}: themes from the vendor's online library; they remain theirs.` }));
   }
-  ul.append(el('li', {}, el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
-    el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
-    el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' }))));
-  box.append(ul);
+  box.append(ul, ...notes);
+  box.scrollTop = scroll;
 }
 
-// ---------- Lovingcool themes (online catalogue) ----------
-const TH = { themes: [], total: null, page: 0, loading: false, error: null, jobs: new Map(), observer: null };
-async function loadThemesPage(refresh = false) {
-  if (TH.loading) return;
-  if (refresh) { TH.themes = []; TH.total = null; TH.page = 0; TH.error = null; }
-  if (TH.total != null && TH.themes.length >= TH.total) return;
-  TH.loading = true; renderThemes();
-  try {
-    const r = await api(`/api/themes?page=${TH.page + 1}${refresh ? '&refresh=1' : ''}`);
-    TH.page = r.page; TH.total = r.total;
-    const seen = new Set(TH.themes.map(t => t.themeId));
-    TH.themes.push(...r.themes.filter(t => !seen.has(t.themeId)));
-    if (!r.themes.length) TH.total = TH.themes.length; // nothing more
-  } catch (e) { TH.error = e.message; }
-  TH.loading = false;
-  renderThemes();
+function myClipCard(o) {
+  const thumb = el('div', { class: 'g-thumb' + (o.assets === 'pending' ? ' skeleton' : '') },
+    o.frameUrl ? el('img', { src: o.frameUrl, alt: '', loading: 'lazy' }) : null);
+  const chips = el('div', { class: 'g-chips' });
+  if (o.onScreen) chips.append(el('span', { class: 'chip ok', text: 'On screen' }));
+  if (o.missing) chips.append(el('span', { class: 'chip warn', text: 'File missing' }));
+  if (o.needsRemake) chips.append(el('span', { class: 'chip warn', text: 'Needs re-make' }));
+  if (o.busy) chips.append(el('span', { class: 'chip accent', text: 'Preparing…' }));
+  if (o.assets === 'error' && !o.versionCount) chips.append(el('span', { class: 'chip danger', text: 'Can\'t read this file' }));
+  if (!chips.childElementCount) chips.append(el('span', { class: 'small muted', text: o.versionCount ? `${o.versionCount} version${o.versionCount > 1 ? 's' : ''}` : 'Not sent yet' }));
+  const card = el('button', { class: 'g-card', 'data-id': o.id, 'aria-label': `${o.name}${o.onScreen ? ', on screen' : ''}`, onclick: () => select(o.id) },
+    thumb, el('div', { class: 'g-name', text: o.name, title: o.name }), chips);
+  let v = null; // hover (or keyboard focus) plays a muted preview
+  const play = () => {
+    if (v || !o.previewUrl || o.isImage) return;
+    v = el('video', { src: o.previewUrl, muted: true, loop: true, autoplay: true, playsInline: true, 'aria-hidden': 'true' });
+    v.muted = true;
+    thumb.append(v);
+    v.play().catch(() => {});
+  };
+  const stop = () => { if (v) { v.remove(); v = null; } };
+  card.addEventListener('mouseenter', play); card.addEventListener('mouseleave', stop);
+  card.addEventListener('focus', play); card.addEventListener('blur', stop);
+  return card;
 }
-async function addTheme(t) {
-  const st = { progress: 0, status: 'Starting…' };
-  TH.jobs.set(t.themeId, st);
-  renderThemes();
-  try {
-    const { jobId } = await api(`/api/themes/${encodeURIComponent(t.themeId)}/add`, 'POST');
-    const r = await pollJob(jobId, j => { st.progress = j.progress || 0; st.status = j.message || 'Working'; updateThemeCard(t.themeId); });
-    TH.jobs.delete(t.themeId);
-    t.inGallery = r.originalId;
-    toast(`"${t.name}" is in your gallery.`);
-    await loadOriginals();
-  } catch (e) { st.error = e.message; }
-  renderThemes();
-}
-function themeAction(t) {
-  const job = TH.jobs.get(t.themeId);
-  if (job && !job.error) {
-    const pct = Math.round(job.progress * 100);
-    return el('div', { class: 'th-action' }, el('div', { class: 'progress th-progress', role: 'progressbar', 'aria-label': `Adding ${t.name}`, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, el('div', { style: `width:${pct}%` })),
-      el('span', { class: 'small muted num one-line th-pct', text: `${job.status} ${pct}%` }));
-  }
-  if (t.inGallery) return el('div', { class: 'th-action' }, el('span', { class: 'chip ok', text: 'In your gallery' }), el('button', { class: 'btn ghost', text: 'Open', onclick: () => select(t.inGallery) }));
-  return el('div', { class: 'th-action' }, el('button', { class: 'btn secondary', text: job && job.error ? 'Try again' : 'Add to gallery', onclick: () => addTheme(t) }),
-    job && job.error ? el('span', { class: 'small one-line th-err', text: job.error, title: job.error }) : null);
-}
-function updateThemeCard(id) {
-  const card = document.querySelector(`.th-card[data-theme="${CSS.escape(id)}"]`);
-  const t = TH.themes.find(x => x.themeId === id);
-  if (card && t) card.querySelector('.th-action').replaceWith(themeAction(t));
-}
-function renderThemes() {
-  const box = $('themesView');
-  if (box.hidden) return;
+
+// ---------- Settings > Sources ----------
+async function renderSourcesSettings() {
+  const box = $('srcList');
+  if (!B.loaded) await loadSources();
   box.textContent = '';
-  box.append(el('div', { class: 'g-head' }, el('h1', { class: 'g-title', text: 'Lovingcool themes' }),
-    el('span', { class: 'muted small one-line', text: `Themes from Lovingcool's online library for your ${2400} × ${1080} screen${TH.total != null ? ` · ${TH.total}` : ''}` }),
-    el('span', { class: 'grow' }), el('button', { class: 'btn ghost', text: 'Refresh', disabled: TH.loading, onclick: () => loadThemesPage(true) })));
-  const ul = el('ul', { class: 'g-grid', 'aria-label': 'Lovingcool themes', 'aria-busy': String(TH.loading) });
-  for (const t of TH.themes) {
-    ul.append(el('li', {}, el('div', { class: 'g-card th-card', 'data-theme': t.themeId },
-      el('div', { class: 'g-thumb' }, t.cover ? el('img', { src: t.cover, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null),
-      el('div', { class: 'g-name', text: t.name, title: t.name }), themeAction(t))));
+  for (const s of B.sources) {
+    const toggle = el('input', { type: 'checkbox', id: 'src-' + s.id, checked: s.enabled, role: 'switch' });
+    toggle.onchange = async () => {
+      if (toggle.checked && s.kind === 'plugin') {
+        const ok = await openDialog({ title: 'Enable this plug-in?', body: s.warning || 'Plug-ins run code on your PC.', actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Enable', value: true, kind: 'danger' }] });
+        if (!ok) { toggle.checked = false; return; }
+      }
+      try { await api('/api/sources/' + s.id, 'PUT', { enabled: toggle.checked }); } catch (e) { toast(e.message, true); }
+      B.data.delete(s.id);
+      await loadSources();
+      renderSourcesSettings();
+    };
+    const row = el('div', { class: 'src-row' },
+      el('div', { class: 'src-top' }, el('label', { for: 'src-' + s.id, class: 'src-name', text: s.name }), toggle),
+      el('p', { class: 'muted small', text: s.description || '' }),
+      el('p', { class: 'small ' + (s.available === false ? 'th-err' : 'muted'), text: s.enabled || s.kind !== 'plugin' ? (s.status || '') : 'Not loaded (disabled)' }),
+      s.warning ? el('p', { class: 'small warn-text', text: '⚠ ' + s.warning }) : null);
+    for (const opt of s.options || []) {
+      if (opt.type !== 'folders') continue;
+      const ta = el('textarea', { id: `opt-${s.id}-${opt.key}`, rows: 2, spellcheck: false, value: ((s.values || {})[opt.key] || []).join('\n') });
+      ta.value = ((s.values || {})[opt.key] || []).join('\n');
+      row.append(el('div', { class: 'field' }, el('label', { for: ta.id, text: opt.label }), ta,
+        el('button', { class: 'btn ghost', text: 'Save folders', onclick: async () => {
+          await api('/api/sources/' + s.id, 'PUT', { options: { [opt.key]: ta.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) } }).catch(e => toast(e.message, true));
+          B.data.delete(s.id); await loadSources(); renderSourcesSettings();
+        } })));
+    }
+    box.append(row);
   }
-  if (TH.loading) for (let i = 0; i < 4; i++) ul.append(el('li', {}, el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' }))));
-  box.append(ul);
-  if (TH.error) box.append(el('div', { class: 'notice danger' }, `Couldn't load the theme library: ${TH.error} `, el('button', { class: 'btn secondary', text: 'Try again', onclick: () => { TH.error = null; loadThemesPage(); } })));
-  // more pages load as you scroll
-  const more = el('div', { class: 'th-sentinel', 'aria-hidden': 'true' });
-  box.append(more);
-  if (TH.observer) TH.observer.disconnect();
-  TH.observer = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting) && !TH.loading && !TH.error) loadThemesPage(); }, { root: box, rootMargin: '400px' });
-  TH.observer.observe(more);
-}
-// fallback for when the observer doesn't fire (e.g. a throttled window): near the bottom also loads more
-$('themesView').addEventListener('scroll', () => {
-  const b = $('themesView');
-  if (!TH.loading && !TH.error && b.scrollTop + b.clientHeight > b.scrollHeight - 400) loadThemesPage();
-}, { passive: true });
-function showThemes() {
-  setView('themes');
-  if (!TH.themes.length && !TH.loading) loadThemesPage();
+  box.append(el('p', { class: 'muted small', text: `Plug-in sources: put .js files in ${B.pluginsDir || 'Documents\\CoolerScreen\\Sources'} (see docs/sources.md). They appear here, off until you enable them.` }));
 }
 
 // ---------- detail ----------
@@ -2009,6 +2105,7 @@ function fillSettings() {
   if (S.detail && S.detail.assets === 'ready') { bg.src = `/media/o/${S.detail.id}/frame.jpg`; bg.hidden = false; } else { bg.removeAttribute('src'); bg.hidden = true; }
   renderScreenSettings();
   drawNotch();
+  renderSourcesSettings();
 }
 function formMask() {
   return {
@@ -2065,8 +2162,9 @@ $('aSave').onclick = async () => {
 
 // ---------- start ----------
 (async function init() {
-  setView('gallery'); // the app opens on the Gallery
+  setView('gallery'); // the app opens on Browse
   await loadApp();
+  loadSources();
   await loadOriginals();
   renderActivity();
   poll();

@@ -1,12 +1,13 @@
-// "Lovingcool themes": the vendor's public online theme catalogue (the same list the LOVINGCOOL MONITOR app shows).
-// Found in the vendor app (main/routes/theme.js, util/common.js buildUrl, constant/appConstant.js), confirmed 2026-10-11:
+// The vendor platform's public online theme catalogue (the list LOVINGCOOL MONITOR shows), used by the
+// "Lovingcool themes" and "Other brands" sources. Found in the vendor app (main/routes/theme.js, util/common.js buildUrl,
+// constant/appConstant.js), confirmed 2026-10-11:
 //   GET https://www.htssl.com/api/ht/theme/getAllThemes
 //       ?current=<page, 1-based>&pageSize=<n>&fullScreen=true&deviceWidth=2400&deviceHeight=1080&rotate=0
-//       &visibleBrandIds[]=7            (7 = the LOVINGCOOL brand; no key, signature or login)
+//       &visibleBrandIds[]=<brand>        (7 = LOVINGCOOL; no key, signature or login)
 //   -> { code: 200, data: { total, list: [{ themeId, name, deviceWidth, deviceHeight, themeType, createdAt,
 //        packageFile: { url, fileName }, coverPictureFile: { url } }] } }
 //   Theme packages (.ht) and covers are plain HTTPS files on theme.htssl.com.
-// Nothing is downloaded unless the user asks; the list is cached for a day.
+// Lists are cached for a day; nothing is downloaded unless the user asks.
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -15,12 +16,12 @@ const pkg = require('../package.json');
 
 const API = 'https://www.htssl.com/api/ht/theme/getAllThemes';
 const FILE_HOST = 'theme.htssl.com';
-const BRAND = 7;
+const LOVINGCOOL = 7;
 const SCREEN = { width: 2400, height: 1080 };
 const PAGE_SIZE = 24;
 const CACHE_MS = 24 * 3600 * 1000;
 const UA = `CoolerScreen/${pkg.version} (+github.com/oldbugo/coolerscreen)`;
-const cacheFile = () => path.join(paths.base, 'themes-cache.json');
+const cacheFile = brand => path.join(paths.base, brand === LOVINGCOOL ? 'themes-cache.json' : `themes-cache-${brand}.json`);
 
 function getJson(url) {
   return new Promise((resolve, reject) => {
@@ -38,39 +39,40 @@ function getJson(url) {
   });
 }
 
-function readCache() { try { return JSON.parse(fs.readFileSync(cacheFile(), 'utf8')); } catch { return { pages: {} }; } }
-function writeCache(c) { fs.mkdirSync(paths.base, { recursive: true }); fs.writeFileSync(cacheFile(), JSON.stringify(c)); }
+function readCache(brand) { try { return JSON.parse(fs.readFileSync(cacheFile(brand), 'utf8')); } catch { return { pages: {} }; } }
+function writeCache(brand, c) { fs.mkdirSync(paths.base, { recursive: true }); fs.writeFileSync(cacheFile(brand), JSON.stringify(c)); }
 
-const clean = t => ({
-  themeId: String(t.themeId), name: String(t.name || t.themeId), width: t.deviceWidth, height: t.deviceHeight,
+const clean = (t, brand) => ({
+  themeId: String(t.themeId), name: String(t.name || t.themeId), width: t.deviceWidth, height: t.deviceHeight, brand,
   created: t.createdAt || null, cover: t.coverPictureFile && t.coverPictureFile.url,
   file: t.packageFile && { url: t.packageFile.url, name: t.packageFile.fileName },
 });
 
-/** One page of themes for this screen ({ total, page, pageSize, themes }), from the cache unless refresh. */
-async function list(page = 1, { refresh = false } = {}) {
+/** One page of a brand's themes for this screen ({ total, page, pageSize, themes }), cached unless refresh. */
+async function list(page = 1, { refresh = false, brand = LOVINGCOOL, pageSize = PAGE_SIZE } = {}) {
   page = Math.max(1, Math.floor(Number(page) || 1));
-  let cache = readCache();
+  let cache = readCache(brand);
   if (refresh) cache = { pages: {} };
-  const hit = cache.pages[page];
+  const key = `${page}x${pageSize}`;
+  const hit = cache.pages[key];
   if (hit && Date.now() - hit.at < CACHE_MS) return { ...hit.data, cached: true };
   const u = new URL(API);
-  const q = { current: page, pageSize: PAGE_SIZE, fullScreen: 'true', deviceWidth: SCREEN.width, deviceHeight: SCREEN.height, rotate: 0 };
+  const q = { current: page, pageSize, fullScreen: 'true', deviceWidth: SCREEN.width, deviceHeight: SCREEN.height, rotate: 0 };
   for (const [k, v] of Object.entries(q)) u.searchParams.set(k, String(v));
-  u.searchParams.append('visibleBrandIds[]', String(BRAND));
+  u.searchParams.append('visibleBrandIds[]', String(brand));
   const r = await getJson(u.toString());
   if (!r || r.code !== 200 || !r.data || !Array.isArray(r.data.list)) throw new Error('The theme library sent something unexpected.');
   const data = {
-    total: Number(r.data.total) || 0, page, pageSize: PAGE_SIZE,
-    themes: r.data.list.map(clean).filter(t => t.file && t.file.url && (!t.width || (t.width === SCREEN.width && t.height === SCREEN.height))),
+    total: Number(r.data.total) || 0, page, pageSize,
+    themes: r.data.list.map(t => clean(t, brand)).filter(t => t.file && t.file.url && (!t.width || (t.width === SCREEN.width && t.height === SCREEN.height))),
   };
-  cache.pages[page] = { at: Date.now(), data };
-  writeCache(cache);
+  cache.pages[key] = { at: Date.now(), data };
+  writeCache(brand, cache);
   return data;
 }
 
-function findCached(themeId) {
-  for (const p of Object.values(readCache().pages)) {
+function findCached(themeId, brand = LOVINGCOOL) {
+  for (const p of Object.values(readCache(brand).pages)) {
     const t = p.data.themes.find(x => x.themeId === themeId);
     if (t) return t;
   }
@@ -102,4 +104,4 @@ function download(theme, dir, onProgress = () => {}) {
   });
 }
 
-module.exports = { list, findCached, download, SCREEN, BRAND, API };
+module.exports = { list, findCached, download, SCREEN, LOVINGCOOL, BRAND: LOVINGCOOL, API, UA, PAGE_SIZE };

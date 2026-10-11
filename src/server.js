@@ -14,7 +14,8 @@ const setup = require('./setup');
 const slots = require('./slots');
 const { DEVICE_FPS, IMAGE_SECONDS } = require('./convert');
 const pkg = require('../package.json');
-const themes = require('./themes');
+const sources = require('./sources');
+const recorder = require('./sources/recorder');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const TYPES = {
@@ -61,7 +62,7 @@ function runJob(job, fn) {
 
 const publicJob = j => {
   const { result, ...rest } = j;
-  if (j.kind === 'loopsearch' || j.kind === 'theme') return { ...rest, result };
+  if (j.kind === 'loopsearch' || j.kind === 'source') return { ...rest, result };
   return { ...rest, result: result && typeof result === 'object' ? { warning: result.warning, serialWarning: result.serialWarning, name: result.name, label: result.label, restarted: !!result.restarted, restartFailed: result.restartFailed || null } : undefined };
 };
 
@@ -122,7 +123,7 @@ function appState() {
   const s = settings.load();
   const b = slots.budgets(s);
   return {
-    appVersion: pkg.version, deviceFps: DEVICE_FPS, imageSeconds: IMAGE_SECONDS, fake: deviceOps.FAKE || null,
+    appVersion: pkg.version, desktopApp: recorder.available(), deviceFps: DEVICE_FPS, imageSeconds: IMAGE_SECONDS, fake: deviceOps.FAKE || null,
     mask: s.mask, cornersDefault: s.mask.corners, maxSeconds: s.maxSeconds, budget: b.loop, total: b.total, budgetMeasured: b.measured, capacityAt: b.capacityAt,
     uploadRate: s.uploadRate || 50000,
     galleryDir: gallery.galleryDir(), onScreen: onScreen(), missingNoticeDays: gallery.MISSING_NOTICE_DAYS,
@@ -294,30 +295,72 @@ async function handle(req, res) {
       return json(res, 404, { error: 'Not found' });
     }
 
-    // ----- Lovingcool online themes (read-only catalogue; downloads only when the user adds one) -----
-    if (p === '/api/themes' && m === 'GET') {
-      try {
-        const r = await themes.list(url.searchParams.get('page') || 1, { refresh: url.searchParams.get('refresh') === '1' });
-        const have = lib.listOriginals();
-        const inGallery = t => { const o = have.find(x => (x.fileName || '').includes(t.themeId)); return o ? o.id : null; };
-        return json(res, 200, { ...r, themes: r.themes.map(t => ({ ...t, inGallery: inGallery(t) })) });
-      } catch (e) { return json(res, 502, { error: e.message }); }
+    // ----- sources (Browse): every source but My clips is off until enabled in Settings > Sources -----
+    if (p === '/api/sources' && m === 'GET') {
+      const c = settings.load().sources;
+      return json(res, 200, { sources: await sources.describeAll(), ticked: c.ticked, desktopApp: recorder.available(), pluginsDir: sources.pluginsDir() });
     }
-    if ((mm = /^\/api\/themes\/([A-Za-z0-9_-]{4,64})\/add$/.exec(p)) && m === 'POST') {
-      const t = themes.findCached(mm[1]);
-      if (!t) return json(res, 404, { error: 'Unknown theme. Refresh the list and try again.' });
-      const job = newJob('theme', { label: `Adding "${t.name}"`, themeId: t.themeId });
+    if (p === '/api/browse' && m === 'PUT') return json(res, 200, sources.setTicked((await readBody(req)).ticked));
+    if (p === '/api/link' && m === 'POST') {
+      const link = sources.provider('link');
+      if (!link) return json(res, 403, { error: 'Turn on "Add from link" in Settings > Sources first.' });
+      const u = String((await readBody(req)).url || '').trim();
+      const job = newJob('source', { label: 'Adding from link' });
       runJob(job, async j => {
-        const dir = path.join(paths.base, 'downloads');
         j.message = 'Downloading';
-        const file = await themes.download(t, dir, f => { j.progress = f * 0.85; });
-        try {
-          j.message = 'Adding to the gallery'; j.progress = 0.9;
-          const id = await gallery.addFile(file, t.file.name || `${t.themeId}.ht`);
-          return { originalId: id, name: t.name };
-        } finally { fs.rmSync(file, { force: true }); }
+        const r = await link.download(sources.contextFor('link'), u, f => { j.progress = f * 0.85; });
+        try { j.message = 'Adding to the gallery'; j.progress = 0.9; return { originalId: await gallery.addFile(r.file, r.name), name: r.name }; }
+        finally { fs.rmSync(r.file, { force: true }); }
       });
       return json(res, 200, { jobId: job.id });
+    }
+    if ((mm = /^\/api\/sources\/([a-z0-9_-]{1,60})(\/.*)?$/.exec(p))) {
+      const sid = mm[1], rest = mm[2] || '';
+      if (!rest && m === 'PUT') {
+        try { return json(res, 200, sources.setSource(sid, await readBody(req))); } catch (e) { return json(res, 400, { error: e.message }); }
+      }
+      const prov = sources.provider(sid);
+      if (!prov) return json(res, 403, { error: 'This source is turned off. Turn it on in Settings > Sources.' });
+      const ctx = sources.contextFor(sid);
+      if (rest === '/items' && m === 'GET') {
+        try {
+          const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+          const r = await prov.list(ctx, { page, refresh: url.searchParams.get('refresh') === '1' });
+          const have = lib.listOriginals();
+          const inGallery = key => { if (!key) return null; const o = have.find(x => (x.fileName || '').includes(key)); return o ? o.id : null; };
+          const items = (r.items || []).slice(0, 200).map(it => ({
+            id: String(it.id), title: String(it.title || it.id).slice(0, 160), type: it.type || '', action: ['add', 'record'].includes(it.action) ? it.action : 'none',
+            note: it.note || '', badge: it.badge || '', inGallery: inGallery(it.key),
+            thumb: typeof it.thumb === 'string' && it.thumb.startsWith('thumb:') ? `/api/sources/${sid}/thumb?item=${encodeURIComponent(it.thumb.slice(6))}`
+              : typeof it.thumb === 'string' && /^https:\/\//.test(it.thumb) ? it.thumb : null,
+          }));
+          return json(res, 200, { page, total: r.total ?? null, hasMore: !!r.hasMore, items });
+        } catch (e) { return json(res, 502, { error: e.message }); }
+      }
+      if (rest === '/thumb' && m === 'GET') {
+        const f = prov.thumbPath && prov.thumbPath(ctx, url.searchParams.get('item') || '');
+        if (!f || !fs.existsSync(f)) { res.writeHead(404); return res.end(); }
+        return serveFile(req, res, f, true);
+      }
+      if ((mm = /^\/items\/([^/]{1,200})\/add$/.exec(rest)) && m === 'POST') {
+        const itemId = mm[1];
+        const body = await readBody(req);
+        const recording = body.record === true;
+        if (recording && !recorder.available()) return json(res, 400, { error: 'Recording needs the desktop app (CoolerScreen.exe).' });
+        const work = async j => {
+          const r = await prov.add(ctx, itemId, { seconds: body.seconds, onProgress: (f, msg) => { j.progress = Math.min(0.88, f * 0.88); if (msg) j.message = msg; } });
+          try {
+            j.message = 'Adding to the gallery'; j.progress = 0.9;
+            return { originalId: await gallery.addFile(r.file, r.name), name: r.name };
+          } finally { if (r.temp) fs.rmSync(r.file, { force: true }); }
+        };
+        const info = { label: `${recording ? 'Recording' : 'Adding'} "${String(body.title || itemId).slice(0, 60)}"`, sourceId: sid, itemId };
+        // Not queued as a whole: the import at the end goes through the queue itself (queuing the job too would deadlock),
+        // and sources serialize their own recordings.
+        const job = runJob(newJob('source', info), work);
+        return json(res, 200, { jobId: job.id });
+      }
+      return json(res, 404, { error: 'Not found' });
     }
     // ----- gallery folder -----
     if (p === '/api/gallery' && m === 'PUT') {

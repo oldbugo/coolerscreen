@@ -71,7 +71,8 @@ async function registerFile(file, existing = null) {
   fs.mkdirSync(d, { recursive: true });
   try {
     const ext = path.extname(file).toLowerCase();
-    let name = path.basename(file, path.extname(file));
+    // files added from a source carry its key in brackets ("Title [we-123]"): keep the key in the file name, not in the clip's name
+    let name = path.basename(file, path.extname(file)).replace(/ \[[a-z][a-z0-9]*-[a-z0-9-]+\]$/i, '');
     let extracted = false;
     let orig = file;
     if (ext === '.ht' || ext === '.zip' || isThemeFile(file)) {
@@ -314,6 +315,6 @@ function setDir(dir) {
 }
 
 module.exports = {
-  init, sync, addFile, renameOriginal, deleteOriginal, deleteMissing, longMissing, setDir, galleryDir, sanitizeName, isMedia,
+  documentsDir, init, sync, addFile, renameOriginal, deleteOriginal, deleteMissing, longMissing, setDir, galleryDir, sanitizeName, isMedia,
   MISSING_NOTICE_DAYS,
 };

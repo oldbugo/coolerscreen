@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 - 2026-10-11
+
+- **Browse** replaces the Gallery/Lovingcool tabs: "My clips" plus a checkbox for each enabled source, merged in one grid
+  (paged per source, source badge, In your gallery / Not added / Needs recording, one action per card).
+- **Settings > Sources** (all off by default): Lovingcool themes; Other brands on the same theme platform (brand 2, 31 themes
+  for 2400x1080); Wallpaper Engine (copies video wallpapers, records scene/web wallpapers in a temporary window with Windows
+  Graphics Capture, desktop app only); Lively Wallpaper (video/GIF/picture); Add from link (direct file links, 500 MB);
+  plug-in sources from Documents\CoolerScreen\Sources (docs/sources.md, docs/example-source.js), loaded only when enabled.
 
 - **Lovingcool themes** tab: the vendor's online theme catalogue for this screen (cover pictures, paging as you scroll,
   cached list with Refresh, "In your gallery" badge), one-click "Add to gallery" with progress (downloads the `.ht` into

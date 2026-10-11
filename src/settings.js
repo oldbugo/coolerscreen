@@ -33,6 +33,21 @@ function slot(v) {
   return r;
 }
 
+// Sources (Settings > Sources): which are enabled, their options, and which are ticked in Browse. Everything is off by default.
+function cleanSources(v) {
+  v = v && typeof v === 'object' ? v : {};
+  const id = k => /^[a-z0-9_-]{1,60}$/.test(k);
+  const enabled = {}, options = {};
+  for (const [k, on] of Object.entries(v.enabled || {})) if (id(k) && on === true) enabled[k] = true;
+  for (const [k, o] of Object.entries(v.options || {})) {
+    if (!id(k) || !o || typeof o !== 'object') continue;
+    const folders = Array.isArray(o.folders) ? o.folders.filter(f => typeof f === 'string' && f.trim()).map(f => f.trim().slice(0, 260)).slice(0, 10) : [];
+    options[k] = { folders };
+  }
+  const ticked = Array.isArray(v.ticked) ? v.ticked.filter(k => typeof k === 'string' && (k === 'mine' || enabled[k])).slice(0, 30) : ['mine'];
+  return { enabled, options, ticked };
+}
+
 function sanitize(s = {}) {
   const m = s.mask || {};
   const c = m.circle || {};
@@ -60,6 +75,7 @@ function sanitize(s = {}) {
     uploadRate: s.uploadRate == null ? null : num(s.uploadRate, null, 5000, 5e6),
     capacity: s.capacity && Number(s.capacity.bytes) > 1e6 ? { bytes: Math.round(num(s.capacity.bytes, 0, 1e6, 1e8)), at: String(s.capacity.at || '') } : null,
     slots: { startup: slot(s.slots && s.slots.startup), standby: slot(s.slots && s.slots.standby) },
+    sources: cleanSources(s.sources),
   };
 }
 

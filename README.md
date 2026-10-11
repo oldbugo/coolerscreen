@@ -34,15 +34,23 @@ To change the picture later, just start the app again.
 
 ## Using it
 
-The app opens on the **Gallery**: every clip as a large picture (hover to play it), with "On screen", "File missing" or
-"Needs re-make" where it applies, and an **Add clip** tile. Click a clip to open it: a preview shaped like the screen, the
-**Loop** choices, **Size and position**, and the space it needs; the clip list stays on the left and "‹ Gallery" goes back.
+The app opens on **Browse**: your clips ("My clips": every clip as a large picture, hover to play it, with "On screen",
+"File missing" or "Needs re-make" where it applies, and an **Add clip** tile) plus any **sources** you turned on, each with
+a checkbox at the top so you can show or hide it. Click a clip to open it: a preview shaped like the screen, the **Loop**
+choices, **Size and position**, and the space it needs; the clip list stays on the left and "‹ Gallery" goes back.
 The bar at the top shows the screen's status and what is **on screen now**; the gear opens **Settings**.
 
-- **Lovingcool themes** (tab next to Gallery): the vendor's free online theme library for this screen (about 50 themes at
-  2400x1080), with pictures, loaded as you scroll. **Add to gallery** downloads that theme's `.ht` file into your Gallery
-  folder (with progress); after that it is a clip like any other. Nothing is downloaded unless you click; the list is
-  cached for a day ("Refresh" reloads it). Themes come from Lovingcool's library and remain theirs.
+- **Sources** (Settings > Sources; all off until you turn them on, then they get a checkbox in Browse; see
+  [docs/sources.md](docs/sources.md)):
+  - **Lovingcool themes** and **Other brands (same platform)**: the vendor platform's free online theme libraries for this
+    screen (about 50 + 31 themes). **Add to gallery** downloads the theme. Lists are cached for a day; themes remain theirs.
+  - **Wallpaper Engine**: your Workshop wallpapers and own projects (read-only). Video wallpapers are copied into the Gallery
+    folder; scene and web wallpapers are **recorded** (desktop app, Wallpaper Engine running): they open in a separate
+    window for the length you choose (default 20 s), are recorded, and the window closes again. Your desktop wallpaper is
+    not changed. (The wallpaper's own sound, if any, may play while it records.)
+  - **Lively Wallpaper**: video, GIF and picture wallpapers from your Lively library are copied; web/app ones aren't supported.
+  - **Add from link**: adds an "Add from link…" button for a direct link to a video, GIF, image or theme file (up to 500 MB).
+  - **Plug-ins**: `.js` files in `Documents\CoolerScreen\Sources` (a plug-in is a program; enable only ones you trust).
 - **Adding clips:** videos, GIFs, images, the vendor app's downloaded **theme files (`.ht`)** and plain `.zip` files
   containing a video or image. Drop files anywhere on the window (several at once is fine) or use **+ Add clip**. Nothing
   is converted when you add a clip.
