@@ -1,14 +1,21 @@
 //! Shared core for the Tauri app and the cs2 CLI.
 pub mod core;
 pub mod device;
+pub mod sources;
 
 use crate::core::api::Backends;
+use crate::core::paths;
 use std::sync::Arc;
 
-/// The media engine and sources the app runs with. WS2 (`media/`) and WS3 (`sources/`) replace the stand-ins here
-/// when they land. `COOLERSCREEN_FAKE_MEDIA=1` uses core's fake engine (no ffmpeg; forces the fake screen).
+/// The media engine and sources the app runs with (the seam where WS2/WS3 plug into the core).
+/// `COOLERSCREEN_FAKE_MEDIA=1` uses core's fake engine (no ffmpeg; forces the fake screen).
 pub fn backends() -> Backends {
     let mut b = Backends::default();
+    b.sources = Arc::new(crate::core::sources_adapter::Catalog::new(crate::core::sources_adapter::Env {
+        data_dir: paths::base(),
+        sources_dir: paths::sources_dir(),
+        ffmpeg: paths::ffmpeg(),
+    }));
     if std::env::var("COOLERSCREEN_FAKE_MEDIA").is_ok_and(|v| !v.is_empty() && v != "0") {
         b.media = Arc::new(crate::core::fake_media::FakeMedia::default());
     }

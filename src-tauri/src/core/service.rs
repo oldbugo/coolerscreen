@@ -692,7 +692,13 @@ impl App {
             .iter()
             .map(|p| {
                 let id = p.id().to_string();
-                let det = p.detect(&self.source_ctx(&id));
+                let on = c["enabled"][&id] == true;
+                // A disabled plug-in is never read (it decides which addresses the app contacts).
+                let det = if p.kind() == "plugin" && !on {
+                    super::api::Detect { available: true, status: "Not loaded (disabled)".into() }
+                } else {
+                    p.detect(&self.source_ctx(&id))
+                };
                 let mut row = json!({
                     "id": id, "name": p.name(), "description": p.description(), "kind": p.kind(), "enabled": c["enabled"][&id] == true,
                     "options": p.options(), "values": c["options"].get(&id).cloned().unwrap_or(json!({})),

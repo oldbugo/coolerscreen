@@ -16,6 +16,7 @@ pub mod recycle;
 pub mod scheduler;
 pub mod service;
 pub mod settings;
+pub mod sources_adapter;
 pub mod theme;
 #[cfg(test)]
 mod tests_app;

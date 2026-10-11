@@ -30,6 +30,37 @@ pub fn documents_dir() -> PathBuf {
     dirs::document_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Documents"))
 }
 
+/// Documents\CoolerScreen\Sources (JSON plug-ins), or COOLERSCREEN_SOURCES_DIR.
+pub fn sources_dir() -> PathBuf {
+    if let Some(p) = std::env::var_os("COOLERSCREEN_SOURCES_DIR") {
+        return p.into();
+    }
+    documents_dir().join("CoolerScreen").join("Sources")
+}
+
+/// ffmpeg: CS_FFMPEG, else ffmpeg.exe next to the app exe (bundled), else the repo's ffmpeg-static (development),
+/// else "ffmpeg" on PATH.
+pub fn ffmpeg() -> PathBuf {
+    if let Some(p) = std::env::var_os("CS_FFMPEG") {
+        return p.into();
+    }
+    let exe_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            for c in [d.join(exe_name), d.join("resources").join(exe_name)] {
+                if c.exists() {
+                    return c;
+                }
+            }
+        }
+    }
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("node_modules").join("ffmpeg-static").join(exe_name);
+    if dev.exists() {
+        return dev;
+    }
+    PathBuf::from(exe_name)
+}
+
 /// The repo / install folder holding `scripts/*.ps1` (setup, restore, reconnect).
 pub fn scripts_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("COOLERSCREEN_SCRIPTS") {
