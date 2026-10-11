@@ -442,6 +442,22 @@ mod tests {
     }
 
     #[test]
+    fn fake_send_recovers_from_no_reply() {
+        // The upload command gets no reply (nothing streamed yet): restart once, then upload.
+        let dir = tempfile::tempdir().unwrap();
+        let ok = mjpeg_file(dir.path(), "ok.mp4");
+        let d = DeviceService::fake("noreply", 0.01, false);
+        let mut msgs = vec![];
+        let r = d.send_files(&[(ok.clone(), Slot::Standby)], true, &mut |_, m, _, _| msgs.push(m.to_string())).unwrap();
+        assert_eq!(r["restarted"], json!(true));
+        assert!(msgs.iter().any(|m| m.contains("did not answer")));
+        // ... and when the screen does not come back after the restart: failed USB (Reconnect).
+        let stuck = DeviceService::fake("noreply-stuck", 0.01, false);
+        let e = stuck.send_files(&[(ok, Slot::Standby)], true, &mut |_, _, _, _| {}).unwrap_err();
+        assert!(e.failed_usb, "{e}");
+    }
+
+    #[test]
     fn fake_setup_restore_reconnect() {
         let d = DeviceService::fake("serial", 0.01, false);
         assert_eq!(d.state()["needsSetup"], json!(true));
