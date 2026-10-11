@@ -5,10 +5,18 @@ description = "CoolerScreen 2.0 spike: Tauri shell + Rust device layer"
 edition = "2021"
 default-run = "coolerscreen"
 
+[lib]
+name = "cs_core"
+path = "src/lib.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+nusb = "0.2.7"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+serialport = "4.10.1"
 tauri = { version = "2", features = [] }
 
 [profile.release]
