@@ -300,6 +300,7 @@ impl App {
             .original(oid)
             .priority(Priority::Selected)
             .auto_priority()
+            .cancel_on_blur() // leaving a clip stops its search (the UI searches again when the clip is reopened)
             .visible();
         let (app, oid2, body) = (self.arc(), oid.to_string(), body.clone());
         let h = self.sched.submit(spec, move |ctx| app.search_loops(ctx, &oid2, &body));
@@ -400,11 +401,14 @@ impl App {
         let req = super::api::LoopCardsReq { file: src.to_path_buf(), dir, candidates, duration, fps };
         let o = self.lib.read_original(oid);
         let res = self.media.resources(MediaTask::Cards, o.as_ref().map(probe_of).as_ref());
-        let spec = TaskSpec::new("cards", "Making the loop previews", res).original(oid).priority(Priority::Selected).auto_priority();
+        let spec = TaskSpec::new("cards", "Making the loop previews", res).original(oid).priority(Priority::Selected).auto_priority().preemptible();
         let (app, oid2) = (self.arc(), oid.to_string());
         self.sched.submit(spec, move |ctx| {
             let r = app.media.loop_cards(ctx, &req);
-            app.cards_pending.lock().unwrap().remove(&oid2);
+            // Paused for more important work: it runs again later, so the cards are still pending.
+            if !(r.is_err() && ctx.is_cancelled() && ctx.check().err().is_some_and(|e| e.code_is("preempted"))) {
+                app.cards_pending.lock().unwrap().remove(&oid2);
+            }
             r.map(|_| Value::Null)
         });
     }
