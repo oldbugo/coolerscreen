@@ -80,6 +80,7 @@ pub fn run(ffmpeg: &Path, args: &[String], cancel: &CancelToken, on_time: Option
     }
     cmd.args(args).stdout(if on_time.is_some() { Stdio::piped() } else { Stdio::null() }).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| MediaError::Ffmpeg(format!("could not start {}: {e}", ffmpeg.display())))?;
+    super::sys::adopt_child(&child); // killed with the app
     let stderr = child.stderr.take().unwrap();
     let stdout = child.stdout.take();
     std::thread::scope(|s| {
@@ -115,6 +116,7 @@ pub fn run_capture(ffmpeg: &Path, args: &[String], cancel: &CancelToken, on_byte
     let mut cmd = command(ffmpeg);
     cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| MediaError::Ffmpeg(format!("could not start {}: {e}", ffmpeg.display())))?;
+    super::sys::adopt_child(&child); // killed with the app
     let stderr = child.stderr.take().unwrap();
     let mut stdout = child.stdout.take().unwrap();
     std::thread::scope(|s| {
@@ -150,23 +152,52 @@ pub fn run_capture(ffmpeg: &Path, args: &[String], cancel: &CancelToken, on_byte
     })
 }
 
-/// `ffmpeg -i file` stderr (ffprobe is not bundled). Not cancellable (it returns in milliseconds).
+/// How long a probe may take before it is killed (a hung network share or a stalled device read would otherwise
+/// block the probe task forever). A normal probe takes 30-100 ms.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `ffmpeg -i file` stderr (ffprobe is not bundled), killed after [`PROBE_TIMEOUT`].
 pub fn probe_text(ffmpeg: &Path, file: &Path) -> Result<String> {
+    probe_text_timeout(ffmpeg, file, PROBE_TIMEOUT)
+}
+
+pub fn probe_text_timeout(ffmpeg: &Path, file: &Path, timeout: Duration) -> Result<String> {
     let mut c = Command::new(ffmpeg);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000 | 0x0000_4000);
     }
-    let out = c
+    let mut child = c
         .args(["-hide_banner", "-nostdin", "-i"])
         .arg(file)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| MediaError::Ffmpeg(format!("could not start {}: {e}", ffmpeg.display())))?;
-    Ok(String::from_utf8_lossy(&out.stderr).into_owned())
+    super::sys::adopt_child(&child);
+    let stderr = child.stderr.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut e = String::new();
+        let _ = BufReader::new(stderr).read_to_string(&mut e);
+        e
+    });
+    let t0 = std::time::Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            break;
+        }
+        if t0.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            // the reader ends when the pipe closes with the process
+            let _ = reader.join();
+            return Err(MediaError::Ffmpeg(format!("reading {} took longer than {} s", file.display(), timeout.as_secs())));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    Ok(reader.join().unwrap_or_default())
 }
 
 fn parse_hms(t: &str) -> Option<f64> {
@@ -195,5 +226,19 @@ mod tests {
     fn hms() {
         assert_eq!(parse_hms("00:01:02.500000"), Some(62.5));
         assert_eq!(parse_hms("N/A"), None);
+    }
+
+    /// A probe that never gets data (ffmpeg waiting for a TCP client, like a hung share) is killed at the timeout.
+    #[test]
+    fn probe_times_out() {
+        let ff = locate();
+        if !ff.is_file() {
+            return;
+        }
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let t0 = std::time::Instant::now();
+        let r = probe_text_timeout(&ff, Path::new(&format!("tcp://127.0.0.1:{port}?listen=1")), Duration::from_millis(800));
+        assert!(matches!(r, Err(MediaError::Ffmpeg(_))), "{r:?}");
+        assert!(t0.elapsed() < Duration::from_millis(2500), "{:?}", t0.elapsed());
     }
 }

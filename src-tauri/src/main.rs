@@ -200,6 +200,8 @@ fn main() {
             if let Some(mut c) = app.state::<Sidecar>().child.lock().unwrap().take() {
                 let _ = c.kill();
             }
+            // ffmpeg children (Job Object) and the media scratch files (raw intermediates)
+            cs_core::media::shutdown();
         }
     });
 }

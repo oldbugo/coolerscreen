@@ -16,6 +16,7 @@ pub mod gpu;
 pub mod graph;
 pub mod loops;
 pub mod probe;
+pub mod sys;
 pub mod verify;
 
 use std::path::PathBuf;
@@ -123,6 +124,22 @@ impl MediaConfig {
         });
         let work_dir = std::env::temp_dir().join("CoolerScreen-media");
         MediaConfig { ffmpeg, base_dir, work_dir }
+    }
+}
+
+/// App exit: kill every ffmpeg the media pipeline (or anyone using [`sys::adopt_child`]) started, then delete this
+/// process's scratch folders (raw intermediates can be gigabytes). Safe to call more than once. Even without this
+/// call, the Job Object kills the children when the process ends and the next start deletes the folders.
+pub fn shutdown() {
+    sys::kill_adopted_children();
+    let mut dirs: Vec<PathBuf> = encode::RUN_DIRS.lock().unwrap().clone();
+    dirs.push(encode::default_run_dir());
+    for _ in 0..20 {
+        dirs.retain(|d| !sys::remove_tree_best_effort(d) && d.exists());
+        if dirs.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25)); // killed processes release their files
     }
 }
 
