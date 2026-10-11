@@ -7,6 +7,9 @@
 use cs_core::device::{self, ops, Slot};
 use std::time::Instant;
 
+#[path = "cs2/recovery.rs"]
+mod recovery;
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match args.first().map(String::as_str) {
@@ -78,8 +81,12 @@ fn main() {
             wait_job(app, r["jobId"].as_str().unwrap_or(""))
         }),
         Some("core-send") if args.len() >= 2 => core_send(std::path::Path::new(&args[1])),
+        Some("unstick") => recovery::unstick(),
+        Some("recover-race-delete") => recovery::race_delete(),
+        Some("delete-ota") => recovery::delete_ota(),
         _ => {
             eprintln!("usage: cs2 info | state | restart | upload <file.mp4> [--intro] | poll <count> <seconds>");
+            eprintln!("       cs2 unstick | recover-race-delete | delete-ota   (recovery tools, see tools/README.md)");
             eprintln!("       cs2 core-check | core-state | core-restart | core-send <library>/<oid>/versions/<vid>  (COOLERSCREEN_HOME = scratch)");
             2
         }

@@ -285,8 +285,7 @@ async function importFiles(files) {
   let lastId = null;
   for (const it of items) {
     try {
-      const localPath = window.cs && window.cs.pathFor ? window.cs.pathFor(it.file) : '';
-      lastId = (await backend.importFile(it.file, localPath)).id;
+      lastId = (await backend.importFile(it.file)).id;
     } catch (e) {
       openDialog({ title: 'Couldn\'t add this file', body: /can't read/i.test(e.message) ? e.message : `CoolerScreen can't read "${it.name}". It may be damaged or in a format that isn't supported.`, actions: [{ label: 'OK', value: true, kind: 'primary' }] });
     }

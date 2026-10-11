@@ -1,7 +1,7 @@
 [package]
 name = "coolerscreen"
-version = "2.0.0-alpha.0"
-description = "CoolerScreen 2.0 spike: Tauri shell + Rust device layer"
+version = "2.0.0"
+description = "CoolerScreen: put your own videos on the Lovingcool SC70 cooler screen"
 edition = "2021"
 default-run = "coolerscreen"
 
