@@ -7,17 +7,22 @@ loops forever. You only need the app while you are changing the picture.
 **What it does NOT do:** it installs no service, no startup entry and no background program. When you close it, the screen
 keeps playing on its own, even after you restart or shut down the PC.
 
-## Quick start (Windows, no programming needed)
+## Quick start (Windows 10/11, no programming needed)
 
 1. **Close and uninstall LOVINGCOOL MONITOR.** (Only one program can talk to the screen at a time, and after step 4 the
    vendor app can no longer see the screen at all. You can undo this later, see "Undo".)
-2. **Download** `CoolerScreen-<version>-win-x64.zip` from the [Releases page](https://github.com/oldbugo/coolerscreen/releases).
-   **Before extracting:** right-click the zip > **Properties** > tick **Unblock** > OK (Windows tags downloaded files).
-   Then **extract** it (right click > Extract All) somewhere you will find it again, for example your Documents folder.
-3. **Double-click `CoolerScreen.exe`.** The CoolerScreen window opens. The app is **not code-signed**: Smart App Control
-   normally allows it because it is the unmodified official Electron runtime. If Windows still blocks it, choose
-   **More info > Run anyway**; if that is not offered, use the browser fallback below.
-4. **Click "Set up screen"** in the yellow bar at the top (shown until the setup is done) and approve the Windows prompt. This is needed only once per PC.
+2. **Download** `CoolerScreen_<version>_x64-setup.exe` from the [Releases page](https://github.com/oldbugo/coolerscreen/releases).
+   **Before running it:** right-click the file > **Properties** > tick **Unblock** > OK (Windows tags downloaded files).
+   *Prefer no installer?* Download `CoolerScreen-<version>-win-x64.zip` instead, unblock it the same way, extract it
+   somewhere you will find it again, and run `CoolerScreen.exe` from there.
+3. **Run the setup.** It installs for your user only (no administrator prompt) into `%LOCALAPPDATA%\CoolerScreen`, adds a
+   Start Menu shortcut and offers a desktop shortcut. The app is **not code-signed**, so Windows may say "Windows protected
+   your PC": choose **More info > Run anyway**. (If Smart App Control blocks it with no way to continue, use the zip, or turn
+   Smart App Control off in Windows Security if you are comfortable with that.) **Upgrading from CoolerScreen 1.x:** just run
+   the setup. It removes the old program files (close the old app first), points your existing Start Menu / Desktop
+   "CoolerScreen" shortcut at the new app, and leaves your clips, versions and settings alone.
+4. **Open CoolerScreen and click "Set up screen"** in the yellow bar at the top (shown until the setup is done) and approve the
+   Windows prompt. This is needed only once per PC.
    - *What it does:* switches the screen from Windows' standard serial (COM port) driver to **Microsoft's built-in WinUSB
      driver**. Only the screen's own USB entry is changed, nothing else on your PC.
    - *Why:* the screen's firmware turns its display off about 30 seconds after Windows closes the serial port. With
@@ -28,9 +33,27 @@ keeps playing on its own, even after you restart or shut down the PC.
    memory writes slowly); the screen restarts and shows the clip when it ends.
 6. **Close the app** (close the window). Done: the screen loops your clip forever.
 
-To change the picture later, just start the app again.
+To change the picture later, just start the app again. To uninstall: Windows Settings > Apps > CoolerScreen (your clips and
+settings are kept).
 
-*Browser fallback (needs Node.js 18+ from nodejs.org):* run `scripts\start-browser.bat` from the extracted `resources\app` folder (or `npm start` in the source tree); the app opens in your browser instead of its own window.
+## What changed since 1.2
+
+CoolerScreen 2.0 is a new engine under the same library; your clips, versions and settings carry over with no migration.
+
+- **A native app instead of Electron + Node:** Rust and the system WebView2. There is no Node server, no browser mode and no
+  bundled Chromium: the download is about a quarter of the size, it starts faster and uses less memory.
+- **Faster work:** thumbnails, loop search, estimates and conversion run in a Rust media pipeline around ffmpeg, scheduled
+  by priority (the clip you are looking at first), several at a time, and cancelled when you move on.
+- **Smoother previews:** previews, loop cards and thumbnails stream from a small local media server, so seeking and looping
+  work on long clips.
+- **A proper window:** seamless frameless look with Windows 11 Snap Layouts on the maximise button, remembers its size and
+  position, and asks inside the app before closing during an upload.
+- **Installer and portable zip**, a real app icon, and the recovery tools bundled as `cs2.exe`.
+- **Sources:** same built-in sources; plug-ins are now declarative `.json` files (no code), see [docs/sources.md](docs/sources.md).
+- Gone: the browser fallback (`npm start`), the Electron app, the `coolerscreen` command line (use the app, or `cs2.exe` for
+  recovery).
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Using it
 
@@ -50,7 +73,7 @@ The bar at the top shows the screen's status and what is **on screen now**; the 
     not changed. (The wallpaper's own sound, if any, may play while it records.)
   - **Lively Wallpaper**: video, GIF and picture wallpapers from your Lively library are copied; web/app ones aren't supported.
   - **Add from link**: adds an "Add from link…" button for a direct link to a video, GIF, image or theme file (up to 500 MB).
-  - **Plug-ins**: `.js` files in `Documents\CoolerScreen\Sources` (a plug-in is a program; enable only ones you trust).
+  - **Plug-ins**: declarative `.json` files in `Documents\CoolerScreen\Sources` that describe a web API (no code; they stay off until you enable them, see the docs link above).
 - **Adding clips:** videos, GIFs, images, the vendor app's downloaded **theme files (`.ht`)** and plain `.zip` files
   containing a video or image. Drop files anywhere on the window (several at once is fine) or use **+ Add clip**. Nothing
   is converted when you add a clip.
@@ -96,18 +119,18 @@ The bar at the top shows the screen's status and what is **on screen now**; the 
 
 Settings and versions live in `%APPDATA%\CoolerScreen\`; your original clips are in the Gallery folder.
 
+
 ## Undo / restore the original driver
 
 In the app: **Settings (gear) > Advanced > Restore original driver** (approve the Windows prompt). Windows installs the normal COM-port
 driver again and LOVINGCOOL MONITOR can see the screen again. (The screen will then switch its display off 30 s after any
 program closes its port. That is how the vendor software works, which is why it must stay running.)
-Command line equivalent: `node.exe bin\coolerscreen.js restore`.
 
 ## Troubleshooting
 
 | Problem | What to do |
 |---|---|
-| "Windows couldn't connect to the screen at startup" (banner with a Reconnect button), or the screen is missing and Device Manager shows "Unknown USB Device (Device Descriptor Request Failed)" | A known quirk: after a PC boot Windows sometimes fails to enumerate the screen (the screen itself keeps playing its loop). Click **Reconnect** (or run `node.exe bin\coolerscreen.js reconnect`) and approve the Windows prompt. It power-cycles only that one USB port, which fixes it immediately. Nothing is installed or changed permanently. |
+| "Windows couldn't connect to the screen at startup" (banner with a Reconnect button), or the screen is missing and Device Manager shows "Unknown USB Device (Device Descriptor Request Failed)" | A known quirk: after a PC boot Windows sometimes fails to enumerate the screen (the screen itself keeps playing its loop). Click **Reconnect** and approve the Windows prompt. It power-cycles only that one USB port, which fixes it immediately. Nothing is installed or changed permanently. |
 | "Screen not responding" (it keeps playing but doesn't answer) | Seen after the screen has played for a while. Click **Restart screen** (top banner, or Settings > Screen): it sends the screen's restart command, waits for it to come back and checks it. The app also does this by itself once when a check or the start of an upload gets no reply (never in the middle of an upload). If the screen doesn't come back, use **Reconnect**. |
 | "Screen not found" | Check the USB cable/header and that the cooler has power. Unplug and replug USB, then **Check again** (click the status pill at the top). |
 | Banner says the screen "needs setup" again | The driver was reset (moving the internal USB header to another port, or a big Windows update). Click "Set up screen" again. |
@@ -116,7 +139,22 @@ Command line equivalent: `node.exe bin\coolerscreen.js restore`.
 | Clip is "too big for the screen" | Choose a shorter part or "Best that fits". The screen only has about 9 MB for your clip. Garbage on screen means an oversize file got through, so make a smaller version. |
 | Clip plays too fast or too slow | It was made by an older CoolerScreen at a different frame rate. Use **Re-make** on that version. |
 | The setup says it failed | Read `%TEMP%\coolerscreen-setup.log` and open an issue with its contents. |
-| Browser page does not open | Open http://127.0.0.1:8765/ yourself (the black window prints the exact address). |
+| The window is blank or "must be started from its own window" | CoolerScreen needs Microsoft's WebView2 runtime (part of Windows 11 and of current Windows 10). Install the "Evergreen Bootstrapper" from Microsoft's WebView2 page, then start the app again. |
+| The window opened off-screen after unplugging a monitor | Delete `%APPDATA%\CoolerScreen\window.json`; the window then opens at its default place. (Positions outside every connected monitor are ignored automatically.) |
+
+### Recovery tools (stuck screen)
+
+If an upload was interrupted and the screen now freezes, shows a broken picture, or never answers, close CoolerScreen and
+use `cs2.exe` from its folder (`%LOCALAPPDATA%\CoolerScreen` for the setup, or the extracted zip). In PowerShell, one command
+per line:
+
+    cd $env:LOCALAPPDATA\CoolerScreen
+    .\cs2.exe info                  # does the screen answer? (restarts it once if not)
+    .\cs2.exe restart               # restart it and wait for it to come back
+    .\cs2.exe unstick               # an upload stopped halfway and the screen waits for the rest of the data
+    .\cs2.exe recover-race-delete   # a clip that cannot be played freezes the screen at every boot: deletes it right after boot
+
+Then send a clip with the app. More detail in [tools/README.md](tools/README.md).
 
 ### Screen stays on when the PC is off
 
@@ -128,39 +166,65 @@ when the PC is off and the screen turns off with it. Note: this also stops USB c
 
 ## For developers
 
-Needs Node.js 18+ (Windows is the tested platform).
+### Build
+
+Needs Windows 10/11, [Rust](https://rustup.rs) (stable, MSVC toolchain), Node.js 18+ (only to fetch the Tauri CLI and
+`ffmpeg.exe`) and the WebView2 runtime.
 
     git clone https://github.com/oldbugo/coolerscreen
     cd coolerscreen
-    npm install            # ffmpeg-static downloads ffmpeg.exe in its install script
-    npm start              # web app on http://127.0.0.1:8765/ (browser)
-    npm run app            # same app in a desktop window (Electron)
+    npm install                     # Tauri CLI + ffmpeg-static (ffmpeg.exe, bundled into the app)
+    npx tauri dev                   # run the app with the frontend from public/
+    cargo test --manifest-path src-tauri/Cargo.toml     # unit tests (no screen needed)
+    powershell -ExecutionPolicy Bypass -File scripts\make-release.ps1   # installer + portable zip in dist\
 
-npm 11 asks you to approve dependency install scripts; `package.json` already lists the needed ones under `allowScripts`
-(`ffmpeg-static`, `@serialport/bindings-cpp`, `usb`). If ffmpeg.exe is missing afterwards, run `npm approve-scripts` and
-reinstall. Build the release zip with `powershell -ExecutionPolicy Bypass -File scripts\make-release.ps1` (output in `dist\`).
-Set `COOLERSCREEN_HOME` to keep library/settings in another folder.
+npm 11 asks you to approve dependency install scripts; `package.json` already lists `ffmpeg-static` under `allowScripts`.
+If `node_modules\ffmpeg-static\ffmpeg.exe` is missing afterwards, run `npm approve-scripts` and reinstall.
+`scripts\install-local.ps1` installs your own build for the current user (the same place and shortcuts the old 1.x local
+install used); `scripts\uninstall-local.ps1` undoes it.
 
-### CLI
+Testing without a screen: set `COOLERSCREEN_FAKE_DEVICE=1` (or `winusb`, `serial`, `none`, `failedusb`, `busy`, `noreply`,
+`noreply-stuck` to simulate those states; `COOLERSCREEN_FAKE_FAIL=1` makes uploads fail halfway). Nothing then touches
+USB, the COM port or the driver scripts. `COOLERSCREEN_HOME` and `COOLERSCREEN_GALLERY` point the library and the Gallery
+folder at scratch folders (always do this when experimenting: the default is your real library).
 
-    node bin/coolerscreen.js list                     # clips (originals) and their versions
-    node bin/coolerscreen.js add <file>               # copy into the Gallery folder
-    node bin/coolerscreen.js make <clip> [--start sec] [--length sec] [--quality auto|1-100] [--zoom 0.2-4] [--x 0-1] [--y 0-1]
-                                         [--corners 0-300] [--detail 0-100] [--blend 0-1.5]
-    node bin/coolerscreen.js send <version id>        # put a version on the screen
-    node bin/coolerscreen.js upload <file> [make options] [--no-send]   # add + make + send
-    node bin/coolerscreen.js setup         # one-time WinUSB driver setup (UAC prompt)
-    node bin/coolerscreen.js restore       # undo the setup
-    node bin/coolerscreen.js reconnect     # reset the USB port after a failed boot-time enumeration
-    node bin/coolerscreen.js transport     # winusb | serial | none
-    node bin/coolerscreen.js clear startup|standby
-    node bin/coolerscreen.js slots
-    node bin/coolerscreen.js info
-    node bin/coolerscreen.js themes [--page n] [--download <themeId>]   # Lovingcool's online themes for this screen
+### Architecture
 
-Testing without a screen: set `COOLERSCREEN_FAKE_DEVICE=1` (or `serial`, `none`, `failedusb`, `busy` to simulate those
-states; `COOLERSCREEN_FAKE_FAIL=1` makes uploads fail halfway). Nothing then touches USB, the COM port or the driver
-scripts. `COOLERSCREEN_HOME` and `COOLERSCREEN_GALLERY` point the library and the Gallery folder elsewhere.
+    public/            the UI (plain JS modules, no build step); js/backend.js is its only door to the core
+    src-tauri/
+      src/main.rs      Tauri shell: registers the commands, starts the core and the media server
+      src/window/      frameless window: title bar, Snap Layouts overlay (snap.rs), remembered rectangle (rect.rs)
+      src/core/        the application core: library on disk, settings, Gallery folder watcher, scheduler, jobs,
+                       device service, media server, commands (commands.rs) and events
+      src/media/       the media engine around ffmpeg: probe, assets, loop search, estimate, convert (MJPEG for the screen)
+      src/sources/     Browse sources: Lovingcool themes, other brands, Wallpaper Engine, Lively, link, JSON plug-ins
+      src/device/      the screen: framing, WinUSB (nusb) and COM-port links, upload, restart
+      src/bin/cs2.rs   command-line hardware tests and recovery tools
+      installer-hooks.nsh   NSIS hooks (replaces a 1.x install)
+    scripts/           one-time driver scripts (bundled), make-release.ps1, install-local.ps1
+    docs/              v2/api-contract.md, sources.md, roadmap/, design/
+
+- **Commands and events.** The UI calls Tauri commands (`original_get`, `version_send`, ... full table in
+  [docs/v2/api-contract.md](docs/v2/api-contract.md)) and receives `cs:job`, `cs:library`, `cs:device` and `cs:app` events;
+  nothing polls. Long work returns a job id immediately.
+- **Scheduler.** Every job asks for units of resource classes (cpu, gpu, device, net, capture, io) and has a priority
+  (user > selected > visible > background). `set_focus` re-ranks queued work to the clip on screen; preemptible background
+  work yields to selected work; leaving a clip cancels its loop search; the screen is only ever touched by the one task that
+  holds `device`, and an upload is never cancelled. On exit all jobs are cancelled and their ffmpeg children end.
+- **Media server.** A loopback HTTP server on a random port with a random token in every path serves thumbnails, frames,
+  loop cards and previews with `Range` support (so `<video>` seeks and loops); the UI gets absolute URLs from the core.
+- **Window.** Frameless with a drawn title bar. Windows 11 shows Snap Layouts only when `WM_NCHITTEST` answers
+  `HTMAXBUTTON`, but WebView2 covers the window, so a tiny invisible native child window over the maximise button answers
+  that and forwards its mouse state to the page.
+- **Data** is unchanged from 1.x: `%APPDATA%\CoolerScreen\library\<clip id>\original.json` + `versions\<version id>\`, settings in
+  `settings.json`, the Gallery folder in `Documents\CoolerScreen\Gallery`.
+
+Related reading: [docs/roadmap/phase0-results.md](docs/roadmap/phase0-results.md) (measurements behind the move to Rust),
+[docs/roadmap/2026-10-11-next-iterations.md](docs/roadmap/2026-10-11-next-iterations.md), [docs/design/](docs/design/),
+[docs/sources.md](docs/sources.md).
+
+
+## Protocol and conversion notes
 
 ### How conversion works
 
@@ -212,9 +276,7 @@ sends that request, which is why the one-time setup fixes it. Setup is implement
 device class -> USBDevice, install `C:\Windows\INF\winusb.inf` for `USB\VID_33C3&PID_7791&MI_00`, add a
 `DeviceInterfaceGUIDs` value, restart the device); undo is `scripts/restore-serial.ps1` (`pnputil /remove-device`, `/scan-devices`).
 
-Code map: `src/device.js` (serial + framing), `src/usbScreen.js` (WinUSB), `src/deviceOps.js` (transport choice, retries, fake
-device), `src/convert.js` (ffmpeg), `src/library.js` (clips and versions), `src/gallery.js` (Gallery folder), `src/send.js`,
-`src/splash.js` (start-up logo), `src/slots.js`, `src/gate.js` (one-at-a-time queue), `src/server.js`, `public/`.
+
 
 ## Tested hardware
 

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.0.0 - 2026-10-11
+
+A new engine under the same library: CoolerScreen is now a native Windows app (Rust + the system WebView2) instead of
+Electron + Node. Your clips, versions and settings are used as they are, with no migration.
+
+- **Faster and lighter:** the media pipeline (probe, thumbnails, loop search, estimates, conversion) is written in Rust
+  around ffmpeg with a job scheduler that prioritises what you are looking at, runs independent work in parallel
+  (CPU, GPU and network limits) and cancels work you scrolled away from. See `docs/roadmap/phase0-results.md` and
+  `docs/v2/api-contract.md`.
+- **Smooth previews:** a small local media server (token-protected, loopback only) streams thumbnails, loop cards and
+  previews with seeking and looping.
+- **One window, no browser mode:** the Node server, the Electron runtime and the browser fallback are gone. The window is
+  seamless and frameless with Windows 11 **Snap Layouts** on the maximise button, remembers its size, position and
+  maximised state, and asks inside the app before closing during an upload.
+- **Installer:** a per-user setup (no administrator) that also replaces a 1.x install and keeps its shortcuts; plus a
+  portable zip. The app icon is now a screen glyph.
+- **Sources:** the built-in sources are ported to Rust; plug-ins are declarative `.json` files (no code), see
+  `docs/sources.md`. Wallpaper Engine recording uses Windows Graphics Capture directly.
+- **Recovery tools** are part of the app package as `cs2.exe` (`info`, `restart`, `unstick`, `recover-race-delete`,
+  `delete-ota`); the 1.x Node tools and the command-line `bin/coolerscreen.js` were removed.
+- Shutting the app down cancels all queued and running jobs and stops their ffmpeg processes.
+
 ## 1.2.0 - 2026-10-11
 
 - **Browse** replaces the Gallery/Lovingcool tabs: "My clips" plus a checkbox for each enabled source, merged in one grid
