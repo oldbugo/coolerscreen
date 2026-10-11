@@ -103,9 +103,8 @@ pub fn make_source_assets(ff: &Path, file: &Path, dir: &Path, info: &SourceInfo,
     let tmp = dir.join("proxy.tmp.mp4");
     let total = info.duration.unwrap_or(1.0).min(PROXY_MAX_SECONDS as f64).max(0.1);
     let on_time = |t: f64| progress(0.1 + 0.9 * (t / total).min(1.0), "Preparing the preview");
-    let caps = gpu::caps();
     let mut done = false;
-    if caps.nvdec && caps.nvenc && !info.rotated && gpu::wants_gpu(info) {
+    if gpu::use_gpu_proxy(info) {
         if let (Some(w), Some(h)) = (info.width, info.height) {
             let (pw, ph) = fit_within(w, h, 1600);
             let r = ffmpeg::run(

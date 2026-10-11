@@ -2,7 +2,8 @@
 //! - ONE decode pass gives both the 64x36 search frames and the 192x108 frames for the leader re-check (1.2 re-decoded
 //!   16 three-frame windows with separate ffmpeg seeks: 3-10 s). On the CPU path the frames are byte-identical to 1.2's
 //!   (same decoder, same `scale=WxH:flags=area,format=gray` per output), so the ranking is identical.
-//! - NVDEC + scale_cuda for HEVC / >2.5K / long sources (pre-scaled on the GPU to 768x432, so values differ slightly).
+//! - NVDEC + scale_cuda only for sources above 2.5K (pre-scaled on the GPU to 768x432, so values differ slightly and
+//!   the ranking can differ a little from 1.2's); 1080p HEVC gains nothing on the GPU and stays on the exact CPU path.
 //! - The comparison runs in Rust over rayon (1.2: 20-910 ms of JS).
 //! - Loop cards: 320x144 previews rendered straight at that size, all in parallel.
 //!
@@ -113,7 +114,7 @@ pub fn read_frames(ff: &Path, file: &Path, info: &SourceInfo, cache_dir: Option<
     }
     let expected = (info.duration.unwrap_or(0.0) * info.fps.unwrap_or(25.0)).round().max(1.0) as usize;
     let mut fr = None;
-    if gpu::use_nvdec(info) {
+    if gpu::use_nvdec_small(info) {
         match decode_dual(ff, file, true, expected, cancel, progress) {
             Ok(f) => fr = Some(f),
             Err(MediaError::Cancelled) => return Err(MediaError::Cancelled),
@@ -418,6 +419,87 @@ pub fn auto_blend(c: &LoopCandidate) -> f64 {
     js_round((b * OUT_FPS + 1e-6).floor() / OUT_FPS * 1000.0) / 1000.0
 }
 
+/// Small grey frames (source rate) from `start`: 1.2 grayFrames.
+fn gray_frames(ff: &Path, file: &Path, start: f64, dur: Option<f64>, max_frames: Option<usize>, w: usize, h: usize, cancel: &CancelToken) -> Result<Vec<Vec<u8>>> {
+    let mut a = crate::ff_args!["-ss", start.max(0.0), "-i", p(file)];
+    if let Some(d) = dur {
+        a.extend(crate::ff_args!["-t", d]);
+    }
+    if let Some(m) = max_frames {
+        a.extend(crate::ff_args!["-frames:v", m]);
+    }
+    a.extend(crate::ff_args!["-an", "-fps_mode", "passthrough", "-vf", format!("scale={w}:{h}:flags=area,format=gray"), "-f", "rawvideo", "pipe:1"]);
+    let b = ffmpeg::run_capture(ff, &a, cancel, None)?;
+    Ok(b.chunks_exact(w * h).map(|c| c.to_vec()).collect())
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct LoopPointPick {
+    pub end: f64,
+    pub length: f64,
+    pub similarity: f64,
+}
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct LoopPoint {
+    pub best: LoopPointPick,
+    pub current: LoopPointPick,
+    pub alternatives: Vec<LoopPointPick>,
+    pub searched: [f64; 2],
+}
+
+/// "Find best loop point" near the selection's end (convert.js findLoopPoint): the source frame within +-2 s of `end`
+/// most like the start frame (96x54 grey mean absolute difference), plus the current end and a few alternatives.
+pub fn loop_point(ff: &Path, file: &Path, start: f64, end: f64, duration: Option<f64>, fps: Option<f64>, cancel: &CancelToken) -> Result<LoopPoint> {
+    let sf = fps.filter(|f| *f > 0.0).unwrap_or(25.0);
+    let lo = (start + 0.5).max(end - 2.0);
+    let hi = duration.filter(|d| *d > 0.0).unwrap_or(end + 2.0).min(end + 2.0);
+    if !(hi > lo) {
+        return Err(MediaError::Invalid("The clip is too short to search for a loop point.".into()));
+    }
+    let (first, frames) = std::thread::scope(|s| {
+        let f = s.spawn(|| gray_frames(ff, file, start, None, Some(1), 96, 54, cancel));
+        let fr = gray_frames(ff, file, lo, Some(hi - lo), None, 96, 54, cancel);
+        (f.join().unwrap(), fr)
+    });
+    let first = first?.into_iter().next().ok_or_else(|| MediaError::Invalid("Could not read the start frame.".into()))?;
+    let frames = frames?;
+    if frames.is_empty() {
+        return Err(MediaError::Invalid("The clip is too short to search for a loop point.".into()));
+    }
+    let t0 = (lo * sf - 1e-6).ceil() / sf;
+    let mad = |a: &[u8], b: &[u8]| sad(a, b) as f64 / a.len() as f64;
+    let cands: Vec<(f64, f64)> = frames.iter().enumerate().map(|(i, f)| (js_round((t0 + i as f64 / sf) * 1000.0) / 1000.0, mad(&first, f))).collect();
+    let mut cur = cands[0];
+    for c in &cands {
+        if (c.0 - end).abs() < (cur.0 - end).abs() {
+            cur = *c;
+        }
+    }
+    let mut sorted = cands.clone();
+    sorted.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    let sim = |d: f64| js_round((100.0 - (d / 255.0) * 100.0) * 10.0) / 10.0;
+    let pick = |c: (f64, f64)| LoopPointPick {
+        end: c.0,
+        length: r3(js_round((c.0 - start) * OUT_FPS) / OUT_FPS),
+        similarity: sim(c.1),
+    };
+    let mut alts: Vec<(f64, f64)> = vec![];
+    for c in &sorted {
+        if alts.iter().all(|a| (a.0 - c.0).abs() > 0.3) {
+            alts.push(*c);
+        }
+        if alts.len() >= 4 {
+            break;
+        }
+    }
+    Ok(LoopPoint {
+        best: pick(sorted[0]),
+        current: pick(cur),
+        alternatives: alts.iter().skip(1).map(|c| pick(*c)).collect(),
+        searched: [lo, hi],
+    })
+}
+
 /// Card preview size.
 pub const CARD_W: u32 = 320;
 pub const CARD_H: u32 = 144;
@@ -426,7 +508,7 @@ pub const CARD_H: u32 = 144;
 /// in parallel straight at card size (1.2 rendered 2400x1080 then scaled, one at a time). Uses `c.blend` (0 if None).
 pub fn render_cards(ff: &Path, file: &Path, info: &SourceInfo, cands: &[LoopCandidate], out_dir: &Path, cancel: &CancelToken, progress: Progress) -> Result<Vec<PathBuf>> {
     std::fs::create_dir_all(out_dir)?;
-    let hw = gpu::use_nvdec(info);
+    let hw = gpu::use_nvdec_small(info);
     let done = AtomicU32::new(0);
     let one = |i: usize, c: &LoopCandidate, hw: bool| -> Result<PathBuf> {
         let out = out_dir.join(format!("loop-{i}.mp4"));

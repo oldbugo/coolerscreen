@@ -249,7 +249,7 @@ impl Engine {
         let mut blend = if is_image { 0.0 } else { req.blend.min(1.5).min(length / 2.0).min(start).max(0.0) };
         blend = (blend * DEVICE_FPS as f64 + 1e-6).floor() / DEVICE_FPS as f64;
         let corner_file = corner_mask_file(&self.cfg.ffmpeg, &self.cfg.base_dir, &req.corners, &req.mask, cancel)?;
-        let hw = gpu::use_nvdec(&info) && std::env::var_os("CS_NO_HW_CONVERT").is_none();
+        let hw = gpu::use_nvdec_convert(&info);
         Ok(Prep {
             file: file.to_path_buf(),
             start,

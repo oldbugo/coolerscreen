@@ -15,6 +15,7 @@ pub mod gpu;
 pub mod graph;
 pub mod loops;
 pub mod probe;
+pub mod verify;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
