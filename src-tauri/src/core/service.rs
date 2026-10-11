@@ -565,13 +565,21 @@ impl App {
         let n = items.len();
         let mut loop_started = false;
         let intro_first = items[0].1 == Slot::Startup;
-        let r = self.device.send_files(&items, true, &mut |frac, msg, _a, _b| {
+        let mut sent = 0u64;
+        let r = self.device.send_files(&items, true, &mut |frac, msg, a, b| {
             if frac > (n as f64 - 1.0) / (n as f64 + 0.1) {
                 loop_started = true;
             }
-            // frac runs over the uploads (n parts) plus 0.1 for the final restart.
-            let uploaded = (frac * (n as f64 + 0.1) / n as f64).min(1.0);
-            tctx.progress_bytes(frac, msg, (uploaded * bytes_total as f64).round() as u64, bytes_total);
+            // frac runs over the uploads (n parts) plus 0.1 for the final restart; (a, b) are the current file's bytes.
+            let idx = ((frac * (n as f64 + 0.1)).floor() as usize).min(n);
+            if b > 0 {
+                sent = sizes[..idx.min(n - 1)].iter().sum::<u64>() + a;
+            } else if idx >= n {
+                sent = bytes_total;
+            }
+            // Progress by bytes (the intro splash is small), the restart is the last 3 %.
+            let p = if idx >= n { 0.97 + 0.03 * (frac * (n as f64 + 0.1) - n as f64).clamp(0.0, 1.0) } else { 0.97 * sent as f64 / bytes_total.max(1) as f64 };
+            tctx.progress_bytes(p, msg, sent.min(bytes_total), bytes_total);
         });
         let record_splash = |s: &Option<(PathBuf, u64, String)>| {
             if let Some((_, size, id)) = s {

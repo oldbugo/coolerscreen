@@ -122,6 +122,7 @@ fn whole_flow_import_tune_save_send() {
     let j = wait_job(&app, r["jobId"].as_str().unwrap());
     assert_eq!(j["status"], "done", "{j}");
     assert_eq!(j["result"]["name"], "My clip");
+    assert_eq!(j["bytesSent"], j["bytesTotal"], "progress counts real bytes (splash + loop)");
     let s = app.settings.load();
     assert_eq!(s.slot("standby").unwrap()["versionId"], json!(vid));
     assert!(s.slot("startup").unwrap()["splash"].as_str().unwrap().starts_with("v1-"));

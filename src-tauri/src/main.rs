@@ -1,8 +1,7 @@
 // CoolerScreen 2.0 shell: Tauri 2 + system WebView2, seamless frameless window.
 // Backend (COOLERSCREEN_BACKEND):
-//   node (default until the Phase 1 workstreams land): the 1.2 Node backend runs as a sidecar and serves public/
-//        and /api on 127.0.0.1; the Rust core is created but not started (no watcher, one writer only).
-//   rust: the Rust core (src/core) serves the UI through Tauri commands/events and a local media server.
+//   rust (default): the Rust core (src/core) serves the UI through Tauri commands/events and a local media server.
+//   node (fallback): the 1.2 Node backend runs as a sidecar and serves public/ and /api on 127.0.0.1; the core is not started.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod window;
@@ -28,7 +27,7 @@ struct Sidecar {
 struct Media(#[allow(dead_code)] Mutex<Option<MediaServer>>);
 
 fn rust_backend() -> bool {
-    std::env::var("COOLERSCREEN_BACKEND").map(|v| v.eq_ignore_ascii_case("rust")).unwrap_or(false)
+    !std::env::var("COOLERSCREEN_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("node"))
 }
 
 // ---------- Node sidecar (COOLERSCREEN_BACKEND=node) ----------

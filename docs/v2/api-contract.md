@@ -209,7 +209,7 @@ land it returns stand-ins (`NoMedia` fails with code `unavailable`, `NoSources` 
 
 ## 6. Modes and test hooks
 
-- `COOLERSCREEN_BACKEND=node` (default until WS2–WS4 land): Phase 0 behaviour, Node sidecar serves the UI; the Rust
+- `COOLERSCREEN_BACKEND`: `rust` is the default since integration (2026-10-11); `node` = Phase 0 fallback, Node sidecar serves the UI; the Rust
   core does not start its gallery watcher (one writer only). `COOLERSCREEN_BACKEND=rust`: Rust commands + media server,
   no sidecar.
 - `COOLERSCREEN_FAKE_DEVICE=1|winusb|serial|none|failedusb|busy|noreply|noreply-stuck`, `COOLERSCREEN_FAKE_FAIL=1`:
