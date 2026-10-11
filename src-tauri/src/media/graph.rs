@@ -229,17 +229,74 @@ pub struct Base {
     pub head: String,
 }
 
+/// Where a video selection starts, by source frame (the loop search's startFrame convention: frame k is at k / srcFps).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Timing {
+    /// Selection start minus the blend (seconds; the time output frame 0 stands for).
+    pub x: f64,
+    /// First source frame used: the first frame at or after `x`.
+    pub f0: i64,
+    /// Input seek, on the source frame grid two frames before f0 (the seek only has to land early).
+    pub ss: f64,
+    /// Input duration from `ss` (one frame more than needed; the trim filter cuts exactly).
+    pub t: f64,
+    /// Frame-exact cut relative to `ss`: keep frames with trim_start <= ts < trim_end. 0.4-frame margins (trim rounds
+    /// to the stream timebase, so exact half frames are ambiguous at timescale = fps), so neither
+    /// the container's timescale nor the millisecond rounding of the stored start can move a frame (1.2 seeked to
+    /// round(start, ms) and could start a frame late at 30/60 fps or coarse timescales).
+    pub trim_start: f64,
+    pub trim_end: f64,
+}
+
+/// A start stored to the millisecond that is within 1.1 ms of a source frame means exactly that frame.
+pub fn snap_to_frame(start: f64, sf: f64) -> f64 {
+    let k = (start * sf).round();
+    if (start - k / sf).abs() <= 0.0011 {
+        k / sf
+    } else {
+        start
+    }
+}
+
+pub fn timing(o: &Base) -> Option<Timing> {
+    let sf = o.src_fps.filter(|f| *f > 0.0 && !o.is_image)?;
+    let fps = o.fps as f64;
+    let b = (o.blend * fps).round() / fps; // the blend is whole output frames
+    let x = snap_to_frame(o.start, sf) - b;
+    let f0 = (x * sf - 1e-6).ceil().max(0.0) as i64;
+    let s_idx = (f0 - 2).max(0);
+    let ss = s_idx as f64 / sf;
+    // the end: the first source frame at or after x + length + blend is not used
+    let f_end = ((x + o.length + b) * sf - 1e-6).ceil() as i64;
+    let trim_start = ((f0 - s_idx) as f64 - 0.4).max(0.0) / sf;
+    let trim_end = ((f_end - s_idx) as f64 - 0.4) / sf;
+    Some(Timing { x, f0, ss, t: trim_end + 1.0 / sf, trim_start, trim_end })
+}
+
 /// Source -> [base]: frame rate, framing, optional detail simplification, optional loop blend (convert.js baseGraph).
+/// Video frames are cut by timestamp with half-frame margins (trim), rebased on the first kept frame and shifted so
+/// that 0 is `x`: output frame n is the frame the fps filter picks for x + n/18, whatever the container's timescale or
+/// the seek's rounding, and a loop candidate's startFrame k renders frame k first.
 pub fn base_graph(o: &Base) -> String {
     let sigma = detail_sigma(o.detail);
-    let x = o.start - o.blend;
-    let lead = match (o.is_image, o.src_fps) {
-        (false, Some(sf)) if sf > 0.0 => 0f64.max((x * sf - 1e-6).ceil() / sf - x),
-        _ => 0.0,
+    // fps start_time=0: output frame 0 is time x even when the first source frame comes up to a frame later (a blend
+    // start off the source grid); without it the fps filter starts at that frame's slot and the stream is one frame
+    // short at the front (1.2 behaviour: blended versions began one output frame late).
+    let (shift, fps_opts) = match timing(o) {
+        Some(t) => {
+            // + 0.1 ms: at 24/48/60 fps some source frames fall exactly halfway between two output slots; the bias
+            // decides those ties the same way wherever the selection starts (microsecond rounding of the lead used to
+            // flip them). Far below the 1 ms+ margin of every non-tie frame, so 25/30 fps output is unchanged.
+            let lead = (t.f0 as f64 / o.src_fps.unwrap() - t.x).max(0.0) + 0.0001;
+            (
+                format!("trim=start={:.6}:end={:.6},setpts=PTS-STARTPTS,settb=AVTB,setpts=PTS+{lead:.6}/TB,", t.trim_start, t.trim_end),
+                ":start_time=0",
+            )
+        }
+        None => (String::new(), ""),
     };
-    let shift = if lead > 1e-4 { format!("settb=AVTB,setpts=PTS+{lead:.6}/TB,") } else { String::new() };
     let pre = format!(
-        "[0:v]{}{shift}fps={},{},setsar=1,format=yuv420p{}",
+        "[0:v]{}{shift}fps={}{fps_opts},{},setsar=1,format=yuv420p{}",
         o.head,
         o.fps,
         frame_graph(&o.frame, o.canvas.0, o.canvas.1, &o.flags),
@@ -278,6 +335,8 @@ pub fn device_graph(base: &Base, mask: &Mask, has_corner_file: bool) -> String {
 pub fn input_args(file: &str, base: &Base, corner_file: Option<&str>) -> Vec<String> {
     let mut a: Vec<String> = if base.is_image {
         crate::ff_args!["-loop", "1", "-framerate", base.fps, "-t", base.length, "-i", file]
+    } else if let Some(t) = timing(base) {
+        crate::ff_args!["-ss", format!("{:.6}", t.ss), "-t", format!("{:.6}", t.t), "-i", file]
     } else {
         crate::ff_args!["-ss", r3(base.start - base.blend), "-t", r3(base.length + base.blend), "-i", file]
     };
@@ -333,8 +392,11 @@ mod tests {
     #[test]
     fn graphs_match_js_strings() {
         // Strings produced by src/convert.js (1.2.0) for the same inputs.
+        // (without a source frame rate there is no frame-exact cut, so the 1.2 string is unchanged)
+        let mut b0 = base(Frame::default(), 0.0, 0.0);
+        b0.src_fps = None;
         assert_eq!(
-            base_graph(&base(Frame::default(), 0.0, 0.0)),
+            base_graph(&b0),
             "[0:v]fps=18,scale=2400:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=2400:1080,setsar=1,format=yuv420p[base]"
         );
         assert_eq!(
@@ -346,11 +408,13 @@ mod tests {
             mask_graph(&circle),
             "[base]split[a][b];[b]crop=92:90:54:494,format=gbrp,geq=r='r(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)':g='g(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)':b='b(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)',format=yuv420p[c];[a][c]overlay=54:494,format=yuv420p[m]"
         );
+        // 2.0: frame-exact cut (frames 42..199 of a 25 fps source, seek from frame 40), fps slots from x = 2 - 6/18
         let mut b = base(Frame::default(), 0.333, 30.0);
         b.start = 2.0;
+        assert_eq!(input_args("f.mp4", &b, None), ["-ss", "1.600000", "-t", "6.424000", "-i", "f.mp4"]);
         assert_eq!(
             base_graph(&b),
-            "[0:v]settb=AVTB,setpts=PTS+0.013000/TB,fps=18,scale=2400:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=2400:1080,setsar=1,format=yuv420p,gblur=sigma=1.05,split[ba][bb];[ba]trim=start_frame=6:end_frame=114,setpts=PTS-STARTPTS[bm];[bb]trim=start_frame=0:end_frame=6,setpts=PTS-STARTPTS[bp];[bm][bp]xfade=transition=fade:duration=0.333:offset=5.667,format=yuv420p[base]"
+            "[0:v]trim=start=0.064000:end=6.384000,setpts=PTS-STARTPTS,settb=AVTB,setpts=PTS+0.013433/TB,fps=18:start_time=0,scale=2400:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=2400:1080,setsar=1,format=yuv420p,gblur=sigma=1.05,split[ba][bb];[ba]trim=start_frame=6:end_frame=114,setpts=PTS-STARTPTS[bm];[bb]trim=start_frame=0:end_frame=6,setpts=PTS-STARTPTS[bp];[bm][bp]xfade=transition=fade:duration=0.333:offset=5.667,format=yuv420p[base]"
         );
         assert_eq!(
             mask_graph(&Mask::band(Edge::Left, 70.0)),

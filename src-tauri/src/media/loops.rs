@@ -141,7 +141,7 @@ pub fn read_frames(ff: &Path, file: &Path, info: &SourceInfo, cache_dir: Option<
 }
 
 fn decode_dual(ff: &Path, file: &Path, hw: bool, expected: usize, cancel: &CancelToken, progress: Progress) -> Result<LoopFrames> {
-    let n_dir = std::env::temp_dir().join("CoolerScreen-media");
+    let n_dir = super::encode::default_run_dir(); // same folder as the engine's scratch (cleaned on start)
     let _ = std::fs::create_dir_all(&n_dir);
     static SEQ: AtomicU32 = AtomicU32::new(0);
     let hi_file = n_dir.join(format!("hi-{}-{}.raw", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed)));
@@ -389,9 +389,13 @@ pub fn find_loops(
 
 /// 1.2's leader re-check read: three 192x108 grey frames from frame s0 (CPU decode, exact seek).
 pub fn seek_hi_frames(ff: &Path, file: &Path, sf: f64, s0: usize, cancel: &CancelToken) -> Result<Vec<Vec<u8>>> {
+    // 1.2 seeked to s0/sf + 1 ms, which drops frame s0 at fine timescales (read s0+1 on a 30 fps / 15360 file); seek
+    // two frames early and cut by timestamp with a 0.4-frame margin instead (as the version graph does).
+    let s_idx = s0.saturating_sub(2);
     let a = crate::ff_args![
-        "-ss", s0 as f64 / sf + 0.001, "-i", p(file), "-frames:v", 3, "-an", "-fps_mode", "passthrough", "-vf",
-        format!("scale={RW}:{RH}:flags=area,format=gray"), "-f", "rawvideo", "pipe:1"
+        "-ss", format!("{:.6}", s_idx as f64 / sf), "-i", p(file), "-an", "-fps_mode", "passthrough", "-vf",
+        format!("trim=start={:.6},scale={RW}:{RH}:flags=area,format=gray", ((s0 - s_idx) as f64 - 0.4).max(0.0) / sf),
+        "-frames:v", 3, "-f", "rawvideo", "pipe:1"
     ];
     let b = ffmpeg::run_capture(ff, &a, cancel, None)?;
     Ok(b.chunks_exact(RW * RH).map(|c| c.to_vec()).collect())

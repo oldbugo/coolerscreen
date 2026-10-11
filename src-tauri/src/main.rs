@@ -112,6 +112,8 @@ fn main() {
     app.run(|app, event| {
         if let RunEvent::Exit = event {
             app.state::<Core>().0.shutdown();
+            // ffmpeg children (Job Object) and the media scratch files (raw intermediates)
+            cs_core::media::shutdown();
         }
     });
 }
