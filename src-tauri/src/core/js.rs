@@ -106,20 +106,60 @@ pub fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_else(|_| "null".into())
 }
 
+/// Read a file, retrying briefly while a writer is replacing it (Windows sharing violations during the rename).
+pub fn read_text(p: &Path) -> std::io::Result<String> {
+    let mut tries = 0;
+    loop {
+        match std::fs::read_to_string(p) {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && tries < 20 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            r => return r,
+        }
+    }
+}
+
 pub fn read_json(p: &Path) -> Option<Value> {
-    let s = std::fs::read_to_string(p).ok()?;
+    let s = read_text(p).ok()?;
     serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()
 }
 
-/// Write via a .tmp file and rename (as 1.2's writeJson).
-pub fn write_json(p: &Path, v: &Value) -> std::io::Result<()> {
+/// Write `data` atomically: a uniquely named temp file next to `p`, then rename over `p` (retried while a reader has
+/// `p` open). Readers see the old or the new content, never a torn file; concurrent writers never share a temp file.
+pub fn write_atomic(p: &Path, data: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
     let tmp = {
         let mut s = p.as_os_str().to_owned();
-        s.push(".tmp");
+        s.push(format!(".{}-{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         std::path::PathBuf::from(s)
     };
-    std::fs::write(&tmp, pretty(v))?;
-    std::fs::rename(&tmp, p)
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+    }
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(&tmp, p) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && tries < 50 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
+        }
+    }
+}
+
+/// JSON.stringify(v, null, 2), written atomically (as 1.2's writeJson, without its shared temp name).
+pub fn write_json(p: &Path, v: &Value) -> std::io::Result<()> {
+    write_atomic(p, pretty(v).as_bytes())
 }
 
 /// ISO-8601 UTC timestamp with milliseconds (`new Date().toISOString()`).

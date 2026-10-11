@@ -190,7 +190,13 @@ impl Library {
         read_json(&self.o_dir(oid).join("original.json")).filter(Value::is_object)
     }
 
-    pub fn write_original(&self, o: &Value) -> CoreResult<Value> {
+    /// Every write and delete of a record holds this lock and re-reads the record inside it, so concurrent patches
+    /// are never lost and a deleted record is never written back.
+    fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.write_lock.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn write_original_locked(&self, o: &Value) -> CoreResult<Value> {
         let id = o["id"].as_str().filter(|i| is_id(i)).ok_or_else(|| CoreError::new("Bad clip id"))?;
         std::fs::create_dir_all(self.o_dir(id))?;
         write_json(&self.o_dir(id).join("original.json"), o)?;
@@ -198,10 +204,26 @@ impl Library {
         Ok(o.clone())
     }
 
+    /// Create (or replace) an original record.
+    pub fn write_original(&self, o: &Value) -> CoreResult<Value> {
+        let _g = self.lock();
+        self.write_original_locked(o)
+    }
+
     pub fn patch_original(&self, oid: &str, patch: &Value) -> CoreResult<Value> {
-        let _g = self.write_lock.lock().unwrap();
+        let _g = self.lock();
         let o = self.read_original(oid).ok_or_else(|| CoreError::new("Unknown clip"))?;
-        self.write_original(&js::merge(&o, patch))
+        self.write_original_locked(&js::merge(&o, patch))
+    }
+
+    /// Read-modify-write under the lock: `f(current)` returns the new record (None: leave it). `current` is None when
+    /// the record does not exist (any more).
+    pub fn update_original(&self, oid: &str, f: impl FnOnce(Option<Value>) -> Option<Value>) -> CoreResult<Option<Value>> {
+        let _g = self.lock();
+        match f(self.read_original(oid)) {
+            Some(o) => self.write_original_locked(&o).map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Newest first (by `created`).
@@ -242,8 +264,11 @@ impl Library {
         if !is_id(oid) {
             return;
         }
-        let _ = std::fs::remove_dir_all(self.o_dir(oid));
-        self.v_index.lock().unwrap().retain(|_, o| o != oid);
+        {
+            let _g = self.lock();
+            let _ = std::fs::remove_dir_all(self.o_dir(oid));
+            self.v_index.lock().unwrap().retain(|_, o| o != oid);
+        }
         self.bump();
     }
 
@@ -287,8 +312,12 @@ impl Library {
         Some((oid, v))
     }
 
-    pub fn write_version(&self, oid: &str, v: &Value) -> CoreResult<Value> {
+    fn write_version_locked(&self, oid: &str, v: &Value) -> CoreResult<Value> {
         let vid = v["id"].as_str().filter(|i| is_id(i)).ok_or_else(|| CoreError::new("Bad version id"))?;
+        // Never resurrect a deleted clip as a folder holding only versions.
+        if !self.o_dir(oid).join("original.json").exists() {
+            return Err(CoreError::new("This clip is no longer in the library.").status(404));
+        }
         std::fs::create_dir_all(self.v_dir(oid, vid))?;
         write_json(&self.v_dir(oid, vid).join("version.json"), v)?;
         self.v_index.lock().unwrap().insert(vid.to_string(), oid.to_string());
@@ -296,16 +325,24 @@ impl Library {
         Ok(v.clone())
     }
 
+    pub fn write_version(&self, oid: &str, v: &Value) -> CoreResult<Value> {
+        let _g = self.lock();
+        self.write_version_locked(oid, v)
+    }
+
     pub fn patch_version(&self, vid: &str, patch: &Value) -> CoreResult<Value> {
-        let _g = self.write_lock.lock().unwrap();
+        let _g = self.lock();
         let (oid, v) = self.find_version(vid).ok_or_else(|| CoreError::new("Unknown version"))?;
-        self.write_version(&oid, &js::merge(&v, patch))
+        self.write_version_locked(&oid, &js::merge(&v, patch))
     }
 
     pub fn delete_version(&self, vid: &str) -> bool {
-        let Some((oid, _)) = self.find_version(vid) else { return false };
-        let _ = std::fs::remove_dir_all(self.v_dir(&oid, vid));
-        self.v_index.lock().unwrap().remove(vid);
+        {
+            let _g = self.lock();
+            let Some((oid, _)) = self.find_version(vid) else { return false };
+            let _ = std::fs::remove_dir_all(self.v_dir(&oid, vid));
+            self.v_index.lock().unwrap().remove(vid);
+        }
         self.bump();
         true
     }
@@ -472,7 +509,7 @@ impl Library {
         }
         let ctx = self.context();
         let st = clean_settings(&o, body, ctx.max_seconds, &ctx.corners_default);
-        let _g = self.write_lock.lock().unwrap();
+        let _g = self.lock();
         let vs = self.versions(oid);
         let dup = vs.iter().find(|v| {
             v["status"] != "error"
@@ -500,7 +537,7 @@ impl Library {
             "id": new_id(), "originalId": oid, "n": num(n), "label": null, "created": js::iso_now(),
             "settings": settings, "notch": ctx.mask, "notchKey": ctx.notch_key, "result": null, "status": "queued", "error": null,
         });
-        self.write_version(oid, &v)
+        self.write_version_locked(oid, &v)
     }
 
     /// A copy of an old version with the same trim/quality/framing, the current notch and the screen's frame rate.
@@ -772,6 +809,48 @@ mod tests {
         assert_eq!(l.find_version(r["id"].as_str().unwrap()).unwrap().1["status"], "error");
         l.remove_original_cache(&oid);
         assert!(l.read_original(&oid).is_none());
+    }
+
+    #[test]
+    fn concurrent_patches_are_not_lost() {
+        let (d, l) = lib();
+        let src = d.path().join("clip.mp4");
+        std::fs::write(&src, b"x").unwrap();
+        let oid = add_original(&l, &src);
+        let l = Arc::new(l);
+        let hs: Vec<_> = (0..8)
+            .map(|t| {
+                let (l, oid) = (l.clone(), oid.clone());
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        l.patch_original(&oid, &json!({ format!("k{t}_{i}"): i })).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for h in hs {
+            h.join().unwrap();
+        }
+        let o = l.read_original(&oid).unwrap();
+        assert_eq!(o.as_object().unwrap().keys().filter(|k| k.starts_with('k')).count(), 200);
+        assert!(std::fs::read_dir(l.o_dir(&oid)).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+    }
+
+    #[test]
+    fn deleted_records_are_not_resurrected() {
+        let (d, l) = lib();
+        let src = d.path().join("clip.mp4");
+        std::fs::write(&src, b"x").unwrap();
+        let oid = add_original(&l, &src);
+        let v = l.create_version(&oid, &json!({ "start": 0, "length": 2 })).unwrap();
+        let vid = v["id"].as_str().unwrap().to_string();
+        assert!(l.delete_version(&vid));
+        assert!(l.patch_version(&vid, &json!({ "status": "ready" })).is_err());
+        assert!(!l.v_dir(&oid, &vid).exists());
+        l.remove_original_cache(&oid);
+        assert!(l.patch_original(&oid, &json!({ "x": 1 })).is_err());
+        assert!(l.write_version(&oid, &v).is_err(), "no versions folder for a deleted clip");
+        assert!(!l.o_dir(&oid).exists());
     }
 
     #[test]

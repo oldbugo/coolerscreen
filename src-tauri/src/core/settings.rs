@@ -214,11 +214,14 @@ pub struct SettingsStore {
     file: PathBuf,
     lock: Mutex<()>,
     on_change: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// The last settings read or written successfully: used when the file exists but cannot be parsed, so a bad
+    /// read never turns into defaults (a default gallery folder would mark the whole library missing).
+    last_good: Mutex<Option<Settings>>,
 }
 
 impl SettingsStore {
     pub fn new(file: impl Into<PathBuf>) -> Self {
-        SettingsStore { file: file.into(), lock: Mutex::new(()), on_change: Mutex::new(None) }
+        SettingsStore { file: file.into(), lock: Mutex::new(()), on_change: Mutex::new(None), last_good: Mutex::new(None) }
     }
     pub fn file(&self) -> &Path {
         &self.file
@@ -227,11 +230,36 @@ impl SettingsStore {
         *self.on_change.lock().unwrap() = Some(Box::new(f));
     }
 
+    /// Current settings. Missing file: defaults. Unreadable/unparsable file: retried briefly, then the last good
+    /// settings (or, on the very first read, defaults after keeping a copy of the bad file as settings.json.bad).
     pub fn load(&self) -> Settings {
-        match super::js::read_json(&self.file) {
-            Some(v) => sanitize(&v),
-            None => sanitize(&json!({})),
+        let mut tries = 0;
+        loop {
+            match super::js::read_text(&self.file) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return sanitize(&json!({})),
+                Ok(t) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')) {
+                        let s = sanitize(&v);
+                        *self.last_good.lock().unwrap() = Some(s.clone());
+                        return s;
+                    }
+                }
+                Err(_) => {}
+            }
+            tries += 1;
+            if tries >= 5 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        eprintln!("settings.json could not be read; using the last good settings");
+        if let Some(s) = self.last_good.lock().unwrap().clone() {
+            return s;
+        }
+        let mut bad = self.file.as_os_str().to_owned();
+        bad.push(".bad");
+        let _ = std::fs::copy(&self.file, PathBuf::from(bad));
+        sanitize(&json!({}))
     }
 
     /// Sanitise and write (as 1.2 `save`). Returns what was written.
@@ -245,7 +273,8 @@ impl SettingsStore {
         if let Some(d) = self.file.parent() {
             std::fs::create_dir_all(d)?;
         }
-        std::fs::write(&self.file, super::js::pretty(&clean.0))?;
+        super::js::write_atomic(&self.file, super::js::pretty(&clean.0).as_bytes())?;
+        *self.last_good.lock().unwrap() = Some(clean.clone());
         if let Some(f) = self.on_change.lock().unwrap().as_ref() {
             f();
         }
@@ -358,6 +387,48 @@ mod tests {
         let s = sanitize(&input);
         let node = r#"{"mask":{"mode":"circle","circle":{"cx":100,"cy":1080,"r":0,"feather":0},"band":{"edge":"left","px":50.5},"corners":{"on":true,"r":81}},"maxSeconds":120,"galleryDir":"D:\\G","totalBudgetMB":9.5,"uploadRate":52000.7,"capacity":{"bytes":10875000,"at":"x"},"slots":{"startup":{"name":"(boot splash)","size":540000,"at":"t","splash":"v1-abc"},"standby":null},"sources":{"enabled":{"we":true},"options":{"we":{"folders":["a"]}},"ticked":["mine","we"]}}"#;
         assert_eq!(serde_json::to_string(&s.0).unwrap(), node);
+    }
+
+    #[test]
+    fn concurrent_reads_never_see_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = std::sync::Arc::new(SettingsStore::new(dir.path().join("settings.json")));
+        st.update(|s| s["galleryDir"] = json!("D:\\MyGallery")).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writers: Vec<_> = (0..3)
+            .map(|i| {
+                let (st, stop) = (st.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut n = 0;
+                    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        st.update(|s| s["maxSeconds"] = json!(1 + (n + i) % 100)).unwrap();
+                        n += 1;
+                    }
+                })
+            })
+            .collect();
+        let reader_store = SettingsStore::new(dir.path().join("settings.json")); // no shared last-good cache
+        for _ in 0..2000 {
+            assert_eq!(reader_store.load().gallery_dir(), "D:\\MyGallery", "torn or default read");
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        for w in writers {
+            w.join().unwrap();
+        }
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+    }
+
+    #[test]
+    fn corrupt_file_keeps_last_good() {
+        let dir = tempfile::tempdir().unwrap();
+        let st = SettingsStore::new(dir.path().join("settings.json"));
+        st.update(|s| s["galleryDir"] = json!("D:\\G")).unwrap();
+        std::fs::write(dir.path().join("settings.json"), "{ \"galleryDir\": \"D:\\\\G\", trunc").unwrap();
+        assert_eq!(st.load().gallery_dir(), "D:\\G");
+        // a fresh process with only a corrupt file: defaults, and the bad file is kept for inspection
+        let st2 = SettingsStore::new(dir.path().join("settings.json"));
+        assert_eq!(st2.load().gallery_dir(), "");
+        assert!(dir.path().join("settings.json.bad").exists());
     }
 
     #[test]

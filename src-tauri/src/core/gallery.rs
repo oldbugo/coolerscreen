@@ -161,7 +161,6 @@ impl App {
             for n in ["thumb.jpg", "frame.jpg", "proxy.mp4", "proxy.jpg"] {
                 let _ = std::fs::remove_file(d.join(n));
             }
-            let mut o = existing.and_then(|e| e.as_object().cloned()).unwrap_or_default();
             let fields = json!({
                 "id": id,
                 "name": existing.map(|e| e["name"].clone()).unwrap_or(json!(name)),
@@ -177,14 +176,30 @@ impl App {
                 "assets": "pending", "assetsError": null, "proxy": null, "missing": null,
                 "sourceChanged": existing.is_some() && !self.lib.versions(&id).is_empty(),
             });
-            for (k, v) in fields.as_object().unwrap() {
-                o.insert(k.clone(), v.clone());
+            // Merge onto the record as it is NOW (it may have been renamed/patched while we probed); a refresh of a
+            // clip deleted meanwhile is dropped.
+            let is_refresh = existing.is_some();
+            let written = self.lib.update_original(&id, |cur| {
+                let mut o = match (cur, is_refresh) {
+                    (Some(c), true) => c.as_object().cloned().unwrap_or_default(),
+                    (None, true) => return None,
+                    (_, false) => Default::default(),
+                };
+                for (k, v) in fields.as_object().unwrap() {
+                    if is_refresh && (k == "name" || k == "created") && o.contains_key(k) {
+                        continue;
+                    }
+                    o.insert(k.clone(), v.clone());
+                }
+                Some(Value::Object(o))
+            })?;
+            if written.is_none() {
+                return Err(CoreError::new("This clip was deleted while it was being read."));
             }
-            self.lib.write_original(&Value::Object(o))?;
             Ok(())
         })();
         if let Err(e) = r {
-            if existing.is_none() {
+            if existing.is_none() || !d.join("original.json").exists() {
                 let _ = std::fs::remove_dir_all(&d);
             }
             return Err(e);
@@ -437,6 +452,14 @@ impl App {
         }
         let _ = std::fs::create_dir_all(self.lib.root());
         let _ = std::fs::create_dir_all(self.gallery_dir());
+        // Half-copied imports from a previous run (add_file's "~$cs-" temp names).
+        if let Ok(rd) = std::fs::read_dir(self.gallery_dir()) {
+            for e in rd.filter_map(Result::ok) {
+                if e.file_name().to_string_lossy().starts_with("~$cs-") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
         let n = self.lib.migrate();
         if n > 0 {
             eprintln!("Library: migrated {n} item(s) to originals + versions.");
@@ -460,13 +483,27 @@ impl App {
                 return Ok(k["id"].as_str().unwrap_or("").to_string());
             }
         }
-        let target = if inside { src.to_path_buf() } else { unique_path(&dir, &base, if ext.is_empty() { ".bin" } else { &ext }) };
-        if !inside {
-            std::fs::copy(src, &target)?;
+        // Copy under a "~$" name the scanner ignores (a copy keeps the source's old modification time, so the
+        // stable-file check alone would let the watcher register a half-copied file), then rename into place and
+        // register while holding the scan lock.
+        let tmp = if inside { None } else { Some(dir.join(format!("~$cs-{}{}", new_id(), if ext.is_empty() { ".bin" } else { &ext }))) };
+        if let Some(t) = &tmp {
+            if let Err(e) = std::fs::copy(src, t) {
+                let _ = std::fs::remove_file(t);
+                return Err(e.into());
+            }
         }
-        let r = {
-            let _g = self.gallery.sync_lock.lock().unwrap();
-            self.register_file(&target, None)
+        let (target, r) = {
+            let _g = self.gallery.sync_lock.lock().unwrap_or_else(|p| p.into_inner());
+            let target = if inside { src.to_path_buf() } else { unique_path(&dir, &base, if ext.is_empty() { ".bin" } else { &ext }) };
+            if let Some(t) = &tmp {
+                if let Err(e) = std::fs::rename(t, &target) {
+                    let _ = std::fs::remove_file(t);
+                    return Err(e.into());
+                }
+            }
+            let r = self.register_file(&target, None);
+            (target, r)
         };
         match r {
             Ok(id) => {

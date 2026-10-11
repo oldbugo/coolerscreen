@@ -54,6 +54,7 @@ pub fn zip_crypto_decrypt(data: &[u8], password: &[u8]) -> Vec<u8> {
     out
 }
 
+#[derive(Clone)]
 struct Entry {
     name: String,
     flags: u16,
@@ -102,41 +103,116 @@ fn read_entries(buf: &[u8]) -> CoreResult<Vec<Entry>> {
     Ok(out)
 }
 
-fn extract_entry(buf: &[u8], e: &Entry) -> CoreResult<Vec<u8>> {
+/// Most a theme may expand to in total (nested zips + the extracted media): a zip bomb fails instead of exhausting
+/// memory or disk.
+pub const TOTAL_CAP: usize = 2 << 30;
+/// Small entries (the .json label, the preview image) are read only up to this size.
+const SMALL_CAP: usize = 32 << 20;
+
+/// The (decrypted, still compressed) bytes of an entry.
+fn raw_entry(buf: &[u8], e: &Entry) -> CoreResult<Vec<u8>> {
     let o = e.offset;
     if u32le(buf, o)? != 0x0403_4b50 {
         return Err(CoreError::new(format!("Corrupt zip entry: {}", e.name)));
     }
     let start = o + 30 + u16le(buf, o + 26)? as usize + u16le(buf, o + 28)? as usize;
-    let mut data: Vec<u8> = buf.get(start..start + e.csize).ok_or_else(|| CoreError::new("Corrupt zip entry"))?.to_vec();
-    if e.flags & 1 != 0 {
-        if e.flags & 0x40 != 0 {
-            return Err(CoreError::new("Unsupported zip encryption"));
-        }
-        let dec = zip_crypto_decrypt(&data, PASSWORD);
-        let check = if e.flags & 8 != 0 { (e.time >> 8) as u8 } else { (e.crc >> 24) as u8 };
-        if dec.len() < 12 || dec[11] != check {
-            return Err(CoreError::new("Wrong password for theme file"));
-        }
-        data = dec[12..].to_vec();
+    let data: Vec<u8> = buf.get(start..start.saturating_add(e.csize)).ok_or_else(|| CoreError::new("Corrupt zip entry"))?.to_vec();
+    if e.flags & 1 == 0 {
+        return Ok(data);
     }
+    if e.flags & 0x40 != 0 {
+        return Err(CoreError::new("Unsupported zip encryption"));
+    }
+    let dec = zip_crypto_decrypt(&data, PASSWORD);
+    let check = if e.flags & 8 != 0 { (e.time >> 8) as u8 } else { (e.crc >> 24) as u8 };
+    if dec.len() < 12 || dec[11] != check {
+        return Err(CoreError::new("Wrong password for theme file"));
+    }
+    Ok(dec[12..].to_vec())
+}
+
+fn too_big() -> CoreError {
+    CoreError::new("This theme/zip file expands to more than CoolerScreen accepts (2 GB).")
+}
+
+/// Decompress an entry into memory, at most `limit` bytes (and never more than its declared size).
+fn extract_entry(buf: &[u8], e: &Entry, limit: usize) -> CoreResult<Vec<u8>> {
+    let limit = limit.min(e.usize_);
+    let data = raw_entry(buf, e)?;
     match e.method {
-        0 => Ok(data),
-        8 => miniz_oxide::inflate::decompress_to_vec(&data).map_err(|_| CoreError::new("Corrupt compressed data in zip")),
+        0 if data.len() <= limit => Ok(data),
+        0 => Err(too_big()),
+        8 => miniz_oxide::inflate::decompress_to_vec_with_limit(&data, limit).map_err(|x| {
+            if matches!(x.status, miniz_oxide::inflate::TINFLStatus::HasMoreOutput) {
+                too_big()
+            } else {
+                CoreError::new("Corrupt compressed data in zip")
+            }
+        }),
         m => Err(CoreError::new(format!("Unsupported zip compression method {m}"))),
     }
 }
 
+/// Decompress an entry straight to a file (no full copy in memory), at most `limit` bytes.
+fn extract_entry_to_file(buf: &[u8], e: &Entry, dest: &Path, limit: usize) -> CoreResult<()> {
+    use miniz_oxide::inflate::stream::{inflate, InflateState};
+    use miniz_oxide::{DataFormat, MZFlush, MZStatus};
+    use std::io::Write;
+    let limit = limit.min(e.usize_);
+    let data = raw_entry(buf, e)?;
+    let mut f = std::io::BufWriter::new(std::fs::File::create(dest)?);
+    let r = (|| -> CoreResult<()> {
+        match e.method {
+            0 if data.len() <= limit => f.write_all(&data)?,
+            0 => return Err(too_big()),
+            8 => {
+                let mut st = InflateState::new_boxed(DataFormat::Raw);
+                let mut out = vec![0u8; 1 << 20];
+                let (mut pos, mut total) = (0usize, 0usize);
+                loop {
+                    let res = inflate(&mut st, &data[pos..], &mut out, MZFlush::None);
+                    pos += res.bytes_consumed;
+                    total += res.bytes_written;
+                    if total > limit {
+                        return Err(too_big());
+                    }
+                    f.write_all(&out[..res.bytes_written])?;
+                    match res.status {
+                        Ok(MZStatus::StreamEnd) => break,
+                        Ok(_) if res.bytes_consumed == 0 && res.bytes_written == 0 => {
+                            return Err(CoreError::new("Corrupt compressed data in zip"))
+                        }
+                        Ok(_) => {}
+                        Err(_) => return Err(CoreError::new("Corrupt compressed data in zip")),
+                    }
+                }
+            }
+            m => return Err(CoreError::new(format!("Unsupported zip compression method {m}"))),
+        }
+        f.flush()?;
+        Ok(())
+    })();
+    if r.is_err() {
+        drop(f);
+        let _ = std::fs::remove_file(dest);
+    }
+    r
+}
+
+/// A media entry, extracted only if it is the one chosen.
 struct Media {
     ext: String,
     size: usize,
-    data: Vec<u8>,
+    buf: std::sync::Arc<Vec<u8>>,
+    entry: Entry,
 }
 
 struct Acc {
     json: Option<Value>,
     videos: Vec<Media>,
     images: Vec<Media>,
+    /// Bytes of nested zips held in memory so far.
+    expanded: usize,
 }
 
 fn ext_of(name: &str) -> String {
@@ -147,25 +223,30 @@ fn ext_of(name: &str) -> String {
     }
 }
 
-fn collect(buf: &[u8], acc: &mut Acc, depth: u32) -> CoreResult<()> {
-    for e in read_entries(buf)? {
+fn collect(buf: std::sync::Arc<Vec<u8>>, acc: &mut Acc, depth: u32) -> CoreResult<()> {
+    for e in read_entries(&buf)? {
         if e.name.ends_with('/') {
             continue;
         }
+        if e.usize_ > TOTAL_CAP {
+            return Err(too_big());
+        }
         let ext = ext_of(&e.name);
         if ext == ".zip" && depth < 3 {
-            collect(&extract_entry(buf, &e)?, acc, depth + 1)?;
+            let inner = extract_entry(&buf, &e, TOTAL_CAP.saturating_sub(acc.expanded))?;
+            acc.expanded += inner.len();
+            collect(std::sync::Arc::new(inner), acc, depth + 1)?;
         } else if ext == ".json" {
             if acc.json.is_none() {
-                if let Ok(d) = extract_entry(buf, &e) {
+                if let Ok(d) = extract_entry(&buf, &e, SMALL_CAP) {
                     let s = String::from_utf8_lossy(&d);
                     acc.json = serde_json::from_str(s.trim_start_matches('\u{feff}')).ok();
                 }
             }
         } else if VIDEO_EXT.contains(&ext.as_str()) {
-            acc.videos.push(Media { ext, size: e.usize_, data: extract_entry(buf, &e)? });
+            acc.videos.push(Media { ext, size: e.usize_, buf: buf.clone(), entry: e });
         } else if IMAGE_EXT.contains(&ext.as_str()) {
-            acc.images.push(Media { ext, size: e.usize_, data: extract_entry(buf, &e)? });
+            acc.images.push(Media { ext, size: e.usize_, buf: buf.clone(), entry: e });
         }
     }
     Ok(())
@@ -199,6 +280,7 @@ pub fn is_theme_file(file: &Path) -> bool {
     std::fs::File::open(file).and_then(|mut f| f.read_exact(&mut b)).is_ok() && u32::from_le_bytes(b) == 0x0403_4b50
 }
 
+#[derive(Debug)]
 pub struct Extracted {
     pub path: PathBuf,
     /// "video" | "image"
@@ -213,8 +295,9 @@ pub fn extract_theme(file: &Path, out_dir: &Path) -> CoreResult<Extracted> {
     if buf.len() <= 4 || u32le(&buf, 0)? != 0x0403_4b50 {
         return Err(CoreError::new("Not a theme or zip file"));
     }
-    let mut acc = Acc { json: None, videos: vec![], images: vec![] };
-    collect(&buf, &mut acc, 0)?;
+    let mut acc = Acc { json: None, videos: vec![], images: vec![], expanded: 0 };
+    collect(std::sync::Arc::new(buf), &mut acc, 0)?;
+    let left = TOTAL_CAP.saturating_sub(acc.expanded);
     let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("theme");
     let fallback = stem.split('_').next().unwrap_or(stem).to_string();
     let label = label_of(&acc.json);
@@ -226,13 +309,13 @@ pub fn extract_theme(file: &Path, out_dir: &Path) -> CoreResult<Extracted> {
     };
     if let Some(v) = biggest(&mut acc.videos) {
         let dest = out_dir.join(format!("theme{}", v.ext));
-        std::fs::write(&dest, &v.data)?;
-        let jpg = biggest(&mut acc.images).map(|m| m.data);
+        extract_entry_to_file(&v.buf, &v.entry, &dest, left)?;
+        let jpg = biggest(&mut acc.images).and_then(|m| extract_entry(&m.buf, &m.entry, SMALL_CAP).ok());
         return Ok(Extracted { path: dest, kind: "video", name, preview_jpg: jpg });
     }
     if let Some(img) = biggest(&mut acc.images) {
         let dest = out_dir.join(format!("theme{}", img.ext));
-        std::fs::write(&dest, &img.data)?;
+        extract_entry_to_file(&img.buf, &img.entry, &dest, left)?;
         return Ok(Extracted { path: dest, kind: "image", name, preview_jpg: None });
     }
     Err(CoreError::new("This theme/zip file contains no video or image I can use."))
@@ -328,6 +411,65 @@ mod tests {
         assert_eq!(r.name, "粉蓝梦境");
         assert_eq!(std::fs::read(&r.path).unwrap(), b"videodata!");
         assert_eq!(r.preview_jpg.unwrap(), b"jpgdata");
+    }
+
+    /// One deflated entry with a chosen declared (uncompressed) size.
+    fn zip_deflated(name: &str, plain: &[u8], declared: u32) -> Vec<u8> {
+        let body = miniz_oxide::deflate::compress_to_vec(plain, 6);
+        let crc = crc32(plain);
+        let mut out = vec![];
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[20, 0, 0, 0, 8, 0, 0, 0, 0, 0]);
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&declared.to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&body);
+        let cd = out.len() as u32;
+        let mut c = vec![];
+        c.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        c.extend_from_slice(&[20, 0, 20, 0, 0, 0, 8, 0, 0, 0, 0, 0]);
+        c.extend_from_slice(&crc.to_le_bytes());
+        c.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        c.extend_from_slice(&declared.to_le_bytes());
+        c.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        c.extend_from_slice(&[0; 12]);
+        c.extend_from_slice(&0u32.to_le_bytes());
+        c.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(&c);
+        out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[0, 0, 0, 0, 1, 0, 1, 0]);
+        out.extend_from_slice(&(c.len() as u32).to_le_bytes());
+        out.extend_from_slice(&cd.to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out
+    }
+
+    #[test]
+    fn deflated_entry_streams_to_disk() {
+        let plain: Vec<u8> = (0..3_000_000u32).map(|i| (i % 7) as u8).collect();
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("v.zip");
+        std::fs::write(&f, zip_deflated("v.mp4", &plain, plain.len() as u32)).unwrap();
+        let r = extract_theme(&f, d.path()).unwrap();
+        assert_eq!(std::fs::read(&r.path).unwrap(), plain);
+    }
+
+    #[test]
+    fn zip_bomb_is_refused() {
+        // 50 MB of zeros declared as 1 KB: stops at the declared size instead of filling memory/disk.
+        let plain = vec![0u8; 50 << 20];
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("bomb.zip");
+        std::fs::write(&f, zip_deflated("v.mp4", &plain, 1024)).unwrap();
+        let e = extract_theme(&f, d.path()).unwrap_err();
+        assert!(e.message.contains("expands to more"), "{e}");
+        assert!(!d.path().join("theme.mp4").exists(), "partial output removed");
+        // a declared size over the global cap is refused before anything is decompressed
+        std::fs::write(&f, zip_deflated("v.mp4", b"x", u32::MAX)).unwrap();
+        assert!(extract_theme(&f, d.path()).unwrap_err().message.contains("expands to more"));
     }
 
     #[test]
