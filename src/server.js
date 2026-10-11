@@ -112,7 +112,8 @@ function appState() {
   const b = slots.budgets(s);
   return {
     appVersion: pkg.version, deviceFps: DEVICE_FPS, imageSeconds: IMAGE_SECONDS, fake: deviceOps.FAKE || null,
-    mask: s.mask, maxSeconds: s.maxSeconds, budget: b.loop, total: b.total, uploadRate: s.uploadRate || 50000,
+    mask: s.mask, cornersDefault: s.mask.corners, maxSeconds: s.maxSeconds, budget: b.loop, total: b.total, budgetMeasured: b.measured, capacityAt: b.capacityAt,
+    uploadRate: s.uploadRate || 50000,
     galleryDir: gallery.galleryDir(), onScreen: onScreen(), missingNoticeDays: gallery.MISSING_NOTICE_DAYS,
     notchKey: lib.notchKey(s.mask), oldNotchCount: oldNotchCount(lib.notchKey(s.mask)),
   };
@@ -120,7 +121,7 @@ function appState() {
 
 function oldNotchCount(key) {
   let n = 0;
-  for (const o of lib.listOriginals()) for (const v of lib.versions(o.id)) if (v.status === 'ready' && v.notchKey !== key) n++;
+  for (const o of lib.listOriginals()) for (const v of lib.versions(o.id)) if (v.status === 'ready' && String(v.notchKey || '').split('|')[0] !== key) n++;
   return n;
 }
 
@@ -157,7 +158,8 @@ async function handle(req, res) {
     if (p === '/api/settings' && m === 'PUT') {
       const body = await readBody(req);
       const cur = settings.load();
-      settings.save({ ...cur, mask: body.mask || cur.mask, maxSeconds: body.maxSeconds ?? cur.maxSeconds });
+      // The notch is edited here; the corners default comes from the last version made (not from this form).
+      settings.save({ ...cur, mask: body.mask ? { ...body.mask, corners: cur.mask.corners } : cur.mask, maxSeconds: body.maxSeconds ?? cur.maxSeconds });
       lib.bump();
       return json(res, 200, appState());
     }
@@ -225,6 +227,11 @@ async function handle(req, res) {
           // Newer estimate requests for the same original supersede queued older ones.
           return json(res, 200, await gate.run('convert', () => (estimateSeq.get(oid) === seq ? lib.estimateFor(oid, body) : { stale: true })));
         } catch (e) { return json(res, 400, { error: e.message }); }
+      }
+      if (sub === '/looppoint' && m === 'POST') {
+        const body = await readBody(req);
+        try { return json(res, 200, await gate.run('convert', () => lib.findLoopPoint(oid, body))); }
+        catch (e) { return json(res, 400, { error: e.message }); }
       }
       if (sub === '/versions' && m === 'POST') {
         const body = await readBody(req);
@@ -297,7 +304,13 @@ async function handle(req, res) {
     // "Check again"; it never polls.
     if (p === '/api/device' && m === 'GET') {
       if (gate.deviceActive()) return json(res, 409, { error: 'The screen is busy with another operation.', code: 'updating' });
-      try { return json(res, 200, await gate.run('device', () => deviceOps.checkScreen())); }
+      try {
+        const info = await gate.run('device', () => deviceOps.checkScreen());
+        // Measure the real space for our clips (free blocks + what our two clips occupy).
+        const cap = slots.capacityFrom(info);
+        if (cap) settings.save({ ...settings.load(), capacity: { bytes: cap, at: new Date().toISOString() } });
+        return json(res, 200, { ...info, _capacity: cap });
+      }
       catch (e) { return json(res, 502, { error: e.message, failedUsb: !!e.failedUsb, code: e.code || (e.failedUsb ? 'failedUsb' : null) }); }
     }
     return json(res, 404, { error: 'Not found' });

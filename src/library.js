@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const paths = require('./paths');
 const settings = require('./settings');
 const slots = require('./slots');
-const { convert, estimate, qualityFromQ, normFrame, bandPx, DEVICE_FPS } = require('./convert');
+const { findLoopPoint: findLoop, convert, estimate, qualityFromQ, normFrame, bandPx, DEVICE_FPS } = require('./convert');
 
 const ID_RE = /^[a-z0-9]{8,32}$/;
 const O_FILES = new Set(['thumb.jpg', 'frame.jpg', 'proxy.mp4', 'proxy.jpg']);
@@ -136,10 +136,10 @@ function mediaPathV(vid, file) {
 }
 
 // The screen mask (notch + rounded corners) as it is actually applied (band widths are rounded to the 16 px grid), so equal keys = equal pixels.
-function notchKey(mask) {
-  const k = mask && mask.corners && mask.corners.on && mask.corners.r > 0 ? `|corners:${Math.round(mask.corners.r)}` : '';
-  return notchOnlyKey(mask) + k;
-}
+// Notch is a global screen setting; rounded corners belong to each version's own settings (since 2026-10-11).
+// Versions made while corners were global have "|corners:R" in their key; that part is ignored when comparing.
+const notchKey = mask => notchOnlyKey(mask);
+const baseKey = k => String(k || '').split('|')[0];
 function notchOnlyKey(mask) {
   if (!mask || mask.mode === 'off') return 'off';
   if (mask.mode === 'band') { const px = bandPx(mask.band); return px ? `band:${mask.band.edge}:${px}` : 'off'; }
@@ -148,19 +148,30 @@ function notchOnlyKey(mask) {
 }
 
 /** User settings for a version, cleaned. */
-function cleanSettings(o, s, maxSeconds) {
+const r3 = v => Math.round(v * 1000) / 1000;
+const cleanCorners = c => ({ on: !!(c && c.on), r: Math.round(Math.min(300, Math.max(0, Number(c && c.r) || 0))) });
+function cleanSettings(o, s, maxSeconds, cornersDefault) {
   s = s || {};
   const quality = s.quality === 'auto' || s.quality == null ? 'auto' : Math.min(100, Math.max(1, Math.round(Number(s.quality)) || 80));
-  let start = o.isImage ? 0 : Math.max(0, Math.round((Number(s.start) || 0) * 10) / 10);
-  if (o.duration && start > o.duration - 0.1) start = Math.max(0, Math.floor((o.duration - 0.1) * 10) / 10);
+  // Frame-accurate: times are kept to the millisecond (the UI snaps start to source frames, length to 1/18 s).
+  let start = o.isImage ? 0 : r3(Math.max(0, Number(s.start) || 0));
+  if (o.duration && start > o.duration - 0.05) start = r3(Math.max(0, o.duration - 0.05));
   let length = Number(s.length);
   const avail = o.isImage || !o.duration ? Infinity : o.duration - start;
   if (!(length > 0)) length = o.isImage ? 3 : Math.min(maxSeconds, avail);
-  length = Math.round(Math.max(0.1, Math.min(length, avail, 120)) * 100) / 100;
-  return { start, length, quality, frame: normFrame(s.frame) };
+  length = r3(Math.max(0.05, Math.min(length, avail, 120)));
+  const detail = Math.round(Math.min(100, Math.max(0, Number(s.detail) || 0)));
+  const blend = o.isImage ? 0 : r3(Math.min(1.5, Math.max(0, Number(s.blend) || 0)));
+  return { start, length, quality, frame: normFrame(s.frame), corners: cleanCorners(s.corners || cornersDefault), detail, blend };
+}
+/** A version's settings with the fields older versions don't have filled in (corners came from the global mask then). */
+function effectiveSettings(v) {
+  const s = v.settings || {};
+  return { ...s, corners: cleanCorners(s.corners || (v.notch && v.notch.corners)), detail: s.detail || 0, blend: s.blend || 0 };
 }
 const sameSettings = (a, b) => a.start === b.start && a.length === b.length && String(a.quality) === String(b.quality) &&
-  JSON.stringify(normFrame(a.frame)) === JSON.stringify(normFrame(b.frame));
+  JSON.stringify(normFrame(a.frame)) === JSON.stringify(normFrame(b.frame)) &&
+  !!a.corners.on === !!b.corners.on && (!a.corners.on || a.corners.r === b.corners.r) && a.detail === b.detail && a.blend === b.blend;
 
 /** Extra fields the UI needs, computed against the current notch, budget and screen record. */
 function decorateVersion(v, ctx) {
@@ -170,7 +181,8 @@ function decorateVersion(v, ctx) {
   const onScreen = !!(ctx.standby && ctx.standby.versionId === v.id);
   return {
     ...v,
-    oldNotch: v.status === 'ready' && v.notchKey !== ctx.notchKey,
+    settings: effectiveSettings(v),
+    oldNotch: v.status === 'ready' && baseKey(v.notchKey) !== ctx.notchKey,
     speed,
     tooBig: v.status === 'ready' && r.size > ctx.budget,
     onScreen,
@@ -179,7 +191,9 @@ function decorateVersion(v, ctx) {
 }
 function context() {
   const s = settings.load();
-  return { notchKey: notchKey(s.mask), budget: slots.budgets(s).loop, standby: s.slots.standby, maxSeconds: s.maxSeconds, mask: s.mask };
+  const { corners, ...notch } = s.mask;
+  return { notchKey: notchKey(s.mask), budget: slots.budgets(s).loop, standby: s.slots.standby, maxSeconds: s.maxSeconds, mask: notch,
+    cornersDefault: corners };
 }
 
 function summary(o, ctx = context()) {
@@ -203,7 +217,7 @@ function detail(oid) {
   return {
     ...summary(o, ctx), file: o.file, extracted: !!o.extracted, draft: o.draft || null, canTune: !!src && o.assets === 'ready',
     previewUrl: o.assets !== 'ready' ? null : o.proxy ? `/media/o/${o.id}/${o.proxy}` : src ? `/media/o/${o.id}/source` : null,
-    previewKind: o.isImage ? 'image' : 'video',
+    previewKind: o.isImage ? 'image' : 'video', fps: o.fps || null,
     versions: versions(oid).map(v => decorateVersion(v, ctx)),
   };
 }
@@ -214,11 +228,14 @@ function createVersion(oid, body) {
   if (!o) throw new Error('Unknown clip');
   if (!sourcePath(o)) throw new Error('The original file is missing, so a new version can\'t be made.');
   const ctx = context();
-  const st = cleanSettings(o, body, ctx.maxSeconds);
+  const st = cleanSettings(o, body, ctx.maxSeconds, ctx.cornersDefault);
   const vs = versions(oid);
-  const dup = vs.find(v => v.status !== 'error' && v.notchKey === ctx.notchKey && v.settings && sameSettings(v.settings, st) &&
+  const dup = vs.find(v => v.status !== 'error' && baseKey(v.notchKey) === ctx.notchKey && v.settings && sameSettings(effectiveSettings(v), st) &&
     (v.settings.fps || DEVICE_FPS) === DEVICE_FPS);
   if (dup && !body.force) { const e = new Error(`Already saved as v${dup.n}.`); e.code = 'duplicate'; e.versionId = dup.id; throw e; }
+  // Remember the corner choice as the default for the next clip's tuning.
+  const s = settings.load();
+  if (JSON.stringify(s.mask.corners) !== JSON.stringify(st.corners)) settings.save({ ...s, mask: { ...s.mask, corners: st.corners } });
   const v = {
     id: newId(), originalId: oid, n: vs.reduce((m, x) => Math.max(m, x.n), 0) + 1, label: null, created: new Date().toISOString(),
     settings: { ...st, fps: DEVICE_FPS }, notch: ctx.mask, notchKey: ctx.notchKey, result: null, status: 'queued', error: null,
@@ -236,9 +253,10 @@ async function runVersion(vid, onProgress) {
   const budget = slots.budgets(s).loop;
   patchVersion(vid, { status: 'converting', error: null });
   try {
-    const st = f.v.settings;
+    const st = effectiveSettings(f.v);
     const r = await convert(src, vDir(f.oid, vid), {
       start: st.start, length: st.length, quality: st.quality, frame: st.frame, mask: f.v.notch, maxSeconds: s.maxSeconds,
+      corners: st.corners, detail: st.detail, blend: st.blend,
       budgetBytes: budget, onProgress,
     });
     if (!findVersion(vid)) { throw new Error('This version was deleted.'); }
@@ -256,8 +274,8 @@ async function runVersion(vid, onProgress) {
 function remakeVersion(vid) {
   const f = findVersion(vid);
   if (!f) throw new Error('Unknown version');
-  const { start, length, quality, frame } = f.v.settings || {};
-  return createVersion(f.oid, { start, length, quality, frame, force: true });
+  const { start, length, quality, frame, corners, detail, blend } = effectiveSettings(f.v);
+  return createVersion(f.oid, { start, length, quality, frame, corners, detail, blend, force: true });
 }
 
 async function estimateFor(oid, body) {
@@ -265,9 +283,19 @@ async function estimateFor(oid, body) {
   const src = sourcePath(o);
   if (!src) throw new Error('The original file is missing.');
   const ctx = context();
-  const st = cleanSettings(o, body, ctx.maxSeconds);
+  const st = cleanSettings(o, body, ctx.maxSeconds, ctx.cornersDefault);
   const r = await estimate(src, oDir(oid), { ...st, mask: ctx.mask, maxSeconds: ctx.maxSeconds, budgetBytes: ctx.budget });
   return { ...r, quality: qualityFromQ(r.q), settings: st };
+}
+
+/** Search near the selection's end for the source frame most like its first frame (see convert.findLoopPoint). */
+async function findLoopPoint(oid, body) {
+  const o = readOriginal(oid);
+  const src = sourcePath(o);
+  if (!src) throw new Error('The original file is missing.');
+  if (o.isImage) throw new Error('A still image always loops seamlessly.');
+  const st = cleanSettings(o, body, 120);
+  return findLoop(src, { start: st.start, end: st.start + st.length, duration: o.duration, fps: o.fps });
 }
 
 /** At startup: versions that were queued or converting when the app closed did not finish. */
@@ -342,5 +370,5 @@ module.exports = {
   isId, isSourceName, newId, oDir, vDir, rev, bump,
   readOriginal, writeOriginal, patchOriginal, listOriginals, sourcePath, removeOriginalCache, summary, detail, context,
   versions, findVersion, writeVersion, patchVersion, deleteVersion, devicePath, createVersion, runVersion, remakeVersion,
-  estimateFor, resetInterrupted, migrate, mediaPathO, mediaPathV, notchKey, cleanSettings,
+  estimateFor, findLoopPoint, resetInterrupted, migrate, mediaPathO, mediaPathV, notchKey, cleanSettings,
 };

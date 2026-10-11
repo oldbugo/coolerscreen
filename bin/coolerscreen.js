@@ -26,6 +26,9 @@ const usage = `CoolerScreen CLI
       --start <sec> --length <sec>      Part of the clip (default: from the start, up to 10 s)
       --quality auto|1-100              (default auto = best quality that fits the screen)
       --zoom <0.2-4> --x <0-1> --y <0-1>  Framing: zoom 1 fills the screen; x/y 0.5 = centred
+      --corners <0-300>                 Rounded corners radius in pixels (0 = square)
+      --detail <0-100>                  Simplify fine detail (smaller file); 0 = off
+      --blend <0-1.5>                   Blend the last seconds into the start for a seamless loop
   coolerscreen send <version id>        Put a version on the screen (about 3 minutes for a full-size clip).
   coolerscreen upload <file> [options] [--no-send]   add + make + send in one go.
   coolerscreen setup     One-time: switch the screen to the WinUSB driver (asks for administrator approval).
@@ -58,6 +61,9 @@ function makeOpts() {
   }
   o.quality = quality;
   if (flags.zoom != null || flags.x != null || flags.y != null) o.frame = { zoom: flags.zoom ?? 1, x: flags.x ?? 0.5, y: flags.y ?? 0.5 };
+  if (flags.corners != null) o.corners = { on: Number(flags.corners) > 0, r: Number(flags.corners) };
+  if (flags.detail != null) o.detail = Number(flags.detail);
+  if (flags.blend != null) o.blend = Number(flags.blend);
   return o;
 }
 

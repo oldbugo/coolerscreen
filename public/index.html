@@ -64,12 +64,11 @@
       </section>
 
       <section id="setNotch" aria-labelledby="hNotch">
-        <h3 id="hNotch">Notch and corners</h3>
+        <h3 id="hNotch">Notch</h3>
         <p class="muted small">Your screen's camera hole is on the left edge. This area is kept black in every new version.</p>
         <div class="screenframe small-frame" id="notchFrame">
           <img id="notchBg" alt="">
           <div id="notchShape" class="notch edit" hidden></div>
-          <span id="cornersSlot"></span>
         </div>
         <div class="field">
           <label for="nMode">Shape</label>
@@ -96,14 +95,8 @@
           <div class="field"><label for="nR">Size (radius)</label><input type="number" id="nR" min="0" max="600"></div>
           <div class="field"><label for="nF">Soft edge</label><input type="number" id="nF" min="0" max="200"></div>
         </div>
-        <h4 class="group-label">Rounded corners</h4>
-        <label class="check"><input type="checkbox" id="nCorners"> Round the corners of the picture</label>
-        <div class="field" id="nCrRow">
-          <label for="nCrN">Corner radius (pixels)</label>
-          <div class="slider-row"><input type="range" id="nCrR" min="0" max="300" step="1" aria-label="Corner radius (pixels)"><input type="number" id="nCrN" min="0" max="300" step="1"></div>
-        </div>
-        <p class="muted small">A visual preference: everything outside the rounded corners is kept black.</p>
-        <div class="row"><button type="button" id="nSave" class="btn primary">Save</button></div>
+        <p class="muted small">Rounded corners are set per clip, in Tune.</p>
+        <div class="row"><button type="button" id="nSave" class="btn primary">Save notch</button></div>
         <p id="nMsg" class="muted small" role="status"></p>
       </section>
 

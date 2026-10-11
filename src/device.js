@@ -116,6 +116,8 @@ class Screen {
   // Upload an MJPEG .mp4 as the onboard startup or standby animation.
   async uploadAnimation(file, type = 'startup', onProgress) {
     const data = fs.readFileSync(file);
+    // The screen's player only decodes MJPEG; an H.264/HEVC mp4 freezes it on every boot (verified the hard way).
+    if (!isMjpegMp4(data)) throw new Error('Refusing to upload: the screen can only play MJPEG .mp4 clips made by CoolerScreen.');
     const size = Buffer.alloc(4);
     size.writeUInt32LE(data.length);
     const ack = await this.cmd(type === 'standby' ? KEY.standby : KEY.startup, size);
@@ -134,4 +136,25 @@ class Screen {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-module.exports = { Screen, frame, findPort, KEY };
+// True for an ISO mp4 whose video sample entry is MJPEG ('mp4v' with JPEG object type, or 'jpeg'/'mjpa'),
+// and that carries no H.264/HEVC sample entries.
+function isMjpegMp4(buf) {
+  if (buf.length < 12 || buf.toString('latin1', 4, 8) !== 'ftyp') return false;
+  // Only look inside the top-level 'moov' box (the codec tags live there); JPEG data could contain any bytes.
+  let moov = null;
+  for (let off = 0; off + 8 <= buf.length;) {
+    let size = buf.readUInt32BE(off);
+    const type = buf.toString('latin1', off + 4, off + 8);
+    if (size === 1 && off + 16 <= buf.length) size = Number(buf.readBigUInt64BE(off + 8));
+    else if (size === 0) size = buf.length - off;
+    if (size < 8) return false;
+    if (type === 'moov') { moov = buf.subarray(off, Math.min(buf.length, off + size)); break; }
+    off += size;
+  }
+  if (!moov) return false;
+  const s = moov.toString('latin1');
+  if (/avc1|avc3|hvc1|hev1|av01|vp09/.test(s)) return false;
+  return /mp4v|jpeg|mjpa|mjpb/.test(s);
+}
+
+module.exports = { Screen, frame, findPort, KEY, isMjpegMp4 };

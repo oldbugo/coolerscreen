@@ -89,7 +89,7 @@ async function registerFile(file, existing = null) {
       ...(existing || {}),
       id, name: existing ? existing.name : name, file, fileName: path.basename(file), extracted,
       fileSize: st.size, fileMtime: Math.round(st.mtimeMs), created: existing ? existing.created : new Date().toISOString(),
-      duration: info.isImage ? null : info.duration, isImage: info.isImage, width: info.width, height: info.height, codec: info.codec,
+      duration: info.isImage ? null : info.duration, isImage: info.isImage, width: info.width, height: info.height, codec: info.codec, fps: info.fps,
       assets: 'pending', assetsError: null, proxy: null, missing: null,
       sourceChanged: !!existing && (lib.versions(id).length > 0),
     });
@@ -105,17 +105,22 @@ async function makeMissingAssets() {
   if (!assetsEnabled) return;
   for (const o of lib.listOriginals()) {
     // A failed attempt is retried once per app session (the next launch), never in a loop.
-    if (o.assets === 'ready' || assetsTried.has(o.id + '|' + o.fileMtime)) continue;
+    if ((o.assets === 'ready' && o.fps !== undefined) || assetsTried.has(o.id + '|' + o.fileMtime)) continue;
     const src = lib.sourcePath(o);
     if (!src) continue;
     assetsTried.add(o.id + '|' + o.fileMtime);
     await gate.run('convert', async () => {
       const cur = lib.readOriginal(o.id);
-      if (!cur || cur.assets === 'ready') return;
+      if (!cur) return;
+      if (cur.assets === 'ready') { // older entry without a source frame rate: probe only
+        const info = await probe(src);
+        lib.patchOriginal(o.id, { fps: info.fps || null });
+        return;
+      }
       try {
         const info = await probe(src);
         const r = await makeSourceAssets(src, lib.oDir(o.id), info);
-        lib.patchOriginal(o.id, { assets: 'ready', proxy: r.proxy, assetsError: null });
+        lib.patchOriginal(o.id, { assets: 'ready', proxy: r.proxy, assetsError: null, fps: info.fps || null });
       } catch (e) {
         lib.patchOriginal(o.id, { assets: 'error', assetsError: e.message });
       }

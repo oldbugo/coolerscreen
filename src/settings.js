@@ -13,6 +13,7 @@ const DEFAULTS = {
   galleryDir: "", // empty = Documents\CoolerScreen\Gallery
   totalBudgetMB: 9.5, // shared by startup (intro) + standby (loop)
   uploadRate: null, // bytes per second measured on the last upload (for time estimates)
+  capacity: null, // { bytes, at }: screen storage for our two clips, measured at the last screen check
   // What this app last wrote to each slot: { name, size, at, originalId, versionId, label, splash, incomplete }
   slots: { startup: null, standby: null },
 };
@@ -57,6 +58,7 @@ function sanitize(s = {}) {
     galleryDir: typeof s.galleryDir === "string" ? s.galleryDir.trim().slice(0, 240) : "",
     totalBudgetMB: num(s.totalBudgetMB, D.totalBudgetMB, 1, 10),
     uploadRate: s.uploadRate == null ? null : num(s.uploadRate, null, 5000, 5e6),
+    capacity: s.capacity && Number(s.capacity.bytes) > 1e6 ? { bytes: Math.round(num(s.capacity.bytes, 0, 1e6, 1e8)), at: String(s.capacity.at || '') } : null,
     slots: { startup: slot(s.slots && s.slots.startup), standby: slot(s.slots && s.slots.standby) },
   };
 }

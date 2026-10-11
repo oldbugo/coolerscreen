@@ -206,9 +206,14 @@ function initialDraft(d) {
   const max = S.app ? S.app.maxSeconds : 10;
   const dr = d.draft || {};
   const dur = d.duration || 0;
-  const start = d.isImage ? 0 : clamp(Number(dr.start) || 0, 0, Math.max(0, dur - 0.1));
-  const length = d.isImage ? (S.app ? S.app.imageSeconds : 3) : clamp(Number(dr.length) || Math.min(max, dur || max), 0.1, Math.max(0.1, Math.min(max, (dur || max) - start)));
-  return { start: r1(start), length: r1(length), quality: dr.quality ?? 'auto', frame: { ...DEFAULT_FRAME, ...(dr.frame || {}) } };
+  const sf = d.fps || 25, of = S.app ? S.app.deviceFps : 18;
+  // Start on a source frame, length a whole number of screen frames.
+  const start = d.isImage ? 0 : Math.round(clamp(Number(dr.start) || 0, 0, Math.max(0, dur - 0.05)) * sf) / sf;
+  const len0 = d.isImage ? (S.app ? S.app.imageSeconds : 3) : clamp(Number(dr.length) || Math.min(max, dur || max), 1 / of, Math.max(1 / of, Math.min(max, (dur || max) - start)));
+  const length = d.isImage ? len0 : Math.max(1, Math.floor(len0 * of + 1e-6)) / of;
+  const cd = (S.app && S.app.cornersDefault) || { on: false, r: 80 };
+  return { start: Math.round(start * 1000) / 1000, length: Math.round(length * 1000) / 1000, quality: dr.quality ?? 'auto', frame: { ...DEFAULT_FRAME, ...(dr.frame || {}) },
+    corners: { on: !!(dr.corners || cd).on, r: (dr.corners || cd).r ?? 80 }, detail: dr.detail || 0, blend: dr.blend || 0 };
 }
 
 async function select(id, showVersion = null) {
@@ -327,7 +332,7 @@ function buildDetail(d) {
   stopPreviewLoop();
   const main = $('detail');
   main.textContent = '';
-  refs = {};
+  refs = { root: main }; // root marks a built view: later updates re-render parts, not the whole view
   // header
   refs.title = el('h1', { class: 'detail-title', tabindex: '-1' });
   refs.meta = el('div', { class: 'meta' });
@@ -470,8 +475,18 @@ function menuButton(label, itemsFn) {
 }
 
 // ---------- preview ----------
-let media = null, rafId = 0, natural = { w: 0, h: 0 }, scrubbing = false;
+let media = null, blendVid = null, rafId = 0, natural = { w: 0, h: 0 }, scrubbing = false;
+const play = { mode: 'selection', phase: 'end' }; // mode: 'selection' | 'seam'
 function stopPreviewLoop() { cancelAnimationFrame(rafId); rafId = 0; }
+const OUT_FPS = () => (S.app ? S.app.deviceFps : 18);
+const srcFps = () => (S.detail && S.detail.fps) || 25;
+const r3 = v => Math.round(v * 1000) / 1000;
+function fmtT2(s) {
+  if (!Number.isFinite(s)) return '–';
+  s = Math.max(0, s);
+  const m = Math.floor(s / 60), sec = s - m * 60;
+  return `${m}:${sec.toFixed(2).padStart(5, '0')}`;
+}
 
 function showPreview(vid, force = false) {
   const d = S.detail;
@@ -480,7 +495,7 @@ function showPreview(vid, force = false) {
   S.showing = vid;
   stopPreviewLoop();
   refs.stage.querySelectorAll('.media, .empty-msg').forEach(n => n.remove());
-  media = null;
+  media = null; blendVid = null;
   const v = vid ? d.versions.find(x => x.id === vid) : null;
   refs.stage.classList.toggle('version', !!v);
   if (v) {
@@ -501,16 +516,22 @@ function showPreview(vid, force = false) {
         applyGeometry();
         media.currentTime = S.draft.start;
         media.play().catch(() => {});
+        drawFilmstrip();
       });
+      // Second copy of the source for the loop blend: shows the frames from just before the start, fading in.
+      blendVid = el('video', { class: 'media blend', src: d.previewUrl, muted: true, playsInline: true, preload: 'auto', 'aria-hidden': 'true' });
+      blendVid.muted = true;
+      blendVid.style.opacity = '0';
     }
     natural = { w: d.width || W, h: d.height || H };
+    if (blendVid) refs.stage.prepend(blendVid);
     refs.stage.prepend(media);
     applyGeometry();
   } else {
     refs.stage.prepend(el('div', { class: 'empty-msg', text: d.assets === 'error' ? 'No preview: this file can\'t be read.' : d.missing ? 'The original file is missing.' : 'Preparing the preview…' }));
   }
-  if (!v && S.app) { styleNotch(refs.notch, liveMask()); styleCorners(refs.corners, liveMask()); }
-  if (v) refs.corners.style.display = 'none';
+  if (!v && S.app) styleNotch(refs.notch, liveMask());
+  applyCorners();
   refs.stage.append(refs.notch, refs.corners);
   if (refs.stage.classList.contains('outline')) refs.notch.classList.add('outline');
   refs.stage.classList.toggle('pannable', !v && !!d.canTune);
@@ -520,15 +541,36 @@ function showPreview(vid, force = false) {
   rafId = requestAnimationFrame(tickPreview);
 }
 
+// Corners are part of each version: the tuning shows the draft's corners; a version preview has them baked in.
+function applyCorners() {
+  if (!refs.corners) return;
+  if (S.showing || !S.draft) { refs.corners.style.display = 'none'; return; }
+  styleCorners(refs.corners, { corners: S.draft.corners });
+}
+
 function applyGeometry() {
   if (!media || S.showing || !S.draft || !natural.w) return;
   const g = frameGeometry(natural.w, natural.h, S.draft.frame);
-  Object.assign(media.style, { left: (g.left / W) * 100 + '%', top: (g.top / H) * 100 + '%', width: (g.width / W) * 100 + '%', height: (g.height / H) * 100 + '%' });
+  const st = { left: (g.left / W) * 100 + '%', top: (g.top / H) * 100 + '%', width: (g.width / W) * 100 + '%', height: (g.height / H) * 100 + '%' };
+  // "Simplify fine detail" = Gaussian blur on the 2400x1080 canvas (src/convert.js detailSigma); same deviation here.
+  const sigma = (Math.min(100, Math.max(0, S.draft.detail || 0)) / 100) * 3.5 * (refs.stage.clientWidth / W);
+  st.filter = sigma > 0 ? `blur(${sigma.toFixed(2)}px)` : '';
+  Object.assign(media.style, st);
+  if (blendVid) Object.assign(blendVid.style, st);
   updateFrameControls();
 }
+window.addEventListener('resize', () => applyGeometry());
 
+// Looping is driven by animation frames; a timer takes over when they are throttled (e.g. a hidden window).
+let lastTick = 0;
+setInterval(() => { if (rafId && performance.now() - lastTick > 120) tickBody(); }, 40);
 function tickPreview() {
   rafId = requestAnimationFrame(tickPreview);
+  tickBody();
+}
+function tickBody() {
+  lastTick = performance.now();
+  if (!refs.playBtn) return;
   refs.playBtn.hidden = !media || media.tagName !== 'VIDEO';
   if (!media || media.tagName !== 'VIDEO') { if (refs.time) refs.time.textContent = S.detail && S.detail.isImage && !S.showing ? `Still image · ${fmtSecs(S.draft.length)} on the screen` : ''; return; }
   const playing = !media.paused;
@@ -540,9 +582,45 @@ function tickPreview() {
   }
   const { start, length } = S.draft;
   const end = start + length;
-  if (!scrubbing && (media.currentTime >= end - 0.02 || media.currentTime < start - 0.25)) { media.currentTime = start; }
-  refs.time.textContent = `${fmtTime(Math.max(0, media.currentTime - start))} / ${fmtTime(length)}`;
-  if (refs.playhead && S.detail.duration) refs.playhead.style.left = (media.currentTime / S.detail.duration) * 100 + '%';
+  const ct = media.currentTime;
+  if (!scrubbing) {
+    if (play.mode === 'seam') {
+      // The seam: last second of the selection, then the first second, over and over.
+      const a = Math.max(start, end - 1), b = Math.min(end, start + 1);
+      if (play.phase === 'end' && (ct >= end - 0.01 || ct < a - 0.25)) { media.currentTime = start; play.phase = 'start'; }
+      else if (play.phase === 'start' && (ct >= b - 0.01 || ct < start - 0.25)) { media.currentTime = a; play.phase = 'end'; }
+    } else if (ct >= end - 0.01 || ct < start - 0.25) media.currentTime = start;
+  }
+  updateBlendOverlay(media.currentTime, playing);
+  const rel = media.currentTime - start;
+  refs.time.textContent = `${fmtT2(Math.max(0, rel))} / ${fmtT2(length)} · frame ${Math.min(Math.round(length * OUT_FPS()), Math.floor(Math.max(0, rel) * OUT_FPS() + 1e-6) + 1)}`;
+  if (refs.playhead && S.detail.duration) { refs.playhead.style.left = trackPct(media.currentTime); }
+}
+
+/** Effective blend (as the converter will apply it): whole output frames, <= half the selection, <= time before start. */
+function effectiveBlend() {
+  const dr = S.draft;
+  if (!dr || S.detail.isImage) return 0;
+  const b = Math.max(0, Math.min(dr.blend || 0, 1.5, dr.length / 2, dr.start));
+  return Math.floor(b * OUT_FPS() + 1e-6) / OUT_FPS();
+}
+function updateBlendOverlay(ct, playing) {
+  if (!blendVid) return;
+  const B = effectiveBlend();
+  const end = S.draft.start + S.draft.length;
+  if (B > 0 && ct >= end - B && ct < end) {
+    const p = (ct - (end - B)) / B;
+    const target = S.draft.start - B + (ct - (end - B));
+    if (Math.abs(blendVid.currentTime - target) > 0.12 || (playing && blendVid.paused) || (!playing && Math.abs(blendVid.currentTime - target) > 0.02)) {
+      blendVid.currentTime = target;
+    }
+    if (playing && blendVid.paused) blendVid.play().catch(() => {});
+    if (!playing && !blendVid.paused) blendVid.pause();
+    blendVid.style.opacity = String(p);
+  } else {
+    blendVid.style.opacity = '0';
+    if (!blendVid.paused) blendVid.pause();
+  }
 }
 
 function togglePlay() {
@@ -582,6 +660,38 @@ function setupPan() {
   refs.stage.addEventListener('pointercancel', end);
 }
 
+// ---------- frame grabbing (for the filmstrip and the seam check; reads the same media the preview plays) ----------
+let grabber = null, grabChain = Promise.resolve();
+function grabFrame(time, w, h) {
+  const url = S.detail && S.detail.previewUrl;
+  const run = () => new Promise(resolve => {
+    if (!url) return resolve(null);
+    if (!grabber || grabber.dataset.src !== url) {
+      grabber = el('video', { muted: true, preload: 'auto', playsInline: true });
+      grabber.muted = true; grabber.dataset.src = url; grabber.src = url;
+    }
+    const v = grabber;
+    const draw = () => {
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      try { c.getContext('2d').drawImage(v, 0, 0, w, h); } catch { return resolve(null); }
+      resolve(c);
+    };
+    const seek = () => {
+      // Like ffmpeg's fps filter (round to the nearest source frame); +1 ms lands inside that frame.
+      const t = clamp(Math.round(time * srcFps()) / srcFps() + 0.001, 0, Math.max(0, (v.duration || time) - 0.001));
+      if (Math.abs(v.currentTime - t) < 0.0005 && v.readyState >= 2) return draw();
+      const done = () => { v.removeEventListener('seeked', done); clearTimeout(to); draw(); };
+      const to = setTimeout(done, 3000);
+      v.addEventListener('seeked', done);
+      v.currentTime = t;
+    };
+    if (v.readyState >= 1) seek(); else v.addEventListener('loadedmetadata', seek, { once: true });
+  });
+  grabChain = grabChain.then(run, run);
+  return grabChain;
+}
+
 // ---------- tune ----------
 function buildTune(d) {
   const t = refs.tune;
@@ -593,34 +703,22 @@ function buildTune(d) {
     return;
   }
   const dr = S.draft;
-  // 1. trim
-  if (!d.isImage && d.duration) {
-    const g = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Part of the clip' }));
-    refs.trim = el('div', { class: 'trim' });
-    const track = el('div', { class: 'track' });
-    refs.trimRange = el('div', { class: 'range', title: 'Drag to move the selected part' });
-    refs.hStart = el('div', { class: 'handle', role: 'slider', tabindex: '0', 'aria-label': 'Start' });
-    refs.hEnd = el('div', { class: 'handle', role: 'slider', tabindex: '0', 'aria-label': 'End' });
-    refs.playhead = el('div', { class: 'playhead', 'aria-hidden': 'true' });
-    refs.trim.append(track, refs.trimRange, refs.playhead, refs.hStart, refs.hEnd);
-    refs.inStart = el('input', { type: 'number', id: 'tStart', min: '0', step: '0.1' });
-    refs.inLen = el('input', { type: 'number', id: 'tLen', min: '0.1', step: '0.1' });
-    refs.lenHint = el('span', { class: 'muted small' });
-    g.append(refs.trim, el('div', { class: 'trim-fields' },
-      el('div', { class: 'field' }, el('label', { for: 'tStart', text: 'Start (s)' }), refs.inStart),
-      el('div', { class: 'field' }, el('label', { for: 'tLen', text: 'Length (s)' }), refs.inLen), refs.lenHint));
-    t.append(g);
-    setupTrim();
-  } else {
+  // 1. loop: trim, play modes, seam check, blend
+  if (!d.isImage && d.duration) t.append(buildLoopGroup(d));
+  else {
     t.append(el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Part of the clip' }),
       el('p', { class: 'muted small', text: `Still image: it is shown as a ${fmtSecs(dr.length)} clip that repeats.` })));
   }
-  // 2. framing ("size")
+  // 2. framing ("size") and rounded corners
   const fg = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Size and position on the screen' }));
   refs.zoom = el('input', { type: 'range', id: 'fZoom', min: '0.2', max: '4', step: '0.01' });
   refs.zoomVal = el('span', { class: 'num small muted', style: 'min-width:48px' });
   refs.posX = el('input', { type: 'range', id: 'fX', min: '0', max: '1', step: '0.001' });
   refs.posY = el('input', { type: 'range', id: 'fY', min: '0', max: '1', step: '0.001' });
+  refs.cornersOn = el('input', { type: 'checkbox', id: 'cOn' });
+  refs.cornersR = el('input', { type: 'range', id: 'cR', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius (pixels)' });
+  refs.cornersRN = el('input', { type: 'number', id: 'cRN', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius in pixels' });
+  refs.cornersRow = el('div', { class: 'slider-row' }, el('label', { for: 'cR', class: 'small muted', text: 'Corner radius' }), refs.cornersR, refs.cornersRN);
   fg.append(
     el('div', { class: 'slider-row' }, el('label', { for: 'fZoom', class: 'small muted', text: 'Zoom' }), refs.zoom, refs.zoomVal),
     el('div', { class: 'slider-row' }, el('label', { for: 'fX', class: 'small muted', text: 'Left – right' }), refs.posX),
@@ -628,21 +726,36 @@ function buildTune(d) {
     el('div', { class: 'row' },
       el('button', { class: 'btn secondary', text: 'Fill the screen', onclick: () => { dr.frame = { ...DEFAULT_FRAME }; applyGeometry(); draftChanged(); } }),
       el('button', { class: 'btn secondary', text: 'Show the whole picture', onclick: () => { dr.frame = { zoom: Math.round(fitZoom(natural.w, natural.h) * 1000) / 1000, x: 0.5, y: 0.5 }; applyGeometry(); draftChanged(); } }),
-      el('span', { class: 'muted small', text: 'Tip: drag the preview to move the picture.' })));
+      el('span', { class: 'muted small', text: 'Tip: drag the preview to move the picture.' })),
+    el('label', { class: 'check' }, refs.cornersOn, 'Rounded corners'), refs.cornersRow);
   refs.zoom.oninput = () => { dr.frame.zoom = Number(refs.zoom.value); applyGeometry(); };
   refs.posX.oninput = () => { dr.frame.x = Number(refs.posX.value); applyGeometry(); };
   refs.posY.oninput = () => { dr.frame.y = Number(refs.posY.value); applyGeometry(); };
   for (const r of [refs.zoom, refs.posX, refs.posY]) r.onchange = draftChanged;
+  const onCorners = (fromNum) => {
+    if (fromNum) refs.cornersR.value = refs.cornersRN.value; else refs.cornersRN.value = refs.cornersR.value;
+    dr.corners = { on: refs.cornersOn.checked, r: clamp(Math.round(Number(refs.cornersR.value) || 0), 0, 300) };
+    refs.cornersRow.hidden = !dr.corners.on;
+    applyCorners();
+  };
+  refs.cornersOn.onchange = () => { onCorners(false); draftChanged(); };
+  refs.cornersR.oninput = () => onCorners(false);
+  refs.cornersRN.oninput = () => onCorners(true);
+  refs.cornersR.onchange = refs.cornersRN.onchange = draftChanged;
   t.append(fg);
-  // 3. quality
+  // 3. quality + simplify fine detail
   const qg = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Quality' }));
   refs.qAuto = el('input', { type: 'radio', name: 'q', value: 'auto' });
   refs.qCustom = el('input', { type: 'radio', name: 'q', value: 'custom' });
   refs.qSlider = el('input', { type: 'range', id: 'qVal', min: '1', max: '100', step: '1', 'aria-label': 'Custom quality' });
   refs.qNum = el('span', { class: 'num', style: 'min-width:28px' });
   refs.qRow = el('div', { class: 'slider-row' }, el('span', { class: 'small muted', text: 'Smaller file' }), refs.qSlider, el('span', { class: 'small muted', text: 'Sharper' }), refs.qNum);
+  refs.detail = el('input', { type: 'range', id: 'dVal', min: '0', max: '100', step: '5' });
+  refs.detailNum = el('span', { class: 'num', style: 'min-width:28px' });
   qg.append(el('label', { class: 'radio' }, refs.qAuto, 'Best that fits (recommended)'),
-    el('label', { class: 'radio' }, refs.qCustom, 'Custom'), refs.qRow);
+    el('label', { class: 'radio' }, refs.qCustom, 'Custom'), refs.qRow,
+    el('div', { class: 'slider-row', style: 'margin-top:8px' }, el('label', { for: 'dVal', class: 'small muted', text: 'Simplify fine detail' }), refs.detail, refs.detailNum),
+    el('p', { class: 'muted small', text: 'Softens tiny detail so more of the clip fits (0 = off). The preview shows the effect.' }));
   const onQ = () => {
     dr.quality = refs.qAuto.checked ? 'auto' : Number(refs.qSlider.value);
     refs.qRow.hidden = refs.qAuto.checked;
@@ -652,6 +765,8 @@ function buildTune(d) {
   refs.qAuto.onchange = refs.qCustom.onchange = onQ;
   refs.qSlider.oninput = () => { refs.qNum.textContent = refs.qSlider.value; };
   refs.qSlider.onchange = onQ;
+  refs.detail.oninput = () => { dr.detail = Number(refs.detail.value); refs.detailNum.textContent = dr.detail || 'off'; applyGeometry(); };
+  refs.detail.onchange = draftChanged;
   t.append(qg);
   // 4. fit meter
   refs.meterState = el('span', { class: 'meter-state' });
@@ -664,26 +779,143 @@ function buildTune(d) {
   // 5. actions
   refs.saveBtn = el('button', { class: 'btn primary big', text: 'Save as version', onclick: saveVersion });
   refs.saveReason = el('span', { class: 'reason', role: 'status' });
+  refs.saveFix = el('button', { class: 'btn secondary', hidden: true });
   t.append(el('div', { class: 'actions' }, refs.saveBtn,
-    el('button', { class: 'btn ghost', text: 'Reset', onclick: resetDraft }), refs.saveReason));
+    el('button', { class: 'btn ghost', text: 'Reset', onclick: resetDraft }), refs.saveReason, refs.saveFix));
   syncTuneControls();
 }
 
-function syncTuneControls() {
-  const dr = S.draft, d = S.detail;
-  if (!dr || !refs.saveBtn) return;
-  if (refs.inStart) {
-    refs.inStart.value = dr.start; refs.inLen.value = dr.length;
-    refs.inStart.max = r1(Math.max(0, d.duration - 0.1));
-    refs.inLen.max = r1(maxLen());
-    refs.lenHint.textContent = `up to ${fmtSecs(Math.min(S.app.maxSeconds, d.duration))}`;
-    positionTrim();
+// ----- loop editing -----
+const view = { zoomed: false, a: 0, b: 0 }; // visible part of the trim track (seconds)
+function buildLoopGroup(d) {
+  const g = el('fieldset', { class: 'group' }, el('legend', { class: 'group-label', text: 'Part of the clip (the loop)' }));
+  refs.zoomTrack = el('button', { class: 'btn ghost', 'aria-pressed': 'false', text: 'Zoom to the selection', onclick: () => { view.zoomed = !view.zoomed; fitView(); positionTrim(); drawFilmstrip(); } });
+  refs.trim = el('div', { class: 'trim' });
+  refs.film = el('canvas', { class: 'filmstrip', 'aria-hidden': 'true' });
+  refs.trimRange = el('div', { class: 'range', title: 'Drag to move the selected part' });
+  refs.hStart = el('div', { class: 'handle', role: 'slider', tabindex: '0', 'aria-label': 'Start of the loop. Arrow keys move one frame, Shift+arrow ten frames.' });
+  refs.hEnd = el('div', { class: 'handle', role: 'slider', tabindex: '0', 'aria-label': 'End of the loop. Arrow keys move one frame, Shift+arrow ten frames.' });
+  refs.playhead = el('div', { class: 'playhead', 'aria-hidden': 'true' });
+  refs.trim.append(refs.film, refs.trimRange, refs.playhead, refs.hStart, refs.hEnd);
+  refs.viewLabel = el('span', { class: 'muted small num' });
+  // start / end rows: frame buttons, numbers
+  const nudgeBtn = (label, aria, fn) => el('button', { class: 'btn secondary nudge', text: label, 'aria-label': aria, onclick: e => fn(e.shiftKey ? 10 : 1) });
+  refs.inStartF = el('input', { type: 'number', id: 'tStartF', min: '0', step: '1' });
+  refs.inLenF = el('input', { type: 'number', id: 'tLenF', min: '1', step: '1' });
+  refs.startInfo = el('span', { class: 'muted small num' });
+  refs.endInfo = el('span', { class: 'muted small num' });
+  const startRow = el('div', { class: 'frame-row' },
+    el('span', { class: 'frame-row-label', text: 'Start' }),
+    nudgeBtn('◀ frame', 'Start one frame earlier', n => nudgeStart(-n)), nudgeBtn('frame ▶', 'Start one frame later', n => nudgeStart(n)),
+    el('label', { for: 'tStartF', class: 'small muted', text: 'source frame' }), refs.inStartF, refs.startInfo);
+  const endRow = el('div', { class: 'frame-row' },
+    el('span', { class: 'frame-row-label', text: 'End' }),
+    nudgeBtn('◀ frame', 'End one frame earlier', n => nudgeEnd(-n)), nudgeBtn('frame ▶', 'End one frame later', n => nudgeEnd(n)),
+    el('label', { for: 'tLenF', class: 'small muted', text: `length in frames (${OUT_FPS()} per second)` }), refs.inLenF, refs.endInfo);
+  // play mode
+  refs.pmSel = el('input', { type: 'radio', name: 'pm', value: 'selection', checked: play.mode === 'selection' });
+  refs.pmSeam = el('input', { type: 'radio', name: 'pm', value: 'seam', checked: play.mode === 'seam' });
+  const onMode = () => {
+    play.mode = refs.pmSeam.checked ? 'seam' : 'selection';
+    if (media && media.tagName === 'VIDEO') {
+      const end = S.draft.start + S.draft.length;
+      if (play.mode === 'seam') { play.phase = 'end'; media.currentTime = Math.max(S.draft.start, end - 1); } else media.currentTime = S.draft.start;
+      media.play().catch(() => {});
+    }
+  };
+  refs.pmSel.onchange = refs.pmSeam.onchange = onMode;
+  const modes = el('div', { class: 'row', role: 'radiogroup', 'aria-label': 'Preview plays' },
+    el('span', { class: 'small muted', text: 'Preview plays:' }),
+    el('label', { class: 'radio' }, refs.pmSel, 'the selection'),
+    el('label', { class: 'radio' }, refs.pmSeam, 'the seam (last second, then first second)'));
+  // blend
+  refs.blend = el('input', { type: 'range', id: 'bVal', min: '0', max: '1.5', step: String(1 / OUT_FPS()) });
+  refs.blendNum = el('span', { class: 'num small', style: 'min-width:48px' });
+  refs.blendNote = el('p', { class: 'muted small' });
+  refs.blend.oninput = () => { S.draft.blend = r3(Number(refs.blend.value)); updateLoopInfo(); };
+  refs.blend.onchange = draftChanged;
+  const blendRow = el('div', { class: 'slider-row' }, el('label', { for: 'bVal', class: 'small muted', text: 'Blend the end into the start' }), refs.blend, refs.blendNum);
+  // seam check
+  refs.seamBtn = el('button', { class: 'btn secondary', text: 'Check the seam', 'aria-expanded': 'false', onclick: toggleSeamPanel });
+  refs.findBtn = el('button', { class: 'btn secondary', text: 'Find best loop point', onclick: findLoopPoint });
+  refs.findResult = el('div', { class: 'small', role: 'status' });
+  refs.seamPanel = el('div', { class: 'seam-panel', hidden: true });
+  g.append(el('div', { class: 'row trim-head' }, refs.viewLabel, el('span', { class: 'grow' }), refs.zoomTrack),
+    refs.trim, startRow, endRow, modes, blendRow, refs.blendNote,
+    el('div', { class: 'row' }, refs.seamBtn, refs.findBtn), refs.findResult, refs.seamPanel);
+  setupTrim();
+  fitView();
+  return g;
+}
+
+function fitView() {
+  const d = S.detail, dr = S.draft;
+  if (view.zoomed) {
+    const pad = Math.max(0.5, dr.length * 0.15);
+    view.a = Math.max(0, dr.start - pad); view.b = Math.min(d.duration, dr.start + dr.length + pad);
+  } else { view.a = 0; view.b = d.duration; }
+  if (refs.zoomTrack) {
+    refs.zoomTrack.setAttribute('aria-pressed', String(view.zoomed));
+    refs.zoomTrack.textContent = view.zoomed ? 'Show the whole clip' : 'Zoom to the selection';
   }
+  if (refs.viewLabel) refs.viewLabel.textContent = `${fmtT2(view.a)} – ${fmtT2(view.b)}`;
+}
+const trackPct = t => (clamp((t - view.a) / Math.max(0.001, view.b - view.a), 0, 1) * 100) + '%';
+
+// Filmstrip: thumbnails of the visible part of the track (cheap: grabbed from the preview media in the browser).
+let filmSeq = 0, filmT = 0;
+function drawFilmstrip() {
+  clearTimeout(filmT);
+  filmT = setTimeout(async () => {
+    const c = refs.film, d = S.detail;
+    if (!c || !d || !d.previewUrl || d.previewKind !== 'video') return;
+    const seq = ++filmSeq;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (!w || !h) return;
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    const tw = Math.max(24, Math.round(h * (natural.w / natural.h || 16 / 9)));
+    const n = Math.max(1, Math.ceil(w / tw));
+    for (let i = 0; i < n; i++) {
+      const t = view.a + ((i + 0.5) / n) * (view.b - view.a);
+      const f = await grabFrame(t, tw, h);
+      if (seq !== filmSeq) return;
+      if (f) ctx.drawImage(f, i * tw, 0);
+    }
+  }, 250);
+}
+
+function syncTuneControls() {
+  const dr = S.draft;
+  if (!dr || !refs.saveBtn) return;
+  if (refs.trim) { refs.blend.value = dr.blend || 0; updateLoopInfo(); positionTrim(); }
   refs.qAuto.checked = dr.quality === 'auto'; refs.qCustom.checked = dr.quality !== 'auto';
   refs.qSlider.value = dr.quality === 'auto' ? 80 : dr.quality;
   refs.qNum.textContent = refs.qSlider.value;
   refs.qRow.hidden = dr.quality === 'auto';
+  refs.detail.value = dr.detail || 0; refs.detailNum.textContent = dr.detail || 'off';
+  refs.cornersOn.checked = !!dr.corners.on; refs.cornersR.value = refs.cornersRN.value = dr.corners.r;
+  refs.cornersRow.hidden = !dr.corners.on;
+  applyCorners();
   updateFrameControls();
+}
+
+function updateLoopInfo() {
+  const d = S.detail, dr = S.draft;
+  if (!refs.trim) return;
+  const sf = Math.round(dr.start * srcFps());
+  const n = Math.round(dr.length * OUT_FPS());
+  if (document.activeElement !== refs.inStartF) refs.inStartF.value = sf;
+  if (document.activeElement !== refs.inLenF) refs.inLenF.value = n;
+  refs.inStartF.max = Math.max(0, Math.floor((d.duration - 0.05) * srcFps()));
+  refs.inLenF.max = Math.round(Math.min(S.app.maxSeconds, d.duration - dr.start) * OUT_FPS());
+  refs.startInfo.textContent = `at ${fmtT2(dr.start)}${d.fps ? '' : ' (source frame rate unknown, assuming 25)'}`;
+  refs.endInfo.textContent = `= ${fmtSecs(dr.length)}, ends at ${fmtT2(dr.start + dr.length)}`;
+  const B = effectiveBlend();
+  refs.blendNum.textContent = (dr.blend || 0) > 0 ? `${(dr.blend).toFixed(2)} s` : 'off';
+  refs.blendNote.textContent = (dr.blend || 0) <= 0 ? 'Cross-fades the last moments of the loop into the frames just before its start, so the jump back is invisible. The length stays the same.'
+    : B + 1e-6 < (dr.blend || 0) ? `Only ${B.toFixed(2)} s can be blended: it needs that much of the clip before the start (and at most half the loop). Move the start later for more.`
+      : `The last ${B.toFixed(2)} s fade into the ${B.toFixed(2)} s just before the start.`;
 }
 
 function updateFrameControls() {
@@ -698,77 +930,182 @@ function updateFrameControls() {
   refs.posX.disabled = g.width === W; refs.posY.disabled = g.height === H;
 }
 
-const maxLen = () => Math.max(0.1, Math.min(S.app.maxSeconds, (S.detail.duration || S.app.maxSeconds) - S.draft.start));
-
 function positionTrim() {
   const d = S.detail, dr = S.draft;
   if (!refs.trim || !d.duration) return;
-  const pc = v => (v / d.duration) * 100 + '%';
-  refs.hStart.style.left = pc(dr.start);
-  refs.hEnd.style.left = pc(dr.start + dr.length);
-  refs.trimRange.style.left = pc(dr.start);
-  refs.trimRange.style.width = pc(dr.length);
-  for (const [h, v, lo, hi] of [[refs.hStart, dr.start, 0, d.duration - 0.1], [refs.hEnd, dr.start + dr.length, dr.start + 0.1, Math.min(d.duration, dr.start + S.app.maxSeconds)]]) {
-    h.setAttribute('aria-valuemin', r1(lo)); h.setAttribute('aria-valuemax', r1(hi)); h.setAttribute('aria-valuenow', r1(v));
-    h.setAttribute('aria-valuetext', fmtTime(v));
+  const end = dr.start + dr.length;
+  refs.hStart.style.left = trackPct(dr.start);
+  refs.hEnd.style.left = trackPct(end);
+  refs.trimRange.style.left = trackPct(dr.start);
+  refs.trimRange.style.width = `calc(${trackPct(end)} - ${trackPct(dr.start)})`;
+  for (const [h, v, lo, hi] of [[refs.hStart, dr.start, 0, d.duration - 0.05], [refs.hEnd, end, dr.start + 1 / OUT_FPS(), Math.min(d.duration, dr.start + S.app.maxSeconds)]]) {
+    h.setAttribute('aria-valuemin', r3(lo)); h.setAttribute('aria-valuemax', r3(hi)); h.setAttribute('aria-valuenow', r3(v));
+    h.setAttribute('aria-valuetext', `${fmtT2(v)}, ${h === refs.hStart ? `source frame ${Math.round(v * srcFps())}` : `${Math.round(dr.length * OUT_FPS())} frames long`}`);
   }
+  updateLoopInfo();
 }
 
+/** Start snaps to source frames; the length is a whole number of screen frames (1/18 s). */
 function setTrim(start, length, seekTo) {
   const d = S.detail;
-  start = clamp(r1(start), 0, r1(Math.max(0, d.duration - 0.1)));
-  length = clamp(r1(length), 0.1, r1(Math.max(0.1, Math.min(S.app.maxSeconds, d.duration - start))));
-  S.draft.start = start; S.draft.length = length;
-  refs.inStart.value = start; refs.inLen.value = length; refs.inLen.max = r1(maxLen());
+  const sf = srcFps(), of = OUT_FPS();
+  start = clamp(Math.round(start * sf) / sf, 0, Math.max(0, d.duration - 0.05));
+  const maxN = Math.max(1, Math.floor(Math.min(S.app.maxSeconds, d.duration - start) * of + 1e-6));
+  const n = clamp(Math.round(length * of), 1, maxN);
+  S.draft.start = r3(start); S.draft.length = r3(n / of);
   positionTrim();
-  if (media && media.tagName === 'VIDEO' && !S.showing) media.currentTime = seekTo != null ? seekTo : start;
+  if (media && media.tagName === 'VIDEO' && !S.showing) media.currentTime = seekTo != null ? seekTo : S.draft.start;
+}
+// Nudge by whole frames and show the frame that moved (paused), so 1-frame changes can be seen.
+function nudgeStart(frames) {
+  const end = S.draft.start + S.draft.length;
+  const s = S.draft.start + frames / srcFps();
+  if (media && media.tagName === 'VIDEO') media.pause();
+  setTrim(s, end - s, Math.max(0, s));
+  draftChangedSoon();
+}
+function nudgeEnd(frames) {
+  const l = S.draft.length + frames / OUT_FPS();
+  if (media && media.tagName === 'VIDEO') media.pause();
+  setTrim(S.draft.start, l, S.draft.start + Math.max(1, Math.round(l * OUT_FPS())) / OUT_FPS() - 1 / OUT_FPS());
+  draftChangedSoon();
 }
 
 function setupTrim() {
   const d = S.detail;
-  const timeAt = x => { const r = refs.trim.getBoundingClientRect(); return clamp((x - r.left) / r.width, 0, 1) * d.duration; };
+  const timeAt = x => { const r = refs.trim.getBoundingClientRect(); return view.a + clamp((x - r.left) / r.width, 0, 1) * (view.b - view.a); };
   const drag = (elm, onMove) => {
     elm.addEventListener('pointerdown', e => {
       e.preventDefault(); e.stopPropagation();
       elm.setPointerCapture(e.pointerId);
       scrubbing = true;
-      const wasPlaying = media && !media.paused;
       if (media && media.tagName === 'VIDEO') media.pause();
       const t0 = timeAt(e.clientX), s0 = S.draft.start, l0 = S.draft.length;
       const move = ev => onMove(timeAt(ev.clientX), t0, s0, l0);
       const up = () => {
         elm.removeEventListener('pointermove', move); elm.removeEventListener('pointerup', up); elm.removeEventListener('pointercancel', up);
         scrubbing = false;
-        if (media && media.tagName === 'VIDEO') { media.currentTime = S.draft.start; if (wasPlaying || true) media.play().catch(() => {}); }
+        if (media && media.tagName === 'VIDEO') { media.currentTime = S.draft.start; media.play().catch(() => {}); }
+        if (view.zoomed) { fitView(); positionTrim(); drawFilmstrip(); }
         draftChanged();
       };
       elm.addEventListener('pointermove', move); elm.addEventListener('pointerup', up); elm.addEventListener('pointercancel', up);
     });
   };
-  drag(refs.hStart, t => { const end = S.draft.start + S.draft.length; const s = clamp(t, Math.max(0, end - S.app.maxSeconds), end - 0.1); setTrim(s, end - s, s); });
-  drag(refs.hEnd, t => { const e = clamp(t, S.draft.start + 0.1, d.duration); setTrim(S.draft.start, e - S.draft.start, e); });
+  drag(refs.hStart, t => { const end = S.draft.start + S.draft.length; const s = clamp(t, Math.max(0, end - S.app.maxSeconds), end - 1 / OUT_FPS()); setTrim(s, end - s, s); });
+  drag(refs.hEnd, t => { const e = clamp(t, S.draft.start + 1 / OUT_FPS(), d.duration); setTrim(S.draft.start, e - S.draft.start, e); });
   drag(refs.trimRange, (t, t0, s0, l0) => { const s = clamp(s0 + t - t0, 0, d.duration - l0); setTrim(s, l0, s); });
   const keys = (h, isEnd) => h.addEventListener('keydown', e => {
-    const step = { ArrowLeft: -0.1, ArrowDown: -0.1, ArrowRight: 0.1, ArrowUp: 0.1, PageDown: -1, PageUp: 1 }[e.key];
+    const dir = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+    if (dir) { e.preventDefault(); (isEnd ? nudgeEnd : nudgeStart)(dir * (e.shiftKey ? 10 : 1)); return; }
     let s = S.draft.start, l = S.draft.length;
-    if (step != null) { if (isEnd) l += step; else { s += step; l -= step; } }
-    else if (e.key === 'Home') { if (isEnd) l = 0.1; else { l += s; s = 0; } }
-    else if (e.key === 'End') { if (isEnd) l = d.duration - s; else { s = s + l - 0.1; l = 0.1; } }
+    if (e.key === 'PageUp' || e.key === 'PageDown') { const st = e.key === 'PageUp' ? 1 : -1; if (isEnd) l += st; else { s += st; l -= st; } }
+    else if (e.key === 'Home') { if (isEnd) l = 1 / OUT_FPS(); else { l += s; s = 0; } }
+    else if (e.key === 'End') { if (isEnd) l = d.duration - s; else { s = s + l - 1 / OUT_FPS(); l = 1 / OUT_FPS(); } }
     else return;
     e.preventDefault();
     if (!isEnd && l > S.app.maxSeconds) l = S.app.maxSeconds;
-    setTrim(s, Math.max(0.1, l), isEnd ? s + Math.max(0.1, l) - 0.3 : s);
+    setTrim(s, Math.max(1 / OUT_FPS(), l), s);
     draftChangedSoon();
   });
   keys(refs.hStart, false); keys(refs.hEnd, true);
-  refs.inStart.onchange = () => { setTrim(Number(refs.inStart.value) || 0, S.draft.length); draftChanged(); };
-  refs.inLen.onchange = () => { setTrim(S.draft.start, Number(refs.inLen.value) || 0.1); draftChanged(); };
+  refs.inStartF.onchange = () => { const end = S.draft.start + S.draft.length; const s = (Number(refs.inStartF.value) || 0) / srcFps(); setTrim(s, Math.max(1 / OUT_FPS(), end - s)); draftChanged(); };
+  refs.inLenF.onchange = () => { setTrim(S.draft.start, (Number(refs.inLenF.value) || 1) / OUT_FPS()); draftChanged(); };
+}
+
+// ----- seam check -----
+const seam = { mode: 'onion', opacity: 0.5 };
+function toggleSeamPanel() {
+  const open = refs.seamPanel.hidden;
+  refs.seamPanel.hidden = !open;
+  refs.seamBtn.setAttribute('aria-expanded', String(open));
+  if (open) buildSeamPanel();
+}
+function buildSeamPanel() {
+  const p = refs.seamPanel;
+  p.textContent = '';
+  const modeSel = el('select', { id: 'seamMode', 'aria-label': 'Comparison' },
+    el('option', { value: 'onion', text: 'Onion skin (first frame over the last)' }),
+    el('option', { value: 'side', text: 'Side by side (last | first)' }),
+    el('option', { value: 'diff', text: 'Difference (black = identical)' }));
+  modeSel.value = seam.mode;
+  const op = el('input', { type: 'range', id: 'seamOp', min: '0', max: '1', step: '0.05', value: String(seam.opacity) });
+  const opRow = el('div', { class: 'slider-row' }, el('label', { for: 'seamOp', class: 'small muted', text: 'First frame opacity' }), op);
+  refs.seamCanvas = el('canvas', { class: 'seam-canvas', role: 'img', 'aria-label': 'Comparison of the last and first frame of the loop' });
+  refs.seamScore = el('p', { class: 'small', role: 'status' });
+  modeSel.onchange = () => { seam.mode = modeSel.value; opRow.hidden = seam.mode !== 'onion'; drawSeam(); };
+  op.oninput = () => { seam.opacity = Number(op.value); drawSeam(); };
+  opRow.hidden = seam.mode !== 'onion';
+  p.append(el('div', { class: 'row' }, el('label', { for: 'seamMode', class: 'small muted', text: 'Compare' }), modeSel,
+    el('button', { class: 'btn ghost', text: 'Refresh', onclick: () => updateSeam() })), opRow, refs.seamCanvas, refs.seamScore);
+  updateSeam();
+}
+let seamFrames = null, seamSeq = 0, seamT = 0;
+function updateSeamSoon() { if (refs.seamPanel && !refs.seamPanel.hidden) { clearTimeout(seamT); seamT = setTimeout(updateSeam, 300); } }
+async function updateSeam() {
+  const dr = S.draft, seq = ++seamSeq;
+  const w = 480, h = Math.round(w * (natural.h / natural.w || 9 / 16));
+  const last = dr.start + dr.length - 1 / OUT_FPS();
+  const B = effectiveBlend();
+  const a = await grabFrame(last, w, h);
+  const first = await grabFrame(dr.start, w, h);
+  // With a blend, the last frame is mostly the frame just before the start: mix like the converter does.
+  let lastC = a;
+  if (B > 0 && a) {
+    const pre = await grabFrame(dr.start - 1 / OUT_FPS(), w, h);
+    const p = (B - 1 / OUT_FPS()) / B;
+    lastC = document.createElement('canvas'); lastC.width = w; lastC.height = h;
+    const x = lastC.getContext('2d');
+    x.drawImage(a, 0, 0); x.globalAlpha = p; if (pre) x.drawImage(pre, 0, 0);
+  }
+  // The score compares the frame that would follow the end with the first frame (the same measure as
+  // "Find best loop point"): identical means the jump back to the start is invisible.
+  const next = B > 0 ? null : await grabFrame(dr.start + dr.length, w, h);
+  if (seq !== seamSeq) return;
+  seamFrames = { last: lastC, first, next, blended: B > 0, w, h };
+  drawSeam();
+}
+function drawSeam() {
+  const c = refs.seamCanvas, f = seamFrames;
+  if (!c || !f || !f.last || !f.first) { if (refs.seamScore) refs.seamScore.textContent = 'Couldn\'t read the frames.'; return; }
+  const side = seam.mode === 'side';
+  c.width = side ? f.w * 2 + 8 : f.w; c.height = f.h;
+  const x = c.getContext('2d');
+  x.clearRect(0, 0, c.width, c.height);
+  if (side) { x.drawImage(f.last, 0, 0); x.drawImage(f.first, f.w + 8, 0); }
+  else if (seam.mode === 'diff') { x.drawImage(f.last, 0, 0); x.globalCompositeOperation = 'difference'; x.drawImage(f.first, 0, 0); x.globalCompositeOperation = 'source-over'; }
+  else { x.drawImage(f.last, 0, 0); x.globalAlpha = seam.opacity; x.drawImage(f.first, 0, 0); x.globalAlpha = 1; }
+  // similarity of small grey versions (same measure as "Find best loop point")
+  const sm = cv => { const s = document.createElement('canvas'); s.width = 96; s.height = 54; const g = s.getContext('2d'); g.drawImage(cv, 0, 0, 96, 54); return g.getImageData(0, 0, 96, 54).data; };
+  const hint = side ? ' Left: last frame of the loop. Right: first frame.' : seam.mode === 'diff' ? ' Bright areas change at the jump.' : '';
+  if (f.blended || !f.next) { refs.seamScore.textContent = (f.blended ? 'The blend fades the end into the start, so the jump back is smooth.' : '') + hint; return; }
+  const A = sm(f.next), Bd = sm(f.first);
+  let sum = 0;
+  for (let i = 0; i < A.length; i += 4) sum += Math.abs((A[i] * 0.299 + A[i + 1] * 0.587 + A[i + 2] * 0.114) - (Bd[i] * 0.299 + Bd[i + 1] * 0.587 + Bd[i + 2] * 0.114));
+  const sim = 100 - (sum / (A.length / 4) / 255) * 100;
+  refs.seamScore.textContent = `The frame after the end is ${sim.toFixed(1)}% like the first frame` + (sim >= 98.8 ? ' (looks seamless).' : sim >= 97.5 ? ' (a small jump).' : ' (a visible jump).') + hint;
+}
+
+async function findLoopPoint() {
+  const d = S.detail, dr = S.draft;
+  refs.findBtn.disabled = true;
+  refs.findResult.textContent = 'Searching ±2 s around the end…';
+  try {
+    const r = await api(`/api/originals/${d.id}/looppoint`, 'POST', { start: dr.start, length: dr.length });
+    const use = c => el('button', { class: 'btn ' + (c === r.best ? 'primary' : 'ghost'), text: `${c === r.best ? 'Use ' : ''}${fmtT2(c.end)} (${c.similarity}%)`,
+      onclick: () => { setTrim(dr.start, c.length); draftChanged(); updateSeamSoon(); refs.findResult.textContent = `Loop end set to ${fmtT2(dr.start + dr.length)}.`; } });
+    refs.findResult.textContent = '';
+    refs.findResult.append(el('span', { text: `Best end: ${fmtT2(r.best.end)}, ${r.best.similarity}% like the start (now ${r.current.similarity}%). ` }), use(r.best),
+      r.alternatives.length ? el('span', { class: 'muted', text: ' Others: ' }) : null, ...r.alternatives.map(use));
+  } catch (e) { refs.findResult.textContent = e.message; }
+  refs.findBtn.disabled = false;
 }
 
 let draftSaveT, draftKeyT;
 function draftChangedSoon() { clearTimeout(draftKeyT); draftKeyT = setTimeout(draftChanged, 300); }
 function draftChanged() {
   updateFrameControls();
+  updateSeamSoon();
   S.est = { ...S.est, state: 'checking' };
   updateTuneState();
   scheduleEstimate();
@@ -780,6 +1117,7 @@ function resetDraft() {
   const d = S.detail;
   S.draft = initialDraft({ ...d, draft: null });
   syncTuneControls(); applyGeometry();
+  if (view.zoomed) { fitView(); drawFilmstrip(); }
   if (media && media.tagName === 'VIDEO') media.currentTime = S.draft.start;
   draftChanged();
 }
@@ -803,18 +1141,21 @@ async function runEstimate() {
   } catch (e) {
     if (seq !== estSeq) return;
     S.est = { ...S.est, state: e.code === 'busy' ? 'paused' : 'error', error: e.message };
-    if (e.code === 'busy') pausedEstimate = true;
   }
   updateTuneState();
 }
-let pausedEstimate = false;
 
 function duplicateOf() {
   const d = S.detail, dr = S.draft;
   if (!d || !S.app) return null;
-  return d.versions.find(v => v.status !== 'error' && v.notchKey === S.app.notchKey && (v.settings.fps || S.app.deviceFps) === S.app.deviceFps &&
-    v.settings.start === (d.isImage ? 0 : dr.start) && v.settings.length === dr.length && String(v.settings.quality) === String(dr.quality) &&
-    v.settings.frame && v.settings.frame.zoom === dr.frame.zoom && v.settings.frame.x === dr.frame.x && v.settings.frame.y === dr.frame.y);
+  return d.versions.find(v => {
+    const s = v.settings;
+    return v.status !== 'error' && String(v.notchKey || '').split('|')[0] === S.app.notchKey && (s.fps || S.app.deviceFps) === S.app.deviceFps &&
+      s.start === (d.isImage ? 0 : dr.start) && s.length === dr.length && String(s.quality) === String(dr.quality) &&
+      s.frame && s.frame.zoom === dr.frame.zoom && s.frame.x === dr.frame.x && s.frame.y === dr.frame.y &&
+      !!s.corners.on === !!dr.corners.on && (!dr.corners.on || s.corners.r === dr.corners.r) &&
+      (s.detail || 0) === (dr.detail || 0) && (s.blend || 0) === (d.isImage ? 0 : (dr.blend || 0));
+  });
 }
 
 function updateTuneState() {
@@ -831,7 +1172,7 @@ function updateTuneState() {
     fill.style.width = Math.min(100, frac * 100) + '%';
     over.hidden = frac <= 1;
     over.style.width = Math.min(50, (frac - 1) * 100) / 0.75 * 0.75 + '%';
-    refs.meterText.textContent = `${mb(r.bytes)} of ${mb(budget)}`;
+    refs.meterText.textContent = `${mb(r.bytes)} of ${mb(budget)}` + (S.app.budgetMeasured ? ' (measured on your screen)' : ' (estimated; check the screen to measure)');
     refs.meter.setAttribute('aria-label', `Uses about ${mb(r.bytes)} of ${mb(budget)}`);
     if (!r.fits) { refs.meter.classList.add('danger'); stateText = `Too big by ${mb(r.bytes - budget)}`; stateCls = 'danger'; }
     else if (frac > 0.97) { refs.meter.classList.add('warn'); stateText = 'Close to the limit'; stateCls = 'warn'; }
@@ -843,15 +1184,23 @@ function updateTuneState() {
   if (est.state === 'error') { stateText = 'Couldn\'t check the size'; stateCls = 'danger'; refs.meterRetry.hidden = false; refs.meterNote.textContent = est.error || ''; }
   refs.meterState.textContent = stateText;
   refs.meterState.className = 'meter-state ' + stateCls;
-  // save button
+  // save button (+ one suggested fix when it doesn't fit)
   const dup = duplicateOf();
   let reason = '', disabled = false, danger = false;
+  refs.saveFix.hidden = true;
   if (dup) { disabled = true; reason = `Already saved as ${dup.label || 'v' + dup.n}.`; }
   else if (est.state === 'done' && r && !r.fits) {
     disabled = true; danger = true;
-    reason = r.mode === 'auto'
-      ? `This part is too long to fit even at the lowest quality.${r.maxFitLength ? ` Try about ${fmtSecs(r.maxFitLength)} or less.` : ''}`
-      : `Too big.${r.maxFitLength ? ` Shorten to about ${fmtSecs(r.maxFitLength)} or` : ''} choose Best that fits.`;
+    if (r.mode === 'auto') {
+      reason = 'This part is too long to fit even at the lowest quality.' +
+        (r.detailFits ? ` "Simplify fine detail" at ${r.detailFits} should make it fit` : '') +
+        (r.maxFitLength ? `${r.detailFits ? ', or s' : ' S'}horten it to about ${fmtSecs(r.maxFitLength)}.` : '.');
+      if (r.detailFits) {
+        refs.saveFix.hidden = false;
+        refs.saveFix.textContent = `Simplify detail: ${r.detailFits}`;
+        refs.saveFix.onclick = () => { S.draft.detail = r.detailFits; syncTuneControls(); applyGeometry(); draftChanged(); };
+      }
+    } else reason = `Too big.${r.maxFitLength ? ` Shorten to about ${fmtSecs(r.maxFitLength)} or` : ''} choose Best that fits.`;
   }
   refs.saveBtn.disabled = disabled;
   refs.saveReason.textContent = reason;
@@ -862,11 +1211,11 @@ async function saveVersion() {
   const d = S.detail;
   refs.saveBtn.disabled = true;
   try {
-    const r = await api(`/api/originals/${d.id}/versions`, 'POST', JSON.parse(JSON.stringify(S.draft)));
+    await api(`/api/originals/${d.id}/versions`, 'POST', JSON.parse(JSON.stringify(S.draft)));
     await loadDetail();
     loadOriginals();
+    loadApp();
     pollSoon();
-    void r;
   } catch (e) {
     toast(e.message, true);
   }
@@ -892,6 +1241,9 @@ function versionSummary(v) {
   parts.push(s.quality === 'auto' ? 'Best that fits' : `Quality ${s.quality}`);
   const f = s.frame;
   if (f && (f.zoom !== 1 || f.x !== 0.5 || f.y !== 0.5)) parts.push(f.zoom < 1 ? 'whole picture' : `zoom ${Math.round(f.zoom * 100)}%`);
+  if (s.blend > 0) parts.push(`blend ${s.blend.toFixed(2)} s`);
+  if (s.detail > 0) parts.push(`simplified ${s.detail}`);
+  if (s.corners && s.corners.on) parts.push(`rounded ${s.corners.r}`);
   return parts.join(' · ');
 }
 
@@ -1247,21 +1599,18 @@ function formMask() {
     mode: $('nMode').value,
     band: { edge: $('nEdge').value, px: Number($('nPx').value) || 0 },
     circle: { cx: Number($('nCx').value) || 0, cy: Number($('nCy').value) || 0, r: Number($('nR').value) || 0, feather: Number($('nF').value) || 0 },
-    corners: { on: $('nCorners').checked, r: Math.round(Number($('nCrN').value) || 0) },
   };
 }
 function maskToForm(m) {
   $('nMode').value = m.mode; $('nEdge').value = m.band.edge; $('nPx').value = $('nPxR').value = m.band.px;
   $('nCx').value = m.circle.cx; $('nCy').value = m.circle.cy; $('nR').value = m.circle.r; $('nF').value = m.circle.feather;
-  const c = m.corners || { on: false, r: 80 };
-  $('nCorners').checked = !!c.on; $('nCrN').value = $('nCrR').value = c.r;
 }
-// While the Settings drawer is open, the main preview shows the unsaved notch/corner settings too.
+// While the Settings drawer is open, the main preview shows the unsaved notch setting too.
 let draftMask = null;
 const liveMask = () => draftMask || (S.app && S.app.mask);
 function applyLiveMask() {
   if (!refs.notch || S.showing) return;
-  styleNotch(refs.notch, liveMask()); styleCorners(refs.corners, liveMask());
+  styleNotch(refs.notch, liveMask());
 }
 function drawNotch() {
   const m = formMask();
@@ -1269,18 +1618,11 @@ function drawNotch() {
   $('nCircle').hidden = m.mode !== 'circle';
   styleNotch($('notchShape'), m);
   $('notchShape').classList.add('edit');
-  styleCorners(notchCorners, m);
-  $('nCrRow').hidden = !m.corners.on;
   draftMask = m;
   applyLiveMask();
   const eff = bandPx(m.band);
   $('nPxNote').textContent = m.mode === 'band' && eff && eff !== m.band.px ? `Applied as ${eff} px (rounded up to the screen's 16 px compression grid so the black area stays clean).` : '';
 }
-const notchCorners = makeCornersOverlay();
-$('cornersSlot').replaceWith(notchCorners);
-$('nCrR').oninput = () => { $('nCrN').value = $('nCrR').value; drawNotch(); };
-$('nCrN').oninput = () => { $('nCrR').value = $('nCrN').value; drawNotch(); };
-$('nCorners').onchange = drawNotch;
 $('nPxR').oninput = () => { $('nPx').value = $('nPxR').value; drawNotch(); };
 $('nPx').oninput = () => { $('nPxR').value = $('nPx').value; drawNotch(); };
 for (const id of ['nMode', 'nEdge', 'nCx', 'nCy', 'nR', 'nF']) $(id).addEventListener('input', drawNotch);
@@ -1288,7 +1630,7 @@ $('nSave').onclick = async () => {
   try {
     S.app = await api('/api/settings', 'PUT', { mask: formMask() });
     const n = S.app.oldNotchCount || 0;
-    $('nMsg').textContent = 'Saved. New versions use these settings.' + (n ? ` ${n} version${n > 1 ? 's were' : ' was'} made with older settings. You can make updated copies from each clip's Versions list.` : '');
+    $('nMsg').textContent = 'Saved. New versions use this notch.' + (n ? ` ${n} version${n > 1 ? 's were' : ' was'} made with an older notch. You can make updated copies from each clip's Versions list.` : '');
     draftMask = formMask();
     applyLiveMask();
     await loadDetail();

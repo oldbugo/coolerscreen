@@ -134,10 +134,10 @@ function frameGraph(frame) {
 // Rounded corners: black outside a rounded rectangle covering the whole 2400x1080 canvas. Made once per radius as an
 // RGBA PNG (1 px anti-aliased edge) and overlaid on every frame, instead of evaluating a per-pixel expression per frame.
 // public/js/frame.js styleCorners() draws the same shape for the preview.
-const cornersOn = mask => !!(mask && mask.corners && mask.corners.on && Math.round(mask.corners.r) > 0);
-async function cornerMaskFile(mask) {
-  if (!cornersOn(mask)) return null;
-  const R = Math.round(mask.corners.r);
+const cornersOn = c => !!(c && c.on && Math.round(c.r) > 0);
+async function cornerMaskFile(corners) {
+  if (!cornersOn(corners)) return null;
+  const R = Math.round(corners.r);
   const dir = path.join(paths.base, 'masks');
   const f = path.join(dir, `corners-${W}x${H}-r${R}.png`);
   if (fs.existsSync(f)) return f;
@@ -152,21 +152,44 @@ async function cornerMaskFile(mask) {
   return f;
 }
 
-function inputArgs(file, { isImage, fps, start, length, cornerFile }) {
+// With a loop blend of B seconds the input starts B seconds before the selection (those frames fade in at the end).
+function inputArgs(file, { isImage, fps, start, length, cornerFile, blend = 0 }) {
   const extra = cornerFile ? ['-i', cornerFile] : [];
   if (isImage) return ['-loop', '1', '-framerate', String(fps), '-t', String(length), '-i', file, ...extra];
-  return ['-ss', String(start), '-t', String(length), '-i', file, ...extra];
+  return ['-ss', String(r3(start - blend)), '-t', String(r3(length + blend)), '-i', file, ...extra];
 }
+const r3 = v => Math.round(v * 1000) / 1000;
+
+// "Simplify fine detail" 0-100 -> Gaussian blur sigma 0-3.5 px on the 2400x1080 canvas. Measured on an anime-style theme
+// (2026-10-11): gblur shrinks MJPEG frames far more per unit of visible change than hqdn3d or smartblur.
+// The preview mirrors it with a CSS blur of the same standard deviation (public/app.js).
+const detailSigma = level => Math.round((Math.min(100, Math.max(0, Number(level) || 0)) / 100) * 3.5 * 100) / 100;
 
 // [m] (notch applied) -> [mc] (corners applied). The corner PNG is input 1; overlay repeats its single frame.
 const cornersGraph = cornerFile => (cornerFile ? '[m][1:v]overlay=0:0:format=auto,format=yuv420p[mc]' : '[m]null[mc]');
 
-function baseGraph(fps, frame) {
-  return `[0:v]fps=${fps},${frameGraph(frame)},setsar=1,format=yuv420p[base]`;
+// Source -> [base]: frame rate, framing, optional detail simplification, optional loop blend.
+// Loop blend (the standard seamless-loop trick): the last B seconds of the selection cross-fade into the B seconds just
+// before its start, so the final frame leads straight into the first one. The output length stays the selection length.
+function baseGraph(o) {
+  const sigma = detailSigma(o.detail);
+  // After "-ss X" the first decoded frame (the first source frame at or after X) gets timestamp 0. Shift timestamps so
+  // that 0 is X itself; then output frame n is the source frame nearest X + n/18 and frame Bn is exactly the start.
+  const X = (o.start || 0) - (o.blend || 0), sf = o.srcFps;
+  const lead = !o.isImage && sf ? Math.max(0, Math.ceil(X * sf - 1e-6) / sf - X) : 0;
+  const shift = lead > 1e-4 ? `settb=AVTB,setpts=PTS+${lead.toFixed(6)}/TB,` : ''; // fine timebase: the shift is sub-frame
+  const pre = `[0:v]${shift}fps=${o.fps},${frameGraph(o.frame)},setsar=1,format=yuv420p${sigma > 0 ? `,gblur=sigma=${sigma}` : ''}`;
+  const B = o.blend || 0;
+  if (!(B > 0)) return `${pre}[base]`;
+  // Trim by frame index (exact), not by timestamp: frame Bn of the resampled stream is the selection's first frame.
+  const Bn = Math.round(B * o.fps), Ln = Math.round(o.length * o.fps);
+  return `${pre},split[ba][bb];[ba]trim=start_frame=${Bn}:end_frame=${Bn + Ln},setpts=PTS-STARTPTS[bm];` +
+    `[bb]trim=start_frame=0:end_frame=${Bn},setpts=PTS-STARTPTS[bp];` +
+    `[bm][bp]xfade=transition=fade:duration=${B}:offset=${r3(o.length - B)},format=yuv420p[base]`;
 }
 
 function deviceArgs(file, src, o, q, out) {
-  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};${cornersGraph(o.cornerFile)};[mc]transpose=1,format=yuvj420p[out]`;
+  const g = `${baseGraph(o)};${maskGraph(o.mask)};${cornersGraph(o.cornerFile)};[mc]transpose=1,format=yuvj420p[out]`;
   return [...inputArgs(file, { ...src, ...o }), '-filter_complex', g, '-map', '[out]', '-an',
     '-c:v', 'mjpeg', '-q:v', String(q), '-r', String(o.fps), '-movflags', '+faststart', '-y', out];
 }
@@ -178,7 +201,7 @@ async function encodeDevice(file, src, o, q, out, onTime) {
 
 // Landscape H.264 preview of a version (framing + mask applied) and its thumbnail.
 async function makePreview(file, src, o, dir, onTime) {
-  const g = `${baseGraph(o.fps, o.frame)};${maskGraph(o.mask)};${cornersGraph(o.cornerFile)};[mc]scale=1200:540:flags=bicubic,format=yuv420p[out]`;
+  const g = `${baseGraph(o)};${maskGraph(o.mask)};${cornersGraph(o.cornerFile)};[mc]scale=1200:540:flags=bicubic,format=yuv420p[out]`;
   await runFfmpeg([...inputArgs(file, { ...src, ...o }), '-filter_complex', g, '-map', '[out]', '-an',
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-movflags', '+faststart', '-y',
     path.join(dir, 'preview.mp4')], { onTime });
@@ -231,21 +254,25 @@ async function prepare(file, dir, opts) {
   const info = await probe(file);
   if (!info.hasVideo) throw new Error('No video/image stream found in this file.');
   const isImage = info.isImage;
-  const start = isImage ? 0 : Math.max(0, Number(opts.start) || 0);
+  const start = isImage ? 0 : r3(Math.max(0, Number(opts.start) || 0));
   const avail = info.duration != null && !isImage ? Math.max(0.1, info.duration - start) : Infinity;
   let length = Number(opts.length);
   if (!(length > 0)) length = isImage ? IMAGE_SECONDS : Math.min(opts.maxSeconds || 10, avail);
   length = Math.max(0.1, Math.min(length, avail));
-  length = Math.round(length * 100) / 100;
+  length = r3(length);
   if (!Number.isFinite(length)) length = 10;
   const manual = opts.quality != null && opts.quality !== 'auto';
   fs.mkdirSync(dir, { recursive: true });
   const frame = normFrame(opts.frame);
+  // Blend: whole output frames, at most half the selection, and only as much as exists before the start.
+  let blend = isImage ? 0 : Math.max(0, Math.min(Number(opts.blend) || 0, 1.5, length / 2, start));
+  blend = Math.floor(blend * DEVICE_FPS + 1e-6) / DEVICE_FPS;
   return {
     file, dir, info, isImage, src: { isImage }, fps: DEVICE_FPS, start, length, manual,
     q: manual ? qFromQuality(opts.quality) : null,
     budget: opts.budgetBytes,
-    base: { start, length, mask: opts.mask, frame, fps: DEVICE_FPS, cornerFile: await cornerMaskFile(opts.mask) },
+    blend,
+    base: { start, length, mask: opts.mask, frame, fps: DEVICE_FPS, srcFps: info.fps, isImage, cornerFile: await cornerMaskFile(opts.corners), detail: opts.detail || 0, blend: r3(blend) },
   };
 }
 
@@ -255,7 +282,7 @@ async function sampleEstimate(c, q) {
   const sStart = c.start + Math.max(0, c.length / 2 - sLen / 2);
   const out = path.join(c.dir, `sample.${rnd()}.tmp.mp4`);
   try {
-    const bytes = await encodeDevice(c.file, c.src, { ...c.base, start: c.isImage ? 0 : sStart, length: sLen }, q, out);
+    const bytes = await encodeDevice(c.file, c.src, { ...c.base, start: c.isImage ? 0 : sStart, length: sLen, blend: 0 }, q, out);
     return (bytes * c.length) / sLen;
   } finally { try { fs.unlinkSync(out); } catch {} }
 }
@@ -294,7 +321,15 @@ async function estimate(file, dir, opts) {
     const bytes = await sampleEstimate(c, q);
     return { ...common, mode: 'auto', q, bytes: Math.round(bytes), fits: true };
   }
-  return { ...common, mode: 'auto', q: 31, bytes: Math.round(worst), fits: false, maxFitLength: maxFitLength(c, worst) };
+  // Doesn't fit even at the lowest quality: before suggesting a shorter part, find the smallest "simplify fine
+  // detail" level that would make it fit (a few q=31 sample encodes).
+  const r = { ...common, mode: 'auto', q: 31, bytes: Math.round(worst), fits: false, maxFitLength: maxFitLength(c, worst) };
+  for (const level of [25, 50, 75, 100]) {
+    if (level <= (c.base.detail || 0)) continue;
+    const b = await sampleEstimate({ ...c, base: { ...c.base, detail: level } }, 31);
+    if (b <= c.budget * 0.96) { r.detailFits = level; break; }
+  }
+  return r;
 }
 
 /**
@@ -340,8 +375,54 @@ async function convert(file, dir, opts) {
     throw e;
   }
   report(1, 'Done');
-  return { ...result, fps: c.fps, quality: qualityFromQ(result.q), start: c.start, length: c.length, frame: c.base.frame,
+  return { ...result, fps: c.fps, quality: qualityFromQ(result.q), start: c.start, length: c.length, frame: c.base.frame, blend: c.blend,
     duration: c.info.duration, isImage: c.isImage };
+}
+
+// Small grey frames (source frame rate, no resampling) decoded straight to memory, for loop-point matching.
+const LW = 96, LH = 54;
+function grayFrames(file, start, dur, maxFrames) {
+  return new Promise((resolve, reject) => {
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-ss', String(Math.max(0, start)), '-i', file,
+      ...(dur ? ['-t', String(dur)] : []), ...(maxFrames ? ['-frames:v', String(maxFrames)] : []),
+      '-an', '-fps_mode', 'passthrough', '-vf', `scale=${LW}:${LH}:flags=area,format=gray`, '-f', 'rawvideo', 'pipe:1'];
+    const p = spawn(ffmpeg, args, { windowsHide: true });
+    const chunks = []; let err = '';
+    p.stdout.on('data', d => chunks.push(d));
+    p.stderr.on('data', d => (err += d));
+    p.on('error', reject);
+    p.on('close', code => {
+      if (code !== 0) return reject(new Error('ffmpeg failed: ' + err.trim().split('\n').slice(-2).join(' | ')));
+      const buf = Buffer.concat(chunks), n = Math.floor(buf.length / (LW * LH)), out = [];
+      for (let i = 0; i < n; i++) out.push(buf.subarray(i * LW * LH, (i + 1) * LW * LH));
+      resolve(out);
+    });
+  });
+}
+const mad = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]); return s / a.length; };
+
+/**
+ * "Find best loop point": the loop is seamless when the frame that would follow its last frame looks like its first
+ * frame. Searches source frames within +-2 s of the current end for the one most similar to the start frame
+ * (mean absolute difference of 96x54 grey thumbnails). Returns the best end and a few alternatives; similarity is
+ * 100 - difference in percent.
+ */
+async function findLoopPoint(file, { start, end, duration, fps }) {
+  const srcFps = fps || 25;
+  const [first] = await grayFrames(file, start, null, 1);
+  if (!first) throw new Error('Could not read the start frame.');
+  const lo = Math.max(start + 0.5, end - 2), hi = Math.min(duration || end + 2, end + 2);
+  if (!(hi > lo)) throw new Error('The clip is too short to search for a loop point.');
+  const frames = await grayFrames(file, lo, hi - lo);
+  const t0 = Math.ceil(lo * srcFps - 1e-6) / srcFps;
+  const cands = frames.map((f, i) => ({ end: Math.round((t0 + i / srcFps) * 1000) / 1000, diff: mad(first, f) }));
+  const cur = cands.reduce((b, c) => (Math.abs(c.end - end) < Math.abs(b.end - end) ? c : b), cands[0]);
+  const sorted = [...cands].sort((a, b) => a.diff - b.diff);
+  const sim = d => Math.round((100 - (d / 255) * 100) * 10) / 10;
+  const pick = c => ({ end: c.end, length: r3(Math.round((c.end - start) * DEVICE_FPS) / DEVICE_FPS), similarity: sim(c.diff) });
+  const alts = [];
+  for (const c of sorted) { if (alts.every(a => Math.abs(a.end - c.end) > 0.3)) alts.push(c); if (alts.length >= 4) break; }
+  return { best: pick(sorted[0]), current: pick(cur), alternatives: alts.slice(1).map(pick), searched: [lo, hi] };
 }
 
 // Tiny 1-frame black 1080x2400 MJPEG mp4 (CLI "clear").
@@ -378,6 +459,6 @@ async function makeSplash(out) {
 }
 
 module.exports = {
-  convert, estimate, probe, cornerMaskFile, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
+  convert, estimate, probe, cornerMaskFile, detailSigma, findLoopPoint, makeBlank, makeSplash, makeSourceAssets, maskGraph, frameGraph, normFrame, isDefaultFrame,
   bandPx, qFromQuality, qualityFromQ, runFfmpeg, ffmpegPath: ffmpeg, W, H, DEVICE_FPS, IMAGE_SECONDS, FRAME_DEFAULT, SPLASH,
 };

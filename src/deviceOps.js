@@ -94,7 +94,7 @@ async function checkScreen() {
     const err = fakeError();
     if (err) throw err;
     const transport = fake.transport === 'serial' ? 'serial' : 'winusb';
-    return { model: 'D215-NOR-JD9365-6.67inch-hor (fake)', version: '3.6', _transport: transport, _needsSetup: transport === 'serial',
+    return { model: 'D215-NOR-JD9365-6.67inch-hor (fake)', version: '3.6', i_blocks: 24520, i_block_size: 512, i_block_free: 4880, _transport: transport, _needsSetup: transport === 'serial',
       _warning: transport === 'serial' ? SERIAL_WARNING : undefined, _fake: true };
   }
   const { screen, transport } = await openAny();

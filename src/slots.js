@@ -5,17 +5,28 @@ const settings = require('./settings');
 const splash = require('./splash');
 
 const UNKNOWN_OTHER = 1.8e6; // assumed size of a slot we have never written
+const SAFETY = 160000;       // margin kept free when the capacity was measured
 const isBlank = v => !!v && v.size <= 100000;
 
 function budgets(s = settings.load()) {
-  const total = s.totalBudgetMB * 1e6;
+  // Measured capacity (free space + what our two clips occupy, at the last screen check), else the old fixed 9.5 MB.
+  const measured = !!s.capacity;
+  const total = measured ? s.capacity.bytes : s.totalBudgetMB * 1e6;
   const intro = splash.sizeEstimate();
   return {
-    total,
-    loop: Math.floor(total - intro), // space for the user's clip (the intro holds the boot splash)
+    total, measured, capacityAt: measured ? s.capacity.at : null,
+    loop: Math.floor(total - intro - (measured ? SAFETY : 0)), // space for the user's clip (the intro holds the boot splash)
     intro,
     slots: s.slots,
   };
 }
 
-module.exports = { budgets, isBlank, UNKNOWN_OTHER };
+/** From a screen info reply: capacity = free blocks + the sizes we recorded for both slots (null if unknown). */
+function capacityFrom(info, s = settings.load()) {
+  const free = Number(info && info.i_block_free), bs = Number(info && info.i_block_size) || 512;
+  const su = s.slots.startup, sb = s.slots.standby;
+  if (!Number.isFinite(free) || !su || !sb || sb.incomplete || su.incomplete) return null;
+  return free * bs + su.size + sb.size;
+}
+
+module.exports = { budgets, capacityFrom, isBlank, UNKNOWN_OTHER, SAFETY };

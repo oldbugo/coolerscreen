@@ -44,11 +44,24 @@ gear opens **Settings**.
 - **Gallery folder:** your clips are the files in `Documents\CoolerScreen\Gallery` ("Open Gallery folder"). Any file you
   put there appears in the app automatically; adding through the app copies the file there (same name, "name (2)" if
   taken). Renaming a clip in the app renames its file. The folder can be changed in Settings.
-- **Tune:** choose the part of the clip (drag the handles or type start and length; up to 10 s by default), its **size and
-  position** on the screen (zoom, left-right, up-down, or drag the preview; "Fill the screen" is the default, "Show the
-  whole picture" adds black bars), and the quality (**Best that fits** or Custom). The preview shows exactly what the
-  screen will show, including the notch. **Space on the screen** estimates how much of the screen's ~9 MB the result
-  needs; if it doesn't fit, it tells you how long the part can be.
+- **Tune: the loop.** Choose the part of the clip that loops. Everything is frame-accurate: the start is a source frame,
+  the length a number of screen frames (18 per second). Drag the handles on the filmstrip, use "◀ frame / frame ▶"
+  (Shift = 10 frames) or the arrow keys on a handle, or type the numbers; "Zoom to the selection" makes single frames
+  easy to hit on long clips. The preview can play **the selection** or **the seam** (the last second, then the first second,
+  over and over) so you can judge the join.
+  - **Check the seam** compares the last frame with the first: onion skin (first frame over the last, adjustable), side by
+    side, or difference (black = identical), with a similarity score.
+  - **Find best loop point** searches ±2 s around the end for the frame most like the first frame and offers it.
+  - **Blend the end into the start** (0-1.5 s) cross-fades the last moments into the frames just before the start (the
+    classic seamless-loop trick; the length stays the same). It needs that much clip before the start.
+- **Tune: size, corners and quality.** Size and position on the screen (zoom, left-right, up-down, or drag the preview;
+  "Fill the screen" is the default, "Show the whole picture" adds black bars). **Rounded corners** with an adjustable radius
+  (per version; the last choice is the default for the next clip). Quality **Best that fits** or Custom, and **Simplify
+  fine detail** (0 = off), which softens tiny detail so longer parts fit. The preview shows all of it, including the notch.
+- **Space on the screen** shows the estimated size against the screen's real free space, measured at each screen check
+  (free storage + what the app's two clips occupy, minus the start-up logo and a 160 KB margin; about 10.9 MB on the
+  tested screen; 9.5 MB minus the logo until the first check). If even the lowest quality doesn't fit, it suggests a
+  "Simplify fine detail" level that fits, then how long the part can be.
 - **Versions:** **Save as version** prepares a copy for the screen (a few seconds). A clip can have several versions, so you
   can compare them (click one to preview it) and send any of them. Versions are kept in `%APPDATA%\CoolerScreen`.
 - **Send to screen** replaces what is on the screen. Keep the app open until the bar at the bottom says it is done.
@@ -62,9 +75,7 @@ gear opens **Settings**.
 - **Notch:** the panel has a camera punch-hole on the left edge. Settings > Notch blacks that area out (default: a black band,
   92 px, applied as 96 px to stay on the screen's 16 px compression grid). New versions use the new setting; older versions
   are marked "Made with an older notch setting" with a **Make updated copy** action.
-- **Rounded corners** (Settings > Notch and corners): a visual preference, off by default. When on, everything outside a
-  rounded rectangle (radius 0-300 px, default 80) is kept black in new versions; the previews show it live. Versions made
-  with different notch or corner settings are marked "Made with older screen settings – re-make".
+- Versions made with a different notch setting are marked "Made with older screen settings – re-make".
 - **Start-up logo:** the screen plays a short clip once at power-on before your clip loops. CoolerScreen puts a 1.5 s
   "CoolerScreen" logo (black, small centred wordmark) there the first time you send, and only re-sends it when it is not
   already there. It uses about 0.5 MB, so about 9 MB remain for your clip. There is nothing to set.
@@ -122,6 +133,7 @@ Set `COOLERSCREEN_HOME` to keep library/settings in another folder.
     node bin/coolerscreen.js list                     # clips (originals) and their versions
     node bin/coolerscreen.js add <file>               # copy into the Gallery folder
     node bin/coolerscreen.js make <clip> [--start sec] [--length sec] [--quality auto|1-100] [--zoom 0.2-4] [--x 0-1] [--y 0-1]
+                                         [--corners 0-300] [--detail 0-100] [--blend 0-1.5]
     node bin/coolerscreen.js send <version id>        # put a version on the screen
     node bin/coolerscreen.js upload <file> [make options] [--no-send]   # add + make + send
     node bin/coolerscreen.js setup         # one-time WinUSB driver setup (UAC prompt)
@@ -139,14 +151,18 @@ scripts. `COOLERSCREEN_HOME` and `COOLERSCREEN_GALLERY` point the library and th
 ### How conversion works
 
 The input is resampled to **18 fps** (the screen's fixed playback rate, measured at 17.6 and 18.0 fps; it ignores the file's
-timing), framed on the 2400x1080 canvas (zoom relative to "cover", then pad/crop with the x/y alignment; the window's preview
-uses the same arithmetic, `public/js/frame.js`), the notch mask is applied, then (if on) the rounded-corner mask (a cached 2400x1080 RGBA PNG per radius, 1 px
-anti-aliased edge, overlaid on every frame), then it is rotated 90 degrees clockwise
+timing; timestamps are aligned so frame n is the source frame nearest start + n/18), framed on the 2400x1080 canvas (zoom
+relative to "cover", then pad/crop with the x/y alignment; the window's preview uses the same arithmetic,
+`public/js/frame.js`), optionally softened ("Simplify fine detail" = Gaussian blur, sigma up to 3.5 px; measured on an
+anime-style theme it shrinks MJPEG frames far more per unit of visible change than hqdn3d or smartblur), optionally
+loop-blended (`xfade` of the last B seconds with the B seconds before the start), the notch mask is applied, then (if on)
+the rounded-corner mask (a cached 2400x1080 RGBA PNG per radius, 1 px anti-aliased edge, overlaid on every frame), then it
+is rotated 90 degrees clockwise
 (`transpose=1`) and stored as 1080x2400 portrait MJPEG in an `.mp4` without audio. In Auto quality the converter estimates the
 size on a sample and picks the lowest JPEG quantiser (`-q:v` 3..31) that fits; if even q=31 does not fit it reports the
 longest length that would. The 1-100 quality scale maps linearly to q 31..3. Defaults: from the start, up to 10 s. Still
-images become a 3 s clip. Oversize files make the screen show garbage, so the size budget is enforced (total 9.5 MB shared
-by the start-up logo and your clip).
+images become a 3 s clip. Oversize files make the screen show garbage, so the size budget is enforced (the measured
+capacity, or 9.5 MB before the first screen check, shared by the start-up logo and your clip).
 
 Library layout: `%APPDATA%\CoolerScreen\library\<clip id>\original.json` (+ thumbnail, notch frame, and a browser proxy
 for formats the window can't play) and `versions\<version id>\` (`device.mp4`, `preview.mp4`, `thumb.jpg`,

@@ -2,8 +2,17 @@
 
 ## Unreleased
 
-- Rounded corners (Settings > Notch and corners): optional, adjustable radius, live in the previews. Versions made with
-  different notch/corner settings are marked "Made with older screen settings – re-make".
+- Loop editing: frame-accurate start/end (source frame / screen frames), frame nudge buttons and arrow keys (Shift = 10),
+  a filmstrip trim track with "Zoom to the selection", "play the seam" preview mode, a seam check (onion skin, side by
+  side, difference, similarity score), "Find best loop point" (±2 s search), and "Blend the end into the start"
+  (cross-fade, 0-1.5 s, mirrored in the preview).
+- Rounded corners moved into Tune and are stored per version (the last choice is the default); the notch stays global.
+  Versions made with a different notch are marked "Made with older screen settings – re-make".
+- "Simplify fine detail" (Gaussian softening, mirrored in the preview) to fit longer parts; when even the lowest quality
+  doesn't fit, the app suggests a level before suggesting a shorter part.
+- Space on the screen is measured at each screen check (free storage + our two clips, minus the start-up logo and a 160 KB
+  margin) instead of a fixed 9.5 MB.
+- Fixed: the selected clip's view was rebuilt on every background refresh (lost open panels and focus).
 
 - New window layout: Library on the left; preview, Tune and Versions on the right; screen status and "On screen now" in the
   top bar; one Activity bar for preparing and sending; Settings drawer (screen, notch, Gallery folder, advanced, about).

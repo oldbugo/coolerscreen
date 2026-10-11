@@ -161,6 +161,20 @@ input[type="range"] { accent-color: var(--accent); flex: 1; min-width: 0; }
 .trim .range { position: absolute; top: 9px; height: 14px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 4px; cursor: grab; }
 .trim .handle { position: absolute; top: 4px; width: 14px; height: 24px; margin-left: -7px; border-radius: 4px; background: var(--accent); cursor: ew-resize; border: 2px solid var(--bg); }
 .trim .playhead { position: absolute; top: 2px; width: 2px; height: 28px; background: var(--text); pointer-events: none; opacity: .7; }
+.trim { height: 44px; }
+.trim .filmstrip { position: absolute; left: 0; top: 0; width: 100%; height: 36px; border-radius: 4px; background: var(--surface-3); display: block; }
+.trim .range { top: 0; height: 36px; background: rgba(90,169,255,.18); border: 2px solid var(--accent); }
+.trim .handle { top: 0; height: 36px; width: 12px; margin-left: -6px; }
+.trim .playhead { top: -2px; height: 42px; background: #fff; opacity: .9; }
+.trim .track { display: none; }
+.trim-head { margin: 0; }
+.frame-row { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: var(--s1) 0; }
+.frame-row-label { font-weight: 600; font-size: var(--fs-small); min-width: 40px; }
+.frame-row input[type="number"] { width: 76px; }
+.btn.nudge { height: 28px; padding: 0 var(--s2); font-size: var(--fs-small); }
+.seam-panel { margin-top: var(--s2); padding: var(--s3); background: var(--surface-2); border-radius: var(--r-md); }
+.seam-canvas { display: block; max-width: 100%; height: auto; border-radius: 6px; background: #000; margin: var(--s2) 0; }
+.grow { flex: 1; }
 .trim-fields { display: flex; gap: var(--s4); flex-wrap: wrap; }
 .trim-fields .field { display: flex; align-items: center; gap: var(--s2); margin: 0; }
 .trim-fields label { margin: 0; }
