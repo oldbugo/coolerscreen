@@ -67,9 +67,20 @@ pub async fn app_state(core: State<'_, Core>) -> Result<Value, CoreError> {
     run(&core, |a| Ok(a.app_state())).await
 }
 
+/// The JSON args of a call as one object (so a key set to null can be told from a missing one).
+fn json_args(request: &tauri::ipc::Request<'_>) -> Value {
+    match request.body() {
+        tauri::ipc::InvokeBody::Json(v) => v.clone(),
+        _ => json!({}),
+    }
+}
+
+/// `{ mask?, maxSeconds? }`, or the same wrapped in `patch`.
 #[tauri::command]
-pub async fn settings_update(core: State<'_, Core>, patch: Value) -> Result<Value, CoreError> {
-    run(&core, move |a| a.settings_update(&patch)).await
+pub async fn settings_update(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let a = json_args(&request);
+    let patch = a.get("patch").filter(|p| p.is_object()).cloned().unwrap_or(a);
+    run(&core, move |app| app.settings_update(&patch)).await
 }
 
 #[tauri::command]
@@ -135,9 +146,13 @@ pub async fn original_get(core: State<'_, Core>, original_id: String) -> Result<
     run(&core, move |a| a.original_get(&original_id)).await
 }
 
+/// `{ originalId, name?, draft? }` (draft null clears), or name/draft wrapped in `patch`.
 #[tauri::command]
-pub async fn original_patch(core: State<'_, Core>, original_id: String, patch: Value) -> Result<Value, CoreError> {
-    run(&core, move |a| a.original_patch(&original_id, &patch)).await
+pub async fn original_patch(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let a = json_args(&request);
+    let oid = a["originalId"].as_str().unwrap_or("").to_string();
+    let patch = a.get("patch").filter(|p| p.is_object()).cloned().unwrap_or(a);
+    run(&core, move |app| app.original_patch(&oid, &patch)).await
 }
 
 #[tauri::command]

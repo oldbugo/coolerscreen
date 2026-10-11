@@ -1,6 +1,8 @@
 // CoolerScreen UI: Library (originals) | Detail (preview, Tune, Versions) | Activity strip | Settings drawer.
 import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, styleCorners } from './js/frame.js';
 import { openDialog } from './js/dialog.js';
+import './js/titlebar.js';
+import { backend } from './js/backend.js';
 
 // ---------- small helpers ----------
 const $ = id => document.getElementById(id);
@@ -51,12 +53,7 @@ function fmtLeft(sec) {
   return m ? `about ${m} min ${s} s left` : `about ${s} s left`;
 }
 
-async function api(path, method = 'GET', body) {
-  const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(j.error || r.statusText); Object.assign(e, { status: r.status, code: j.code, failedUsb: !!j.failedUsb, data: j }); throw e; }
-  return j;
-}
+const call = (command, args) => backend.call(command, args);
 
 let toastT;
 function toast(msg, bad = false, ms = 5000) {
@@ -151,7 +148,7 @@ async function reviewMissing() {
   });
   S.missingDismissed = true;
   if (ok) {
-    try { await api('/api/missing/delete', 'POST', { ids: S.longMissing.map(m => m.id) }); toast('Deleted.'); } catch (e) { toast(e.message, true); }
+    try { await call('missing_delete', { ids: S.longMissing.map(m => m.id) }); toast('Deleted.'); } catch (e) { toast(e.message, true); }
     await loadOriginals();
   }
   renderBanners();
@@ -165,7 +162,7 @@ async function checkScreen() {
   S.screen = { ...S.screen, state: 'checking' };
   renderTop(); renderBanners(); renderScreenSettings();
   try {
-    const info = await api('/api/device');
+    const info = await call('device_check');
     S.screen = { state: info._needsSetup ? 'setup' : 'ready', info, error: null };
     if (info._restarted) toast('The screen wasn\'t answering, so CoolerScreen restarted it. It is fine now.', false, 8000);
     if (info._capacity) loadApp();
@@ -179,11 +176,12 @@ async function checkScreen() {
 
 // ---------- data loading ----------
 async function loadApp() {
-  S.app = await api('/api/state');
+  S.app = await call('app_state');
+  backend.setMediaBase(S.app.mediaBase);
   renderTop(); renderBanners();
 }
 async function loadOriginals() {
-  const r = await api('/api/originals');
+  const r = await call('originals_list');
   S.originals = r.originals; S.longMissing = r.longMissing; S.rev = r.rev;
   if (S.sel && !S.originals.find(o => o.id === S.sel)) { S.sel = null; S.detail = null; if (S.view === 'detail') setView('gallery'); }
   renderLibrary();
@@ -195,7 +193,7 @@ let detailFor = null;
 async function loadDetail() {
   if (!S.sel) { S.detail = null; detailFor = null; renderDetail(true); return; }
   let d;
-  try { d = await api('/api/originals/' + S.sel); } catch { d = null; }
+  try { d = await call('original_get', { originalId: S.sel }); } catch { d = null; }
   const fresh = detailFor !== S.sel || !S.detail || (S.detail.previewUrl !== (d && d.previewUrl)) || (S.detail.canTune !== (d && d.canTune));
   S.detail = d;
   if (detailFor !== S.sel) {
@@ -227,7 +225,7 @@ async function select(id, showVersion = null) {
   const wasGallery = S.view !== 'detail';
   if (wasGallery) setView('detail');
   if (S.sel !== id || wasGallery) {
-    S.sel = id;
+    S.sel = id; call("set_focus", { originalId: id, visible: [] }).catch(() => {});
     detailFor = null;
     renderLibrary();
     await loadDetail();
@@ -251,7 +249,7 @@ function renderLibrary() {
     else if (o.busy) sub.append(el('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Preparing version…');
     else sub.append(o.versionCount ? `${o.versionCount} version${o.versionCount > 1 ? 's' : ''}` : 'No versions yet');
     if (o.onScreen) sub.append(el('span', { class: 'chip ok', text: 'On screen' }));
-    const thumb = o.assets === 'ready' ? el('img', { class: 'thumb', src: `/media/o/${o.id}/thumb.jpg?r=${encodeURIComponent(o.created)}`, alt: '', loading: 'lazy' })
+    const thumb = o.assets === 'ready' ? el('img', { class: 'thumb', src: backend.mediaUrl(o.id, 'thumb.jpg') + `?r=${encodeURIComponent(o.created)}`, alt: '', loading: 'lazy' })
       : el('div', { class: 'thumb' + (o.assets === 'pending' ? ' skeleton' : '') });
     const li = el('li', { class: 'librow', role: 'option', id: 'opt-' + o.id, 'aria-selected': String(o.id === S.sel), 'data-id': o.id, title: o.name },
       thumb, el('div', { class: 'txt' }, el('div', { class: 'name', text: o.name }), sub));
@@ -277,7 +275,7 @@ $('libList').addEventListener('keydown', e => {
 // ---------- import ----------
 $('addBtn').onclick = () => $('fileInput').click();
 $('fileInput').onchange = e => { importFiles([...e.target.files]); e.target.value = ''; };
-$('openFolder').onclick = () => api('/api/gallery/open', 'POST').catch(e => toast(e.message, true));
+$('openFolder').onclick = () => call('gallery_open').catch(e => toast(e.message, true));
 
 async function importFiles(files) {
   if (!files.length) { toast('Nothing to add: drop a file from your computer (not a link or text).', true); return; }
@@ -288,12 +286,7 @@ async function importFiles(files) {
   for (const it of items) {
     try {
       const localPath = window.cs && window.cs.pathFor ? window.cs.pathFor(it.file) : '';
-      const res = localPath
-        ? await fetch('/api/import-path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: localPath }) })
-        : await fetch('/api/import?' + new URLSearchParams({ name: it.file.name }), { method: 'POST', body: it.file });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(j.error || 'Could not add the file.');
-      lastId = j.id;
+      lastId = (await backend.importFile(it.file, localPath)).id;
     } catch (e) {
       openDialog({ title: 'Couldn\'t add this file', body: /can't read/i.test(e.message) ? e.message : `CoolerScreen can't read "${it.name}". It may be damaged or in a format that isn't supported.`, actions: [{ label: 'OK', value: true, kind: 'primary' }] });
     }
@@ -330,7 +323,7 @@ const B = { sources: [], ticked: ['mine'], desktopApp: false, data: new Map(), j
 const enabledSources = () => B.sources.filter(s => s.enabled && s.kind !== 'action');
 async function loadSources() {
   try {
-    const r = await api('/api/sources');
+    const r = await call('sources_list');
     B.sources = r.sources; B.ticked = r.ticked; B.desktopApp = r.desktopApp; B.pluginsDir = r.pluginsDir; B.loaded = true;
   } catch (e) { toast(e.message, true); }
   for (const id of [...B.data.keys()]) if (!enabledSources().some(s => s.id === id)) B.data.delete(id);
@@ -340,7 +333,7 @@ async function loadSources() {
 async function setTicked(id, on) {
   B.ticked = on ? [...new Set([...B.ticked, id])] : B.ticked.filter(x => x !== id);
   renderGallery();
-  try { B.ticked = (await api('/api/browse', 'PUT', { ticked: B.ticked })).ticked; } catch {}
+  try { B.ticked = (await call('browse_set', { ticked: B.ticked })).ticked; } catch {}
   if (on && id !== 'mine' && !B.data.has(id)) loadSourcePage(id);
 }
 async function loadSourcePage(id, refresh = false) {
@@ -349,7 +342,7 @@ async function loadSourcePage(id, refresh = false) {
   if (d.loading || !d.hasMore) return;
   d.loading = true; d.error = null; renderGallery();
   try {
-    const r = await api(`/api/sources/${id}/items?page=${d.page + 1}${refresh ? '&refresh=1' : ''}`);
+    const r = await call('source_items', { sourceId: id, page: d.page + 1, refresh });
     const seen = new Set(d.items.map(i => i.id));
     d.items.push(...r.items.filter(i => !seen.has(i.id)));
     d.page = r.page; d.hasMore = r.hasMore && r.items.length > 0; d.total = r.total;
@@ -385,7 +378,7 @@ async function addFromSource(src, item, { record = false } = {}) {
   B.jobs.set(key, st);
   renderGallery();
   try {
-    const { jobId } = await api(`/api/sources/${src.id}/items/${encodeURIComponent(item.id)}/add`, 'POST', { record, seconds, title: item.title });
+    const { jobId } = await call('source_add', { sourceId: src.id, itemId: item.id, record, seconds, title: item.title });
     const r = await pollJob(jobId, j => { st.progress = j.progress || 0; st.status = j.status === 'waiting' ? plainWait(j.message) : j.message || 'Working'; updateSourceCard(key); });
     B.jobs.delete(key);
     item.inGallery = r.originalId;
@@ -404,7 +397,7 @@ async function addFromLink() {
     onOpen: ({ close }) => input.addEventListener('keydown', e => { if (e.key === 'Enter') close(true); }) });
   if (!ok || !input.value.trim()) return;
   try {
-    const { jobId } = await api('/api/link', 'POST', { url: input.value.trim() });
+    const { jobId } = await call('link_add', { url: input.value.trim() });
     toast('Downloading…');
     const r = await pollJob(jobId, () => {});
     toast(`Added "${r.name}" to your gallery.`);
@@ -526,7 +519,7 @@ async function renderSourcesSettings() {
         const ok = await openDialog({ title: 'Enable this plug-in?', body: s.warning || 'Plug-ins run code on your PC.', actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Enable', value: true, kind: 'danger' }] });
         if (!ok) { toggle.checked = false; return; }
       }
-      try { await api('/api/sources/' + s.id, 'PUT', { enabled: toggle.checked }); } catch (e) { toast(e.message, true); }
+      try { await call('source_set', { sourceId: s.id, enabled: toggle.checked }); } catch (e) { toast(e.message, true); }
       B.data.delete(s.id);
       await loadSources();
       renderSourcesSettings();
@@ -542,7 +535,7 @@ async function renderSourcesSettings() {
       ta.value = ((s.values || {})[opt.key] || []).join('\n');
       row.append(el('div', { class: 'field' }, el('label', { for: ta.id, text: opt.label }), ta,
         el('button', { class: 'btn ghost', text: 'Save folders', onclick: async () => {
-          await api('/api/sources/' + s.id, 'PUT', { options: { [opt.key]: ta.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) } }).catch(e => toast(e.message, true));
+          await call('source_set', { sourceId: s.id, options: { [opt.key]: ta.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) } }).catch(e => toast(e.message, true));
           B.data.delete(s.id); await loadSources(); renderSourcesSettings();
         } })));
     }
@@ -579,7 +572,7 @@ function buildDetail(d) {
   refs.more = menuButton('More actions for this clip', () => {
     const o = S.detail;
     const items = [];
-    if (o.file && !o.missing) items.push({ label: 'Show in Gallery folder', run: () => api(`/api/originals/${o.id}/reveal`, 'POST') });
+    if (o.file && !o.missing) items.push({ label: 'Show in Gallery folder', run: () => call('original_reveal', { originalId: o.id }) });
     if (!o.isImage && o.canTune) items.push({ label: S.manualLoop ? 'Hide manual loop editing' : 'Edit loop manually…', run: () => { S.manualLoop = !S.manualLoop; buildTune(S.detail); } });
     items.push({ label: o.missing ? 'Remove from library…' : 'Delete…', danger: true, run: confirmDeleteOriginal });
     return items;
@@ -698,7 +691,7 @@ async function runLoopSearch(d, { minLen, maxLen }) {
   loopJobs.set(d.id, st);
   renderLoopCards();
   try {
-    const { jobId } = await api(`/api/originals/${d.id}/loopsearch`, 'POST', { minLen: minLen || null, maxLen: maxLen || null });
+    const { jobId } = await call('loop_search', { originalId: d.id, minLen: minLen || null, maxLen: maxLen || null });
     await pollJob(jobId, j => { st.status = j.status === 'waiting' ? plainWait(j.message) : `${j.message || 'Searching'}… ${Math.round((j.progress || 0) * 100)}%`; if (S.detail && S.detail.id === d.id) renderLoopCards(); });
     loopJobs.delete(d.id);
     if (S.detail && S.detail.id === d.id) { await loadDetail(); autoPickLoop(true); }
@@ -863,7 +856,7 @@ function startRename() {
   const finish = async save => {
     if (done) return;
     if (save && input.value.trim() && input.value.trim() !== d.name) {
-      try { S.detail = await api('/api/originals/' + d.id, 'PATCH', { name: input.value.trim() }); }
+      try { S.detail = await call('original_patch', { originalId: d.id, name: input.value.trim() }); }
       catch (e) { err.textContent = e.message; input.focus(); return; }
     }
     done = true;
@@ -889,7 +882,7 @@ async function confirmDeleteOriginal() {
     actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: d.missing ? 'Remove' : 'Delete', value: true, kind: 'danger' }],
   });
   if (!ok) return;
-  try { await api('/api/originals/' + d.id, 'DELETE'); } catch (e) { toast(e.message, true, 10000); return; }
+  try { await call('original_delete', { originalId: d.id }); } catch (e) { toast(e.message, true, 10000); return; }
   S.sel = null; detailFor = null;
   await loadOriginals();
   await loadApp();
@@ -957,7 +950,7 @@ function showPreview(vid, force = false) {
   const v = vid ? d.versions.find(x => x.id === vid) : null;
   refs.stage.classList.toggle('version', !!v);
   if (v) {
-    media = el('video', { class: 'media', src: `/media/v/${v.id}/preview.mp4`, muted: true, loop: true, autoplay: true, playsInline: true });
+    media = el('video', { class: 'media', src: backend.mediaUrl(v.id, 'preview.mp4', 'v'), muted: true, loop: true, autoplay: true, playsInline: true });
     media.muted = true;
     refs.stage.prepend(media);
     refs.notch.hidden = true;
@@ -1479,7 +1472,7 @@ async function searchLoops() {
   refs.lsResults.textContent = '';
   refs.lsStatus.textContent = 'Starting…';
   try {
-    const { jobId } = await api(`/api/originals/${d.id}/loopsearch`, 'POST', { minLen, maxLen });
+    const { jobId } = await call('loop_search', { originalId: d.id, minLen, maxLen });
     const r = await pollJob(jobId, j => { refs.lsStatus.textContent = j.status === 'waiting' ? plainWait(j.message) : `${j.message || 'Searching'}… ${Math.round((j.progress || 0) * 100)}%`; });
     if (S.detail !== d && (!S.detail || S.detail.id !== d.id)) return;
     if (r.suggestedMax && !refs.lsMax.value) refs.lsMax.placeholder = `auto (${r.searched.maxLen})`;
@@ -1488,15 +1481,7 @@ async function searchLoops() {
   } catch (e) { refs.lsStatus.textContent = e.message; }
   refs.lsBtn.disabled = false;
 }
-async function pollJob(jobId, onUpdate) {
-  for (;;) {
-    const j = await api('/api/jobs/' + jobId);
-    onUpdate(j);
-    if (j.status === 'done') return j.result;
-    if (j.status === 'error') throw new Error(j.error);
-    await new Promise(res => setTimeout(res, 400));
-  }
-}
+const pollJob = (jobId, onUpdate) => backend.job(jobId, onUpdate);
 const seamWords = ratio => (ratio <= 1.05 ? 'seamless' : ratio <= 1.6 ? 'nearly seamless' : 'a visible jump');
 function renderLoopResults(list) {
   const ul = refs.lsResults;
@@ -1526,7 +1511,7 @@ async function findLoopPoint() {
   refs.findBtn.disabled = true;
   refs.findResult.textContent = 'Searching ±2 s around the end…';
   try {
-    const r = await api(`/api/originals/${d.id}/looppoint`, 'POST', { start: dr.start, length: dr.length });
+    const r = await call('loop_point', { originalId: d.id, start: dr.start, length: dr.length });
     const use = c => el('button', { class: 'btn ' + (c === r.best ? 'primary' : 'ghost'), text: `${c === r.best ? 'Use ' : ''}${fmtT2(c.end)} (${c.similarity}%)`,
       onclick: () => { setTrim(dr.start, c.length); draftChanged(); updateSeamSoon(); refs.findResult.textContent = `Loop end set to ${fmtT2(dr.start + dr.length)}.`; } });
     refs.findResult.textContent = '';
@@ -1547,7 +1532,7 @@ function draftChanged() {
   scheduleEstimate();
   clearTimeout(draftSaveT);
   const id = S.detail.id, draft = JSON.parse(JSON.stringify(S.draft));
-  draftSaveT = setTimeout(() => api('/api/originals/' + id, 'PATCH', { draft }).catch(() => {}), 800);
+  draftSaveT = setTimeout(() => call('original_patch', { originalId: id, draft }).catch(() => {}), 800);
 }
 function resetDraft() {
   const d = S.detail;
@@ -1571,7 +1556,7 @@ async function runEstimate() {
   const seq = ++estSeq, id = S.detail.id;
   const body = JSON.parse(JSON.stringify(S.draft));
   try {
-    const r = await api(`/api/originals/${id}/estimate`, 'POST', body);
+    const r = await call('estimate', { originalId: id, settings: body });
     if (r.stale || seq !== estSeq || !S.detail || S.detail.id !== id) return;
     S.est = { state: 'done', r };
     applyGeometry();
@@ -1651,7 +1636,7 @@ async function saveVersion() {
   const d = S.detail;
   refs.saveBtn.disabled = true;
   try {
-    await api(`/api/originals/${d.id}/versions`, 'POST', JSON.parse(JSON.stringify(S.draft)));
+    await call('version_create', { originalId: d.id, settings: JSON.parse(JSON.stringify(S.draft)) });
     await loadDetail();
     loadOriginals();
     loadApp();
@@ -1740,7 +1725,7 @@ function renderVersions(d) {
       btns.insertBefore(el('button', { class: 'btn ghost', text: v.speed ? 'Re-make' : 'Make updated copy', onclick: e => { e.stopPropagation(); remakeVersion(v); } }), btns.querySelector('.grow'));
     }
     main.append(btns);
-    const thumb = v.status === 'ready' ? el('img', { class: 'vthumb', src: `/media/v/${v.id}/thumb.jpg`, alt: '' }) : el('div', { class: 'vthumb' });
+    const thumb = v.status === 'ready' ? el('img', { class: 'vthumb', src: backend.mediaUrl(v.id, 'thumb.jpg', 'v'), alt: '' }) : el('div', { class: 'vthumb' });
     const li = el('li', { class: 'vrow', 'data-vid': v.id }, thumb, main);
     li.onclick = () => { if (v.status === 'ready') { closeVersions(false); showPreview(v.id); } };
     ul.append(li);
@@ -1754,10 +1739,10 @@ function renderVersionsHighlight() {
 }
 
 async function retryVersion(vid) {
-  try { await api(`/api/versions/${vid}/retry`, 'POST'); await loadDetail(); pollSoon(); } catch (e) { toast(e.message, true); }
+  try { await call('version_retry', { versionId: vid }); await loadDetail(); pollSoon(); } catch (e) { toast(e.message, true); }
 }
 async function remakeVersion(v) {
-  try { await api(`/api/versions/${v.id}/remake`, 'POST'); await loadDetail(); loadOriginals(); pollSoon(); } catch (e) { toast(e.message, true); }
+  try { await call('version_remake', { versionId: v.id }); await loadDetail(); loadOriginals(); pollSoon(); } catch (e) { toast(e.message, true); }
 }
 async function renameVersion(v) {
   const input = el('input', { type: 'text', value: v.label || `v${v.n}`, id: 'vLabel', autofocus: true, maxLength: 40 });
@@ -1765,7 +1750,7 @@ async function renameVersion(v) {
     actions: [{ label: 'Cancel', value: null, kind: 'secondary' }, { label: 'Save', value: 'save', kind: 'primary' }],
     onOpen: ({ close }) => input.addEventListener('keydown', e => { if (e.key === 'Enter') close('save'); }) });
   if (val !== 'save') return;
-  try { await api(`/api/versions/${v.id}`, 'PATCH', { label: input.value }); await loadDetail(); loadApp(); } catch (e) { toast(e.message, true); }
+  try { await call('version_patch', { versionId: v.id, label: input.value }); await loadDetail(); loadApp(); } catch (e) { toast(e.message, true); }
 }
 async function deleteVersion(v) {
   const name = v.label || `v${v.n}`;
@@ -1774,7 +1759,7 @@ async function deleteVersion(v) {
   const ok = await openDialog({ title: `Delete ${name}?`, body, actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Delete', value: true, kind: 'danger' }] });
   if (!ok) return;
   try {
-    await api(`/api/versions/${v.id}`, 'DELETE');
+    await call('version_delete', { versionId: v.id });
     if (S.showing === v.id) showPreview(null);
     await loadDetail(); loadOriginals(); loadApp();
   } catch (e) { toast(e.message, true); }
@@ -1796,7 +1781,7 @@ async function confirmSend(vid) {
     el('figcaption', { text: os ? (os.known ? `${os.originalName} · ${os.label}` : 'Unknown (sent with another app)') : 'Unknown' }));
   const body = el('div', {},
     el('div', { class: 'swap' },
-      el('figure', {}, el('img', { src: `/media/v/${v.id}/thumb.jpg`, alt: '' }), el('figcaption', { text: `${name} (${mb(v.result.size)})` })),
+      el('figure', {}, el('img', { src: backend.mediaUrl(v.id, 'thumb.jpg', 'v'), alt: '' }), el('figcaption', { text: `${name} (${mb(v.result.size)})` })),
       el('span', { 'aria-hidden': 'true', text: '→' }), el('span', { class: 'small muted', text: 'replaces' }), curFig),
     el('p', { text: `This takes ${fmtDuration(secs)}. Keep CoolerScreen open until it finishes.` }),
     el('p', { class: 'muted small', text: 'The screen restarts to show the new clip. If LOVINGCOOL MONITOR is running, close it first.' }));
@@ -1809,9 +1794,9 @@ function confirmPushDialog(body) {
 }
 async function startSend(vid) {
   try {
-    const { jobId } = await api(`/api/versions/${vid}/send`, 'POST');
+    const { jobId } = await call('version_send', { versionId: vid });
     sendJobs.add(jobId);
-    await poll();
+    backend.refresh();
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1839,7 +1824,7 @@ async function pushToScreen() {
   if (!(await confirmPushDialog(body))) return;
   try {
     let vid = dup && dup.id;
-    if (!vid) vid = (await api(`/api/originals/${d.id}/versions`, 'POST', JSON.parse(JSON.stringify(S.draft)))).versionId;
+    if (!vid) vid = (await call('version_create', { originalId: d.id, settings: JSON.parse(JSON.stringify(S.draft)) })).versionId;
     pendingPush = { oid: d.id, vid };
     toast('Preparing the version; it is sent as soon as it is ready.');
     await loadDetail();
@@ -1850,7 +1835,7 @@ async function checkPendingPush() {
   if (!pendingPush) return;
   const p = pendingPush;
   let v = S.detail && S.detail.id === p.oid ? S.detail.versions.find(x => x.id === p.vid) : null;
-  if (!v) { try { v = (await api('/api/originals/' + p.oid)).versions.find(x => x.id === p.vid); } catch { v = null; } }
+  if (!v) { try { v = (await call('original_get', { originalId: p.oid })).versions.find(x => x.id === p.vid); } catch { v = null; } }
   if (!v) { pendingPush = null; return; }
   if (v.status === 'ready') { pendingPush = null; if (v.tooBig) { toast('The version came out too big for the screen, so it was not sent.', true, 10000); return; } await startSend(v.id); }
   else if (v.status === 'error') { pendingPush = null; toast('Couldn\'t prepare the version, so nothing was sent: ' + (v.error || ''), true, 12000); }
@@ -1944,19 +1929,17 @@ window.addEventListener('beforeunload', e => {
   if (S.jobs.some(j => j.kind === 'send' && j.status === 'running')) { e.preventDefault(); e.returnValue = ''; }
 });
 
-// ---------- polling (local server only; never touches the screen) ----------
-let pollT = null, polling = false;
-function pollSoon() { clearTimeout(pollT); pollT = setTimeout(poll, 300); }
-async function poll() {
-  clearTimeout(pollT);
-  if (polling) return;
-  polling = true;
-  let busy = false;
+// ---------- activity (the backend pushes snapshots: events in the app, polling inside backend.js over HTTP) ----------
+const pollSoon = () => backend.refresh();
+const poll = () => backend.refresh();
+let activityBusy = false, activityNext = null;
+async function onActivity(a) {
+  if (activityBusy) { activityNext = a; return; } // keep only the newest while one is being applied
+  activityBusy = true;
   try {
-    const a = await api('/api/activity');
     const before = new Map(S.jobs.map(j => [j.id, j.status]));
     S.jobs = a.jobs; S.deviceBusy = a.deviceBusy;
-    busy = a.jobs.some(j => j.status === 'running' || j.status === 'waiting');
+    const busy = a.jobs.some(j => j.status === 'running' || j.status === 'waiting');
     let reloadApp = false;
     for (const j of a.jobs) {
       if (j.kind === 'send' && (j.status === 'running' || j.status === 'waiting')) sendJobs.add(j.id);
@@ -1980,12 +1963,14 @@ async function poll() {
     if (S.screen.retry && !a.deviceBusy) { S.screen.retry = false; checkScreen(); }
     renderTop(); renderBanners(); renderActivity();
   } catch {}
-  polling = false;
-  pollT = setTimeout(poll, busy ? 1000 : document.hidden ? 6000 : 3000);
+  activityBusy = false;
+  if (activityNext) { const n = activityNext; activityNext = null; onActivity(n); }
 }
+backend.on('activity', onActivity);
+backend.on('app', () => loadApp().catch(() => {}));
 
 // ---------- device dialogs (setup / reconnect / restore) ----------
-async function runDeviceJob(url, { title, text, confirmLabel, danger }) {
+async function runDeviceJob(command, { title, text, confirmLabel, danger }) {
   const ok = await openDialog({ title, body: el('div', {}, text.map(t => el('p', { text: t }))),
     actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: confirmLabel, value: true, kind: danger ? 'danger' : 'primary' }] });
   if (!ok) return false;
@@ -1997,16 +1982,14 @@ async function runDeviceJob(url, { title, text, confirmLabel, danger }) {
     onOpen: async ({ close, setLocked }) => {
       setLocked(true);
       try {
-        const { jobId } = await api(url, 'POST');
-        for (;;) {
-          const j = await api('/api/jobs/' + jobId);
-          const msg = j.status === 'waiting' ? plainWait(j.message) : /administrator/.test(j.message) ? 'Waiting for your approval in the Windows prompt…' : j.message || 'Working…';
-          status.textContent = msg;
-          bar.firstChild.style.width = Math.round((j.progress || 0) * 100) + '%';
-          if (j.status === 'done') { status.textContent = (j.result && j.result.warning) || 'Done.'; result = true; break; }
-          if (j.status === 'error') { status.textContent = j.error; status.setAttribute('role', 'alert'); break; }
-          await new Promise(r => setTimeout(r, 500));
-        }
+        const { jobId } = await call(command);
+        try {
+          const res = await backend.job(jobId, j => {
+            status.textContent = j.status === 'waiting' ? plainWait(j.message) : /administrator/.test(j.message) ? 'Waiting for your approval in the Windows prompt…' : j.message || 'Working…';
+            bar.firstChild.style.width = Math.round((j.progress || 0) * 100) + '%';
+          });
+          status.textContent = (res && res.warning) || 'Done.'; result = true;
+        } catch (e) { status.textContent = e.message; status.setAttribute('role', 'alert'); }
       } catch (e) { status.textContent = e.message; }
       setLocked(false);
       if (result) setTimeout(() => close(true), 2000);
@@ -2016,7 +1999,7 @@ async function runDeviceJob(url, { title, text, confirmLabel, danger }) {
   return result;
 }
 function runSetup() {
-  return runDeviceJob('/api/setup', {
+  return runDeviceJob('device_setup', {
     title: 'Set up the screen (one time)', confirmLabel: 'Set up screen',
     text: ['This switches the screen to Microsoft\'s built-in WinUSB driver so it keeps its display on without any program running.',
       'Windows will ask for permission. Only the screen\'s own USB entry is changed.',
@@ -2024,20 +2007,20 @@ function runSetup() {
   });
 }
 function runRestart() {
-  return runDeviceJob('/api/restart', {
+  return runDeviceJob('device_restart', {
     title: 'Restart the screen', confirmLabel: 'Restart screen',
     text: ['The screen restarts (about 10 seconds), then plays its clip again. Nothing on it is changed.',
       'If it doesn\'t come back, CoolerScreen offers Reconnect.'],
   });
 }
 function runReconnect() {
-  return runDeviceJob('/api/reconnect', {
+  return runDeviceJob('device_reconnect', {
     title: 'Reconnect the screen', confirmLabel: 'Reconnect',
     text: ['This resets the USB port the screen is connected to, which fixes the start-up glitch.', 'Windows will ask for permission. Nothing else is changed.'],
   });
 }
 function runRestore() {
-  return runDeviceJob('/api/restore', {
+  return runDeviceJob('device_restore', {
     title: 'Restore the original driver?', confirmLabel: 'Restore original driver', danger: true,
     text: ['Windows installs the standard COM-port driver again, so LOVINGCOOL MONITOR can see the screen.',
       'Afterwards the screen switches its display off 30 seconds after any program closes its connection (this is how the vendor software works).',
@@ -2102,7 +2085,7 @@ function fillSettings() {
   $('aMax').value = a.maxSeconds;
   $('nMsg').textContent = '';
   const bg = $('notchBg');
-  if (S.detail && S.detail.assets === 'ready') { bg.src = `/media/o/${S.detail.id}/frame.jpg`; bg.hidden = false; } else { bg.removeAttribute('src'); bg.hidden = true; }
+  if (S.detail && S.detail.assets === 'ready') { bg.src = backend.mediaUrl(S.detail.id, 'frame.jpg'); bg.hidden = false; } else { bg.removeAttribute('src'); bg.hidden = true; }
   renderScreenSettings();
   drawNotch();
   renderSourcesSettings();
@@ -2142,7 +2125,7 @@ $('nPx').oninput = () => { $('nPxR').value = $('nPx').value; drawNotch(); };
 for (const id of ['nMode', 'nEdge', 'nCx', 'nCy', 'nR', 'nF']) $(id).addEventListener('input', drawNotch);
 $('nSave').onclick = async () => {
   try {
-    S.app = await api('/api/settings', 'PUT', { mask: formMask() });
+    S.app = await call('settings_update', { mask: formMask() });
     const n = S.app.oldNotchCount || 0;
     $('nMsg').textContent = 'Saved. New versions use this notch.' + (n ? ` ${n} version${n > 1 ? 's were' : ' was'} made with an older notch. You can make updated copies from each clip's Versions list.` : '');
     draftMask = formMask();
@@ -2151,12 +2134,12 @@ $('nSave').onclick = async () => {
   } catch (e) { $('nMsg').textContent = e.message; }
 };
 $('gSave').onclick = async () => {
-  try { S.app = await api('/api/gallery', 'PUT', { dir: $('gDir').value }); $('gDir').value = S.app.galleryDir; $('gMsg').textContent = 'Saved.'; await loadOriginals(); }
+  try { S.app = await call('gallery_set_dir', { dir: $('gDir').value }); $('gDir').value = S.app.galleryDir; $('gMsg').textContent = 'Saved.'; await loadOriginals(); }
   catch (e) { $('gMsg').textContent = e.message; }
 };
 $('gOpen').onclick = () => $('openFolder').click();
 $('aSave').onclick = async () => {
-  try { S.app = await api('/api/settings', 'PUT', { maxSeconds: Number($('aMax').value) }); toast('Saved.'); if (S.detail) { detailFor = null; await loadDetail(); } }
+  try { S.app = await call('settings_update', { maxSeconds: Number($('aMax').value) }); toast('Saved.'); if (S.detail) { detailFor = null; await loadDetail(); } }
   catch (e) { toast(e.message, true); }
 };
 
@@ -2167,6 +2150,6 @@ $('aSave').onclick = async () => {
   loadSources();
   await loadOriginals();
   renderActivity();
-  poll();
+  backend.start();
   checkScreen(); // once at launch (opens the screen briefly); never polled
 })().catch(e => toast(e.message, true, 10000));
