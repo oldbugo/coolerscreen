@@ -94,7 +94,7 @@ fn core_app() -> std::sync::Arc<cs_core::core::App> {
             eprintln!("  job {} {} {:3.0}% {}", j.kind, j.status, j.progress * 100.0, j.message);
         }
     }
-    cs_core::core::App::new(cs_core::core::paths::base(), cs_core::backends(), std::sync::Arc::new(Log), env!("CARGO_PKG_VERSION"))
+    cs_core::core::App::new(cs_core::core::paths::base(), cs_core::backends_with_work_dir(std::env::temp_dir().join("CoolerScreen-media-cs2")), std::sync::Arc::new(Log), env!("CARGO_PKG_VERSION"))
 }
 
 fn core_run(f: impl FnOnce(&cs_core::core::App) -> Result<serde_json::Value, cs_core::core::CoreError>) -> i32 {

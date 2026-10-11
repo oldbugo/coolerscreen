@@ -7,6 +7,7 @@ pub mod device_service;
 pub mod error;
 pub mod fake_media;
 pub mod gallery;
+pub mod jobobject;
 pub mod js;
 pub mod library;
 pub mod mask;

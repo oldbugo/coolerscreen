@@ -398,7 +398,9 @@ impl TaskCtx {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000 | 0x0000_4000); // CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS (keeps the UI and uploads smooth)
         }
-        let child = Arc::new(Mutex::new(cmd.spawn()?));
+        let spawned = cmd.spawn()?;
+        super::jobobject::adopt(&spawned); // never outlives the app
+        let child = Arc::new(Mutex::new(spawned));
         self.token.0.children.lock().unwrap().push(Arc::downgrade(&child));
         let g = ChildGuard { child, token: self.token.clone() };
         if self.is_cancelled() {

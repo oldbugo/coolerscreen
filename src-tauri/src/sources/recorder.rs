@@ -129,6 +129,8 @@ pub fn record_window(title: &str, p: &Params, progress: Progress, cancel: &Cance
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| SourceError(format!("Could not start ffmpeg: {e}")))?;
+        // Ends with the app even if the app is killed (Job Object, kill on close).
+        crate::core::jobobject::adopt(&child);
         let mut stdin = child.stdin.take().unwrap();
         let mut stderr = child.stderr.take().unwrap();
         ff = Some(child);
