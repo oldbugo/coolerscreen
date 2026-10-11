@@ -319,6 +319,9 @@ pub fn budgets(s: &Settings, splash_size: Option<u64>) -> Budgets {
 
 /// `slots.capacityFrom`: free blocks + the sizes we recorded for both slots (None if unknown).
 pub fn capacity_from(info: &Value, s: &Settings) -> Option<f64> {
+    // The real screen nests the fields: {"cmd":"info","data":{...,"i_block_free":4480}} (1.2 read the top level only,
+    // so its capacity measurement never worked on hardware; the fake screen has them at the top level).
+    let info = info.get("data").filter(|d| d.is_object()).unwrap_or(info);
     let free = super::js::to_num(info.get("i_block_free"));
     let bs = super::js::to_num(info.get("i_block_size"));
     let bs = if bs.is_finite() && bs != 0.0 { bs } else { 512.0 };
@@ -368,6 +371,8 @@ mod tests {
         assert_eq!(s.slot("standby").unwrap()["versionId"], json!("abcdefgh1"));
         let cap = capacity_from(&json!({ "i_block_free": 4480, "i_block_size": 512 }), &s).unwrap();
         assert_eq!(cap, 4480.0 * 512.0 + 540_000.0 + 8_774_966.0);
+        let real = json!({ "cmd": "info", "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 4480 }, "_transport": "winusb" });
+        assert_eq!(capacity_from(&real, &s), Some(cap), "real replies nest the fields under data");
         st.patch_slot("standby", &json!({ "incomplete": true })).unwrap();
         assert!(capacity_from(&json!({ "i_block_free": 4480 }), &st.load()).is_none());
         let b = budgets(&st.load(), Some(540_000));

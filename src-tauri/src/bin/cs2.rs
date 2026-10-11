@@ -70,12 +70,86 @@ fn main() {
             }
             if fails == 0 { 0 } else { 1 }
         }
+        // The same paths through the 2.0 core (scheduler + device service), for hardware checks.
+        Some("core-check") => core_run(|app| app.device_check()),
+        Some("core-state") => core_run(|app| app.device_state()),
+        Some("core-restart") => core_run(|app| {
+            let r = app.device_restart();
+            wait_job(app, r["jobId"].as_str().unwrap_or(""))
+        }),
+        Some("core-send") if args.len() >= 2 => core_send(std::path::Path::new(&args[1])),
         _ => {
             eprintln!("usage: cs2 info | state | restart | upload <file.mp4> [--intro] | poll <count> <seconds>");
+            eprintln!("       cs2 core-check | core-state | core-restart | core-send <library>/<oid>/versions/<vid>  (COOLERSCREEN_HOME = scratch)");
             2
         }
     };
     std::process::exit(code);
+}
+
+fn core_app() -> std::sync::Arc<cs_core::core::App> {
+    struct Log;
+    impl cs_core::core::Events for Log {
+        fn job(&self, j: &cs_core::core::scheduler::Job) {
+            eprintln!("  job {} {} {:3.0}% {}", j.kind, j.status, j.progress * 100.0, j.message);
+        }
+    }
+    cs_core::core::App::new(cs_core::core::paths::base(), cs_core::backends(), std::sync::Arc::new(Log), env!("CARGO_PKG_VERSION"))
+}
+
+fn core_run(f: impl FnOnce(&cs_core::core::App) -> Result<serde_json::Value, cs_core::core::CoreError>) -> i32 {
+    let t = Instant::now();
+    let app = core_app();
+    match f(&app) {
+        Ok(v) => {
+            println!("{}", serde_json::to_string_pretty(&v).unwrap());
+            eprintln!("ok in {} ms", t.elapsed().as_millis());
+            0
+        }
+        Err(e) => {
+            eprintln!("ERROR {e} ({} ms)", t.elapsed().as_millis());
+            1
+        }
+    }
+}
+
+fn wait_job(app: &cs_core::core::App, id: &str) -> Result<serde_json::Value, cs_core::core::CoreError> {
+    loop {
+        let j = app.job_get(id)?;
+        match j["state"].as_str() {
+            Some("done") => return Ok(j),
+            Some("failed") | Some("cancelled") => {
+                return Err(cs_core::core::CoreError::new(format!("job {}: {}", j["state"], j["error"])))
+            }
+            _ => std::thread::sleep(std::time::Duration::from_millis(200)),
+        }
+    }
+}
+
+/// Send an existing version through the core's send flow, from a scratch app folder (COOLERSCREEN_HOME) holding
+/// copies of its original.json and version folder, so the real library and settings are never written.
+fn core_send(vdir: &std::path::Path) -> i32 {
+    let Some(home) = std::env::var_os("COOLERSCREEN_HOME") else {
+        eprintln!("Set COOLERSCREEN_HOME to a scratch folder first (core-send never writes the real library).");
+        return 2;
+    };
+    let vid = vdir.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let odir = vdir.parent().and_then(|p| p.parent()).expect("<oid>/versions/<vid>");
+    let oid = odir.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+    let lib = std::path::PathBuf::from(home).join("library");
+    let to = lib.join(&oid).join("versions").join(&vid);
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::copy(odir.join("original.json"), lib.join(&oid).join("original.json")).unwrap();
+    for f in ["version.json", "device.mp4", "thumb.jpg"] {
+        if vdir.join(f).exists() {
+            std::fs::copy(vdir.join(f), to.join(f)).unwrap();
+        }
+    }
+    core_run(|app| {
+        let r = app.version_send(&vid)?;
+        let j = wait_job(app, r["jobId"].as_str().unwrap_or(""))?;
+        Ok(serde_json::json!({ "job": j, "slots": app.settings.load().0["slots"], "onScreen": app.app_state()["onScreen"] }))
+    })
 }
 
 fn prog(p: f64, text: &str) {

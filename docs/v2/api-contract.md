@@ -1,6 +1,7 @@
 # CoolerScreen 2.0 API contract (Phase 1)
 
-Owner: WS1 Core (`src-tauri/src/core/`). Status: **v1, 2026-10-11**. Changes go through WS1; other workstreams
+Owner: WS1 Core (`src-tauri/src/core/`). Status: **v1.1, 2026-10-11**, implemented on branch `ws1-core`
+(`core/commands.rs`, `core/api.rs`; see section 7). Changes go through WS1; other workstreams
 propose edits in their report. Behavioural spec = the 1.2 Node backend (`src/server.js` and friends): every HTTP
 endpoint maps 1:1 to a Tauri command with the **same JSON shapes** (camelCase keys, same field names), so the UI's
 `api()` layer can be swapped for `invoke()` without touching the rest of `app.js`.
@@ -29,7 +30,7 @@ Folder ownership: `core/` + `device/` + `lib.rs`/`main.rs` = WS1; `media/` = WS2
 | 1.2 endpoint | Command | Args | Result |
 | --- | --- | --- | --- |
 | GET /api/state | `app_state` | – | `AppState` (below) |
-| PUT /api/settings | `settings_update` | `{ mask?, maxSeconds? }` | `AppState` (corners are kept, as 1.2) |
+| PUT /api/settings | `settings_update` | `{ patch: { mask?, maxSeconds? } }` | `AppState` (corners are kept, as 1.2) |
 | GET /api/activity | `activity` | – | `{ rev, deviceBusy, jobs: Job[] }` (visible jobs, finished ones for 120 s) |
 | GET /api/jobs/:id | `job_get` | `{ jobId }` | `Job`; 404 if unknown |
 | *(new)* | `job_cancel` | `{ jobId }` | `{ cancelled: bool }` (device jobs: only while queued) |
@@ -39,11 +40,11 @@ Folder ownership: `core/` + `device/` + `lib.rs`/`main.rs` = WS1; `media/` = WS2
 | POST /api/import-path | `import_path` | `{ path }` | `{ id }` |
 | POST /api/missing/delete | `missing_delete` | `{ ids }` | `{ deleted }` |
 | GET /api/originals/:id | `original_get` | `{ originalId }` | `Detail` |
-| PATCH /api/originals/:id | `original_patch` | `{ originalId, name?, draft? }` (`draft: null` clears) | `Detail` |
+| PATCH /api/originals/:id | `original_patch` | `{ originalId, patch: { name?, draft? } }` (`draft: null` clears; wrapped because Tauri cannot tell a missing arg from null) | `Detail` |
 | DELETE /api/originals/:id | `original_delete` | `{ originalId }` | `{ ok: true }` (file → Recycle Bin; cancels its jobs first) |
 | POST …/reveal | `original_reveal` | `{ originalId }` | `{ ok: true }` |
 | POST …/estimate | `estimate` | `{ originalId, settings }` | `Estimate` or `{ stale: true }` when a newer estimate for the same clip superseded it; 409 `busy` while a screen job is active (as 1.2, unless `allowMediaDuringUpload`). |
-| POST …/loopsearch | `loop_search` | `{ originalId, minLen, maxLen }` | `{ jobId }` (result in `job.result`, as 1.2) |
+| POST …/loopsearch | `loop_search` | `{ originalId, minLen?, maxLen? }` (null = Auto) | `{ jobId }` (result in `job.result`, as 1.2) |
 | POST …/looppoint | `loop_point` | `{ originalId, start, length }` | `{ best, current, alternatives, searched }` |
 | POST …/versions | `version_create` | `{ originalId, settings }` (settings = 1.2 body incl. `force`) | `{ versionId, jobId }`; 400 `duplicate` + `versionId` |
 | PATCH /api/versions/:vid | `version_patch` | `{ versionId, label }` | `Version` |
@@ -201,8 +202,8 @@ import of `AddedFile` into the Gallery folder (deleting it when `temp`).
 
 `Library` (originals/versions on the 1.2 disk layout), `Settings`, `Scheduler`, `paths` (honours
 `COOLERSCREEN_HOME`, `COOLERSCREEN_GALLERY`), `.ht/.zip` theme extraction (`core::theme`), Recycle Bin delete,
-device service. Wiring: `lib.rs::run(Backends { media: Arc<dyn MediaEngine>, sources: Arc<dyn SourceCatalog> })`;
-until WS2/WS3 land, core ships stub engines that fail with "not available yet".
+device service. Wiring: `cs_core::backends()` in `src/lib.rs` returns `Backends { media, sources }`; until WS2/WS3
+land it returns stand-ins (`NoMedia` fails with code `unavailable`, `NoSources` lists nothing).
 
 ## 6. Modes and test hooks
 
@@ -212,3 +213,18 @@ until WS2/WS3 land, core ships stub engines that fail with "not available yet".
 - `COOLERSCREEN_FAKE_DEVICE=1|winusb|serial|none|failedusb|busy|noreply|noreply-stuck`, `COOLERSCREEN_FAKE_FAIL=1`:
   same simulation as 1.2; never touches USB, the COM port or PowerShell.
 - `COOLERSCREEN_HOME`, `COOLERSCREEN_GALLERY`: scratch library/gallery for tests.
+- `COOLERSCREEN_FAKE_MEDIA=1`: core's fake media engine (no ffmpeg; placeholder thumbnails, quick fake
+  conversions) so WS4 can run the whole UI before WS2 lands. It always forces the fake screen: its files are not
+  real videos and must never reach the cooler. `COOLERSCREEN_FAKE_SPEED=0.1` speeds up the fake screen.
+
+## 7. Implementation notes (WS1, 2026-10-11)
+
+- Code: `core/scheduler.rs` (scheduler + `TaskCtx`), `core/api.rs` (traits and stand-ins), `core/service.rs`
+  (every endpoint as an `App` method), `core/commands.rs` (Tauri commands, `cs:*` events; `build.rs` and
+  `capabilities/main.json` list the same command names), `core/media_server.rs`, `core/library.rs`, `settings.rs`,
+  `gallery.rs` (1.2 disk layout), `core/device_service.rs`, `core/theme.rs`, `core/fake_media.rs`.
+- Capacity: real info replies nest the fields (`{cmd:"info",data:{i_block_free,...}}`); 1.2 read the top level only,
+  so its measured capacity never worked on hardware. 2.0 reads `data` (and the top level, for the fake screen).
+- `cs2 core-check | core-state | core-restart | core-send <library>/<oid>/versions/<vid>` run the same core paths
+  from the CLI (core-send requires `COOLERSCREEN_HOME` = a scratch folder; it copies the version there and never
+  writes the real library or settings).

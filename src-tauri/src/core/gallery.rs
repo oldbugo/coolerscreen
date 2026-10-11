@@ -563,6 +563,35 @@ pub use library::basename;
 mod tests {
     use super::*;
 
+    /// Parity with 1.2 on real data: CS_PARITY = parity.json written by a Node script (recorded fileMtime,
+    /// Math.round(stat.mtimeMs), theme extraction size + sha1). Read-only except a temp folder.
+    #[test]
+    #[ignore = "needs CS_PARITY (real library data)"]
+    fn parity_with_node() {
+        let p = std::env::var("CS_PARITY").expect("CS_PARITY");
+        let rows: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let mut themes = 0;
+        for r in &rows {
+            let f = Path::new(r["file"].as_str().unwrap());
+            let md = std::fs::metadata(f).unwrap();
+            assert_eq!(json!(mtime_ms(&md)), r["node"], "mtime of {}", f.display());
+            assert_eq!(json!(mtime_ms(&md)), r["recorded"], "recorded mtime of {}", f.display());
+            if let Some(t) = r.get("theme") {
+                let d = tempfile::tempdir().unwrap();
+                let x = theme::extract_theme(f, d.path()).unwrap();
+                let buf = std::fs::read(&x.path).unwrap();
+                let mut h = sha1_smol::Sha1::new();
+                h.update(&buf);
+                assert_eq!(json!(buf.len()), t["size"]);
+                assert_eq!(json!(h.digest().to_string()), t["sha1"]);
+                assert_eq!(json!(x.name), t["name"]);
+                assert_eq!(json!(x.kind), t["kind"]);
+                themes += 1;
+            }
+        }
+        assert!(themes > 0);
+    }
+
     #[test]
     fn names() {
         assert_eq!(strip_source_key("Sakura [we-2970331102]"), "Sakura");
