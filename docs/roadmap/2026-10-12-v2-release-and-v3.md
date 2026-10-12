@@ -90,3 +90,22 @@ from a scratch tool and measure frames per second and latency on the real screen
 - **Vendor app:** already uninstalled (its folder is empty), so the live protocol is tested directly. Working
   hypothesis: live mode is raw JPEG frames (FF D8 … FF D9) written straight to bulk OUT 0x02, ended by
   `FF D9 FF D9` + `00 00 00 00`.
+
+## Live mode: verified on hardware (2026-10-12)
+
+Source: the vendor's Electron app (LOVINGCOOL MONITOR 2.2.60, unpacked read-only from its updater cache), then tested
+with `cs2 live-test` on the user's screen (fw 3.6). User saw the counter pictures.
+
+- **Enter:** framed `0x11` (no payload) → reply `{"key":17,"hex":"00"}`. Re-send `0x11` every 1.5 s as keepalive.
+- **Frame (fw > 2.8):** `u32LE len | JPEG | u16LE sum` (sum of the 4 length bytes + JPEG bytes, & 0xFFFF), no 55 AA
+  wrapper, straight to bulk OUT 0x02. Landscape 1680x756 (2400x1080 × 0.7) like the vendor; ≤ 260 KB.
+- **JPEG must be 4:2:0.** 4:4:4 frames are accepted on the wire but never shown (the first failed run). `jpeg-encoder`
+  picks 4:4:4 at q ≥ 90, so force `SamplingFactor::F_2_2`.
+- **Link speed:** ~10–11 MB/s; 250 KB frames reach ~40–43 fps. Shown frame rate not yet measured.
+- **End:** `FF D9 FF D9` (own transfer), then `0x14 [1,0]`. Afterwards the stored sleep delay (`0x15`, set earlier by
+  the vendor app) can switch the display off (`diplay_on:false`, screen black). `0x0E [1]` turns it back on; the 3.0
+  stop sequence must do this (or, as an opt-in setting, change `0x15`) so the 2.0 default — the loop keeps playing — holds.
+- `0x03 [n]` sets the stored brightness (info `brightness`); the vendor always sent 95. Not needed for live.
+- No raw-JPEG mode: bare JPEG bytes are ignored.
+- Sensors in the vendor app: bundled `HWiNFO64.dll` via a .NET helper writing JSON to `%TEMP%\LOVINGCOOL_MONITOR_INTERNAL.bin`.
+  Music: Windows SMTC (vendor feature disabled for this brand).

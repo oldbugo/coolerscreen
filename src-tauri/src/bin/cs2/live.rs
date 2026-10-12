@@ -130,8 +130,10 @@ fn encode_fit(w: usize, h: usize, rgb: &[u8], start_q: u8, max_bytes: usize) -> 
     let mut q = start_q;
     loop {
         let mut out = Vec::with_capacity(max_bytes);
-        jpeg_encoder::Encoder::new(&mut out, q)
-            .encode(rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb)
+        // 4:2:0 like the vendor's Chromium encoder and our ffmpeg clips; jpeg-encoder picks 4:4:4 at q >= 90.
+        let mut enc = jpeg_encoder::Encoder::new(&mut out, q);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
+        enc.encode(rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb)
             .map_err(|e| format!("JPEG encode failed: {e}"))?;
         if out.len() <= max_bytes || q <= 2 {
             return Ok((out, q));
@@ -283,9 +285,9 @@ fn run(args: &[String]) -> Result<(), String> {
             send(&mut scr, &frame::frame(0x15, &[0x00, 0x0a]))?;
             drain(&mut scr, "0x15", Duration::from_millis(100));
         }
-        if has("--set-brightness") {
-            eprintln!("0x03 [5F]");
-            send(&mut scr, &frame::frame(0x03, &[0x5f]))?;
+        if let Some(b) = num::<u8>(args, "--brightness")?.or(has("--set-brightness").then_some(0x5f)) {
+            eprintln!("0x03 [{b}]");
+            send(&mut scr, &frame::frame(0x03, &[b.min(100)]))?;
             drain(&mut scr, "0x03", Duration::from_millis(100));
         }
         eprintln!("enter live: 0x11");
@@ -348,6 +350,17 @@ fn run(args: &[String]) -> Result<(), String> {
     println!("end-of-stream write errors: {e1:?}, 0x14 write error: {e2:?}");
     drain(&mut scr, "after end", Duration::from_millis(1500));
     report_in("end");
+
+    // 4. The stored 0x15 sleep delay can switch the display off a few seconds after a stream ends (info replies
+    //    are swallowed by the IN reader here, so it can't be polled). For the watch period keep sending display
+    //    on (0x0E [1]); harmless when it is already on.
+    let watch: f64 = num(args, "--watch-after").ok().flatten().unwrap_or(30.0);
+    let w0 = Instant::now();
+    while w0.elapsed().as_secs_f64() < watch {
+        let r = scr.recovery_raw(&frame::frame(0x0e, &[1])).err().map(|e| e.to_string());
+        drain(&mut scr, "0x0E", Duration::from_millis(3000));
+        println!("[after +{:.0} s] 0x0E [1] sent (error: {r:?})", w0.elapsed().as_secs_f64());
+    }
     scr.close();
 
     println!("---");
