@@ -84,7 +84,8 @@ from a scratch tool and measure frames per second and latency on the real screen
   falls back to the stored loop clip; start with Windows is an opt-in setting; no admin sensor driver by default.
 - **Widgets wanted:** now-playing music, CPU/GPU temps and load, clock/date, and an animated gallery clip behind the
   widgets.
-- **Companion form:** undecided. Prototype both (small separate helper vs the main app hidden in the tray) and measure
+- **Companion form: B (decided by the user 2026-10-12 after the hardware comparison):** the CoolerScreen app keeps
+  running in the tray when its window is closed, and closing frees the window (WebView destroyed). Was: prototype both and measure
   before choosing.
 - **Branch:** `v3`; `main` stays 2.0.
 - **Vendor app:** already uninstalled (its folder is empty), so the live protocol is tested directly. Working
