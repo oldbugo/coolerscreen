@@ -167,7 +167,9 @@ impl App {
         let base = Path::new(name).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "upload".into());
         let r = self.add_file(&tmp, Some(&base));
         let _ = std::fs::remove_file(&tmp);
-        Ok(json!({ "id": r? }))
+        let id = r?;
+        self.prefind_loops(&id);
+        Ok(json!({ "id": id }))
     }
 
     /// POST /api/import-path: a local file (drag and drop with a path); copied into the Gallery folder.
@@ -176,7 +178,9 @@ impl App {
         if !p.is_absolute() || !p.is_file() {
             return Err(CoreError::new(format!("File not found: {src}")));
         }
-        Ok(json!({ "id": self.add_file(&p, None)? }))
+        let id = self.add_file(&p, None)?;
+        self.prefind_loops(&id);
+        Ok(json!({ "id": id }))
     }
 
     pub fn missing_delete(&self, ids: &[String]) -> Value {
@@ -293,16 +297,38 @@ impl App {
 
     /// Whole-clip loop search as a visible job; the result is stored with the original (1.2 `searchLoops`).
     pub fn loop_search(&self, oid: &str, body: &Value) -> CoreResult<Value> {
+        let auto = !truthy(body.get("minLen")) && !truthy(body.get("maxLen"));
+        // Opening a clip whose automatic search already runs (started when it was added) joins that search.
+        if auto {
+            if let Some(id) = self.sched.live_with_key(&format!("loopsearch:{oid}")) {
+                return Ok(json!({ "jobId": id }));
+            }
+        }
+        self.submit_loop_search(oid, body, false)
+    }
+
+    /// A clip just added: find its loops now, in the background, so its loop cards are ready when it is opened.
+    pub fn prefind_loops(&self, oid: &str) {
+        let Some(o) = self.lib.read_original(oid) else { return };
+        if truthy(o.get("isImage")) || o.get("loops").map_or(false, |l| l.is_object()) {
+            return;
+        }
+        let _ = self.submit_loop_search(oid, &json!({}), true);
+    }
+
+    fn submit_loop_search(&self, oid: &str, body: &Value, background: bool) -> CoreResult<Value> {
         let o = self.lib.read_original(oid).ok_or_else(gone_clip)?;
         let name = o["name"].as_str().unwrap_or("clip").to_string();
         let res = self.media.resources(MediaTask::LoopSearch, Some(&probe_of(&o)));
-        let spec = TaskSpec::new("loopsearch", format!("Finding loop points in \"{name}\""), res)
+        let mut spec = TaskSpec::new("loopsearch", format!("Finding loop points in \"{name}\""), res)
             .original(oid)
-            .priority(Priority::Selected)
+            .priority(if background { Priority::Background } else { Priority::Selected })
             .auto_priority()
-            .cancel_on_blur() // leaving a clip stops its search (the UI searches again when the clip is reopened)
             .coalesce(format!("loopsearch:{oid}"))
             .visible();
+        if !background {
+            spec = spec.cancel_on_blur(); // leaving a clip stops its search (the UI searches again when the clip is reopened)
+        }
         let (app, oid2, body) = (self.arc(), oid.to_string(), body.clone());
         let h = self.sched.submit(spec, move |ctx| app.search_loops(ctx, &oid2, &body));
         Ok(json!({ "jobId": h.id }))
@@ -885,7 +911,9 @@ impl App {
         if r.temp {
             let _ = std::fs::remove_file(&r.file);
         }
-        Ok(json!({ "originalId": res?, "name": r.name }))
+        let oid = res?;
+        self.prefind_loops(&oid);
+        Ok(json!({ "originalId": oid, "name": r.name }))
     }
 
     pub fn link_add(&self, url: &str) -> CoreResult<Value> {

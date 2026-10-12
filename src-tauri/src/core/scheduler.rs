@@ -747,6 +747,12 @@ impl Scheduler {
         self.0.pump();
     }
 
+    /// A queued or running job submitted with this coalesce key (to join it instead of superseding it).
+    pub fn live_with_key(&self, key: &str) -> Option<String> {
+        let g = self.0.inner.lock().unwrap();
+        g.entries.iter().find(|(_, e)| e.spec.coalesce_key.as_deref() == Some(key)).map(|(id, _)| id.clone())
+    }
+
     pub fn job(&self, id: &str) -> Option<Job> {
         let g = self.0.inner.lock().unwrap();
         if let Some(e) = g.entries.get(id) {

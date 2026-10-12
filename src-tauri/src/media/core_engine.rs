@@ -185,7 +185,8 @@ impl MediaEngine for CoreMedia {
             let mut r = loops::search(self.eng.ffmpeg(), &req.file, &info, Some(&req.dir), req.min_len, req.max_len, tok, &|f, m| {
                 ctx.progress(f, m)
             })?;
-            for c in r.candidates.iter_mut() {
+            // The search picks each candidate's cross-fade (the length that makes the join smoothest).
+            for c in r.candidates.iter_mut().filter(|c| c.blend.is_none()) {
                 c.blend = Some(loops::auto_blend(c));
             }
             // Cards are rendered by core as a separate `cards` job (loop_cards), so the meter can run alongside.

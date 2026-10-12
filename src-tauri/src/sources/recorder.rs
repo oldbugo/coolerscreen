@@ -16,8 +16,18 @@ use windows_capture::settings::{
 };
 use windows_capture::window::Window;
 
+/// Ask, while recording, whether the frames so far are enough (e.g. they hold a seamless loop): small grey copies of
+/// every frame (64x36 and 192x108, the loop search's sizes), checked every `every_s` seconds once `min_s` are in.
+pub struct EarlyStop {
+    pub min_s: f32,
+    pub every_s: f32,
+    pub check: Arc<dyn Fn(&crate::media::loops::LoopFrames) -> bool + Send + Sync>,
+}
+
 pub struct Params {
+    /// The longest recording; with `early_stop` it may end sooner.
     pub seconds: f32,
+    pub early_stop: Option<EarlyStop>,
     pub fps: u32,
     /// Capture the mouse pointer (always false in the app; true only to prove the setting works in tests).
     pub cursor: bool,
@@ -67,6 +77,43 @@ pub fn crop_for(w: u32, h: u32) -> (u32, u32, u32) {
     } else {
         (ew, h & !1, 0)
     }
+}
+
+/// BGRA frame (cropped to `crop` = (w, h, y)) to 192x108 grey (area average, BT.601 luma), then 64x36 from that.
+fn small_grey(bgra: &[u8], stride_w: u32, crop: (u32, u32, u32), hi: &mut Vec<u8>, lo: &mut Vec<u8>) {
+    use crate::media::loops::{FH, FW, RH, RW};
+    let (cw, ch, cy) = (crop.0 as usize, crop.1 as usize, crop.2 as usize);
+    let sw = stride_w as usize;
+    let mut h = vec![0u8; RW * RH];
+    for oy in 0..RH {
+        let (y0, y1) = (cy + oy * ch / RH, cy + ((oy + 1) * ch / RH).max(oy * ch / RH + 1));
+        for ox in 0..RW {
+            let (x0, x1) = (ox * cw / RW, ((ox + 1) * cw / RW).max(ox * cw / RW + 1));
+            let (mut s, mut k) = (0u32, 0u32);
+            // every second pixel of the block is plenty for a 192x108 thumbnail
+            for y in (y0..y1).step_by(2) {
+                let row = &bgra[(y * sw) * 4..];
+                for x in (x0..x1).step_by(2) {
+                    let p = &row[x * 4..x * 4 + 3];
+                    s += (29 * p[0] as u32 + 150 * p[1] as u32 + 77 * p[2] as u32) >> 8;
+                    k += 1;
+                }
+            }
+            h[oy * RW + ox] = (s / k.max(1)) as u8;
+        }
+    }
+    for y in 0..FH {
+        for x in 0..FW {
+            let mut s = 0u32;
+            for dy in 0..3 {
+                for dx in 0..3 {
+                    s += h[(y * 3 + dy) * RW + x * 3 + dx] as u32;
+                }
+            }
+            lo.push(((s + 4) / 9) as u8);
+        }
+    }
+    hi.extend_from_slice(&h);
 }
 
 /// Find the window with exactly this title (waits up to `wait`).
@@ -143,7 +190,17 @@ pub fn record_window(title: &str, p: &Params, progress: Progress, cancel: &Cance
         let start = Instant::now();
         let mut frame: Vec<u8> = Vec::new();
         let mut have = false;
+        // early stop: grey copies + a check running on its own thread (never holding up the frame pacing)
+        let (mut glo, mut ghi) = (Vec::new(), Vec::new());
+        let enough = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut checking: Option<std::thread::JoinHandle<()>> = None;
+        let mut next_check = p.early_stop.as_ref().map(|e| (e.min_s * p.fps as f32).round() as u64);
+        let check_fn = p.early_stop.as_ref().map(|e| e.check.clone());
+
         for k in 0..total {
+            if enough.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
             let due = start + Duration::from_secs_f64(k as f64 / p.fps as f64);
             while Instant::now() < due {
                 cancel.check()?;
@@ -163,8 +220,26 @@ pub fn record_window(title: &str, p: &Params, progress: Progress, cancel: &Cance
             }
             if have {
                 stdin.write_all(&frame).map_err(|_| SourceError("The video encoder stopped unexpectedly.".into()))?;
+                if let (Some(e), Some(check)) = (&p.early_stop, &check_fn) {
+                    small_grey(&frame, w, (cw, ch, cy), &mut ghi, &mut glo);
+                    let n = (k + 1) as u64;
+                    if next_check.map_or(false, |c| n >= c) && checking.as_ref().map_or(true, |t| t.is_finished()) {
+                        next_check = Some(n + (e.every_s * p.fps as f32).round().max(1.0) as u64);
+                        let frames = crate::media::loops::LoopFrames { n: glo.len() / (crate::media::loops::FW * crate::media::loops::FH), lo: glo.clone(), hi: ghi.clone(), hw: false };
+                        let (check, enough) = (check.clone(), enough.clone());
+                        checking = Some(std::thread::spawn(move || {
+                            if check(&frames) {
+                                enough.store(true, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }));
+                    }
+                }
             }
-            progress((k + 1) as f32 / total as f32 * 0.95, "Recording");
+            let msg = if p.early_stop.is_some() { "Recording until a smooth loop turns up" } else { "Recording" };
+            progress((k + 1) as f32 / total as f32 * 0.95, msg);
+        }
+        if let Some(t) = checking.take() {
+            let _ = t.join();
         }
         drop(stdin);
         let status = ff.as_mut().unwrap().wait().map_err(|e| SourceError(e.to_string()))?;

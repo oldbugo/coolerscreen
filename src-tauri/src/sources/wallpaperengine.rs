@@ -173,11 +173,38 @@ fn sleep_cancellable(d: Duration, cancel: &Cancel) -> Result<()> {
     Ok(())
 }
 
-/// Record a scene/web wallpaper to an MP4 in `ctx.tmp_dir`.
-pub(crate) fn record(ctx: &SourceCtx, i: &Entry, seconds: f32, cursor: bool, progress: Progress, cancel: &Cancel) -> Result<AddResult> {
+/// Automatic recording: at most this long...
+pub const AUTO_MAX_S: f32 = 120.0;
+/// ...and at least this long (more starts and ends to choose from)...
+const AUTO_MIN_S: f32 = 30.0;
+/// ...stopping as soon as the frames hold a seamless loop of 3 s to this length (longer loops rarely fit the screen).
+const AUTO_LOOP_MAX_S: f64 = 15.0;
+/// Longest fixed-length recording.
+pub const MAX_S: f32 = 180.0;
+
+/// The automatic recording's stop test: a hard cut that already looks like a normal frame step.
+pub fn seamless_loop_in(f: &crate::media::loops::LoopFrames) -> bool {
+    use crate::media::loops;
+    let none = |_s0: usize| -> crate::media::Result<Vec<Vec<u8>>> { Err(crate::media::MediaError::Invalid("no seeking while recording".into())) };
+    let opts = loops::LoopOptions { fps: 18.0, min_len: 3.0, max_len: AUTO_LOOP_MAX_S };
+    match loops::find_loops(f, opts, &none, &crate::media::CancelToken::new(), &|_, _| {}) {
+        Ok(r) => r.candidates.first().map_or(false, |c| c.blend.unwrap_or(0.0) == 0.0 && c.ratio <= 1.05),
+        Err(_) => false,
+    }
+}
+
+/// Record a scene/web wallpaper to an MP4 in `ctx.tmp_dir`: `seconds` long, or automatic (None: until a seamless loop
+/// turns up, between 30 s and 2 min; scenes with random particles never repeat and use the whole 2 min).
+pub(crate) fn record(ctx: &SourceCtx, i: &Entry, seconds: Option<f32>, cursor: bool, progress: Progress, cancel: &Cancel) -> Result<AddResult> {
     let _one_at_a_time = RECORDING.lock().unwrap_or_else(|p| p.into_inner());
     let Some(exe) = running_exe() else { return err("Start Wallpaper Engine first (it is needed to play the wallpaper while recording).") };
-    let seconds = seconds.clamp(3.0, 60.0);
+    let (seconds, early_stop) = match seconds {
+        Some(s) => (s.clamp(3.0, MAX_S), None),
+        None => (
+            AUTO_MAX_S,
+            Some(recorder::EarlyStop { min_s: AUTO_MIN_S, every_s: 5.0, check: std::sync::Arc::new(seamless_loop_in) }),
+        ),
+    };
     let title = format!("CoolerScreen capture {}", sha1_hex10(&format!("{:?}{}", std::time::SystemTime::now(), std::process::id()))[..6].to_string());
     let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     std::fs::create_dir_all(&ctx.tmp_dir)?;
@@ -190,7 +217,7 @@ pub(crate) fn record(ctx: &SourceCtx, i: &Entry, seconds: f32, cursor: bool, pro
         let _close = CloseOnDrop { exe: &exe, title: &title };
         run_control(&exe, &["-control", "openWallpaper", "-file", &project, "-playInWindow", &title, "-width", "2400", "-height", "1080", "-x", &px, "-y", &py, "-borderless"]);
         sleep_cancellable(Duration::from_secs(4), cancel)?; // let it load and start animating
-        recorder::record_window(&title, &recorder::Params { seconds, fps: 18, cursor, out: out.clone(), ffmpeg: ctx.ffmpeg.clone() }, &|f, m| progress(0.05 + 0.9 * f, m), cancel)?;
+        recorder::record_window(&title, &recorder::Params { seconds, early_stop, fps: 18, cursor, out: out.clone(), ffmpeg: ctx.ffmpeg.clone() }, &|f, m| progress(0.05 + 0.9 * f, m), cancel)?;
     }
     progress(1.0, "");
     Ok(AddResult { file: out, name: format!("{} [{}].mp4", safe_name(&i.title), i.id), temp: true })
@@ -241,7 +268,7 @@ impl SourceProvider for WallpaperEngine {
                 let ext = file.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
                 Ok(AddResult { name: format!("{} [{}]{ext}", safe_name(&i.title), i.id), file, temp: false })
             }
-            Action::Record => record(ctx, &i, req.seconds.unwrap_or(20.0), false, progress, cancel),
+            Action::Record => record(ctx, &i, req.seconds, false, progress, cancel),
             Action::None => err(if i.note.is_empty() { "This wallpaper type is not supported.".to_string() } else { i.note }),
         }
     }

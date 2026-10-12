@@ -15,7 +15,6 @@ use super::graph::{base_graph, Base, Frame, DEVICE_FPS};
 use super::{gpu, js_round, r3, CancelToken, MediaError, Progress, Result, SourceInfo};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -57,6 +56,9 @@ pub struct LoopCandidate {
     /// Seconds of crossfade the card and a version use (library.js autoBlend), set by [`auto_blend`] users.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend: Option<f64>,
+    /// With a cross-fade: the share of the picture that shows a brief double image during it (0..1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ghost: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -196,7 +198,70 @@ struct Refined {
     j: usize,
     c: f64,
     hc: f64,
+    /// How the join looks on the screen (1.0 = a normal frame step), with `bn` frames of cross-fade.
     ratio: f64,
+    bn: usize,
+    /// The best cross-fade for this pair (frames, ratio), used when the hard cut fails the 192x108 re-check.
+    alt: Option<(usize, f64)>,
+    /// Share of the picture that differs clearly between the frames the cross-fade mixes (0..1): sparse particles
+    /// fade invisibly, a whole scene that moved shows as a brief double image.
+    ghost: f64,
+}
+impl Refined {
+    /// Ranking: how the join looks, with a cross-fade's double image counted against it.
+    fn rank(&self) -> f64 {
+        self.ratio + if self.bn > 0 { GHOST_WEIGHT * self.ghost } else { 0.0 }
+    }
+}
+const GHOST_WEIGHT: f64 = 2.0;
+/// Grey levels (of 255) above which a pixel counts as clearly different in [`ghost_area`].
+const GHOST_LEVEL: u8 = 12;
+
+/// [`Refined::ghost`] for a cross-fade of `bn` output frames: the pairs a quarter, half and three quarters into it.
+fn ghost_area(lo: &[u8], a: usize, nn: usize, bn: usize, rf: f64, n: usize) -> f64 {
+    let q = FW * FH;
+    let mut s = 0.0;
+    let ms = [bn / 4, bn / 2, (3 * bn) / 4];
+    for m in ms {
+        let x = js_round(a as f64 - (bn - m) as f64 * rf).max(0.0) as usize;
+        let y = (js_round(a as f64 + (nn - bn + m) as f64 * rf) as usize).min(n - 1);
+        let (fx, fy) = (&lo[x * q..(x + 1) * q], &lo[y * q..(y + 1) * q]);
+        s += fx.iter().zip(fy).filter(|(p, r)| p.abs_diff(**r) > GHOST_LEVEL).count() as f64 / q as f64;
+    }
+    s / ms.len() as f64
+}
+
+/// Cross-fade lengths tried, in output frames (1/3 s to 1.5 s, the most a version blends).
+const BLENDS: [usize; 5] = [6, 9, 12, 18, 27];
+/// A hard cut this close to a normal frame step needs no blend.
+const SEAMLESS: f64 = 1.05;
+
+/// The best cross-fade for a loop of `nn` output frames starting at source frame `a`. `mis(bn, bs)` = the mean
+/// difference between the frames faded together (bn output frames = bs source frames), in local frame steps. A fade
+/// spreads that difference over bn frames, so the join looks like 1 + mis / bn normal steps (plus a small preference
+/// for shorter fades, which ghost less when something big moves).
+fn best_blend(nn: usize, a: usize, rf: f64, mis: impl Fn(usize, usize) -> f64) -> Option<(usize, f64)> {
+    let mut best: Option<(usize, f64, f64)> = None;
+    for bn in BLENDS {
+        let bs = js_round(bn as f64 * rf).max(1.0) as usize;
+        if bn * 2 > nn || bs > a {
+            break;
+        }
+        let eff = 1.0 + mis(bn, bs) / (bn as f64 * rf.max(1.0));
+        let score = eff + 0.02 * bn as f64 / OUT_FPS;
+        if best.map_or(true, |b| score < b.2) {
+            best = Some((bn, eff, score));
+        }
+    }
+    best.map(|b| (b.0, b.1))
+}
+
+/// Hard cut or cross-fade, whichever looks smoother: (blend frames, ratio).
+fn pick_blend(raw: f64, alt: Option<(usize, f64)>) -> (usize, f64) {
+    match alt {
+        Some((bn, eff)) if raw > SEAMLESS && eff < raw => (bn, eff),
+        _ => (0, raw),
+    }
 }
 
 /// Search options (seconds; `fps` = source frame rate).
@@ -225,15 +290,30 @@ pub fn find_loops(
     let (pp, qq) = (CW * CH, FW * FH);
     let dc = |x: usize, y: usize| sad(&small[x * pp..(x + 1) * pp], &small[y * pp..(y + 1) * pp]) as f64 / pp as f64;
     let df = |x: usize, y: usize| sad(&lo[x * qq..(x + 1) * qq], &lo[y * qq..(y + 1) * qq]) as f64 / qq as f64;
-    let mut step = vec![0f32; n];
-    for i in 1..n {
-        step[i] = dc(i - 1, i) as f32;
-    }
-    step[0] = step[1];
+    let steps = |d: &(dyn Fn(usize, usize) -> f64 + Sync)| {
+        let mut s: Vec<f64> = (0..n).into_par_iter().map(|i| if i == 0 { 0.0 } else { d(i - 1, i) }).collect();
+        s[0] = s[1];
+        s
+    };
+    let step = steps(&dc);
 
     let min_n = 2i64.max(js_round(opts.min_len * OUT_FPS) as i64) as usize;
     let max_n = (min_n as i64).max(js_round(opts.max_len * OUT_FPS) as i64) as usize;
     let ratio_f = sf / OUT_FPS;
+    // Local motion: the neighbouring-frame step averaged over +-4 frames (a jump is compared with the motion around
+    // it), at each search resolution; never below a quarter of the clip's median step (still clips).
+    let local_of = |step: &[f64]| -> Vec<f64> {
+        let mut ps = vec![0f64; n + 1];
+        for i in 0..n {
+            ps[i + 1] = ps[i] + step[i];
+        }
+        let mut sorted = step.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let floor = (sorted[n / 2] * 0.25).max(0.02);
+        (0..n).map(|i| ((ps[(i + 5).min(n)] - ps[i.saturating_sub(4)]) / ((i + 5).min(n) - i.saturating_sub(4)) as f64).max(floor)).collect()
+    };
+    let local_c = local_of(&step);
+    let local_f = local_of(&steps(&df));
     let cost = |d: &dyn Fn(usize, usize) -> f64, a: usize, nn: usize| -> Option<(usize, f64)> {
         let j = js_round(a as f64 + nn as f64 * ratio_f) as usize;
         if j >= n {
@@ -251,22 +331,40 @@ pub fn find_loops(
         }
         Some((j, s / w))
     };
-    let pairs = n * (max_n - min_n + 1);
-    let stride = 1usize.max(pairs.div_ceil(250_000));
+    // Every start with every length (no sampling: one lag at a time, D(i, i+k) for all i, then prefix sums give any
+    // cross-fade window in O(1)). Each pair is scored as it would look on the screen: the hard cut, or the best blend.
     progress(0.5, "Comparing every start with every end");
     cancel.check()?;
-    let starts: Vec<usize> = (0..n - 2).step_by(stride).collect();
-    let mut cand: Vec<(f64, usize, usize)> = starts
-        .par_iter()
-        .map(|&a| {
+    let mut cand: Vec<(f64, usize, usize)> = (min_n..=max_n)
+        .into_par_iter()
+        .map(|nn| {
+            let k = js_round(nn as f64 * ratio_f) as usize;
             let mut v = vec![];
-            let mut nn = min_n;
-            while nn <= max_n {
-                match cost(&dc, a, nn) {
-                    Some((_, c)) => v.push((c, a, nn)),
-                    None => break,
+            if k + 1 >= n || cancel.is_cancelled() {
+                return v;
+            }
+            let dl: Vec<f64> = (0..n - k).map(|i| dc(i, i + k)).collect();
+            let mut ps = vec![0f64; dl.len() + 1];
+            for i in 0..dl.len() {
+                ps[i + 1] = ps[i] + dl[i];
+            }
+            for a in 0..dl.len() {
+                let j = js_round(a as f64 + nn as f64 * ratio_f) as usize;
+                if j >= n {
+                    break;
                 }
-                nn += stride;
+                let (mut s, mut w) = (2.0 * dl[a], 2.0);
+                if a >= 1 {
+                    s += dl[a - 1];
+                    w += 1.0;
+                }
+                if a + 1 < dl.len() {
+                    s += dl[a + 1];
+                    w += 1.0;
+                }
+                let loc = (local_c[a] + local_c[j]) / 2.0;
+                let alt = best_blend(nn, a, ratio_f, |_, bs| (ps[a] - ps[a - bs]) / bs as f64 / loc);
+                v.push((pick_blend(s / w / loc, alt).1, a, nn));
             }
             v
         })
@@ -278,23 +376,29 @@ pub fn find_loops(
     }
     cand.par_sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap()); // stable, like Array.prototype.sort
     progress(0.78, "Refining the best matches");
-    let mut refined: Vec<Refined> = vec![];
-    let mut seen = HashSet::new();
-    let s1 = stride as i64 - 1;
-    for &(_, a0, n0) in cand.iter().take(300) {
-        for da in -s1..=s1 {
-            for dn in -s1..=s1 {
-                let (a, nn) = (a0 as i64 + da, n0 as i64 + dn);
-                if a < 0 || nn < min_n as i64 || nn > max_n as i64 || !seen.insert((a, nn)) {
-                    continue;
+    // The leaders again at 64x36 with the exact frame pairs of the cross-fade.
+    let mut refined: Vec<Refined> = cand
+        .par_iter()
+        .take(400)
+        .filter_map(|&(_, a, nn)| {
+            let (j, c) = cost(&df, a, nn)?;
+            let loc = (local_f[a] + local_f[j]) / 2.0;
+            // the exact pairs the version's xfade mixes: output frame nn-bn+m with the frame (bn-m)/18 s before the start
+            let alt = best_blend(nn, a, ratio_f, |bn, _| {
+                let mut s = 0.0;
+                for m in 0..bn {
+                    let x = js_round(a as f64 - (bn - m) as f64 * ratio_f).max(0.0) as usize;
+                    let y = js_round(a as f64 + (nn - bn + m) as f64 * ratio_f) as usize;
+                    s += df(x, y.min(n - 1));
                 }
-                if let Some((j, c)) = cost(&df, a as usize, nn as usize) {
-                    refined.push(Refined { a: a as usize, nn: nn as usize, j, c, hc: 0.0, ratio: 0.0 });
-                }
-            }
-        }
-    }
-    refined.sort_by(|x, y| x.c.partial_cmp(&y.c).unwrap());
+                s / bn as f64 / loc
+            });
+            let (bn, ratio) = pick_blend(c / loc, alt);
+            let ghost = alt.map_or(0.0, |(abn, _)| ghost_area(lo, a, nn, abn, ratio_f, n));
+            Some(Refined { a, nn, j, c, hc: 0.0, ratio, bn, alt, ghost })
+        })
+        .collect();
+    refined.sort_by(|x, y| x.rank().partial_cmp(&y.rank()).unwrap().then(x.c.partial_cmp(&y.c).unwrap()));
     let tol = 0.5 * sf;
     let mut picked: Vec<Refined> = vec![];
     for r in refined {
@@ -347,7 +451,7 @@ pub fn find_loops(
                 }
             }
             let loc = if nb.is_empty() {
-                (step[r.a] as f64 + step[r.j] as f64) / 2.0
+                (step[r.a] + step[r.j]) / 2.0
             } else {
                 nb.iter().fold(0.0, |p, q| p + q) / nb.len() as f64
             };
@@ -355,12 +459,13 @@ pub fn find_loops(
         })
         .collect();
     for (r, l) in picked.iter_mut().zip(leaders) {
-        let (hc, ratio) = l?;
+        let (hc, raw) = l?;
         r.hc = hc;
-        r.ratio = ratio;
+        // the hard cut as seen at 192x108 decides; a cross-fade keeps its 64x36 estimate
+        (r.bn, r.ratio) = pick_blend(raw, r.alt);
     }
     picked.sort_by(|x, y| {
-        let d = x.ratio - y.ratio;
+        let d = x.rank() - y.rank();
         let d = if d != 0.0 { d } else { x.hc - y.hc };
         d.partial_cmp(&0.0).unwrap_or(std::cmp::Ordering::Equal)
     });
@@ -381,7 +486,8 @@ pub fn find_loops(
                 cost: js_round(r.hc * 100.0) / 100.0,
                 ratio: js_round(r.ratio * 100.0) / 100.0,
                 similarity: js_round((100.0 - (r.hc / 255.0) * 100.0) * 10.0) / 10.0,
-                blend: None,
+                blend: Some(r3(r.bn as f64 / OUT_FPS)),
+                ghost: if r.bn > 0 { Some(js_round(r.ghost * 1000.0) / 1000.0) } else { None },
             })
             .collect(),
     })
@@ -565,6 +671,24 @@ pub fn render_cards(ff: &Path, file: &Path, info: &SourceInfo, cands: &[LoopCand
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Loop search over real files: `CS_LOOP_FILES` (paths separated by `|`), `CS_LOOP_MAX` (seconds, default 12).
+    /// cargo test --release --lib media::loops::tests::real_files -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn real_files() {
+        let ff = PathBuf::from(std::env::var("COOLERSCREEN_FFMPEG").unwrap_or_else(|_| "C:\\Users\\pc\\AppData\\Local\\CoolerScreen\\ffmpeg.exe".into()));
+        let max: f64 = std::env::var("CS_LOOP_MAX").ok().and_then(|s| s.parse().ok()).unwrap_or(12.0);
+        for f in std::env::var("CS_LOOP_FILES").unwrap().split('|') {
+            let file = PathBuf::from(f);
+            let info = super::super::probe::probe(&ff, &file).unwrap();
+            let t = std::time::Instant::now();
+            let r = search(&ff, &file, &info, None, 3.0, max, &CancelToken::new(), &|_, _| {}).unwrap();
+            println!("{} ({} frames, {:.1}s search)", file.file_name().unwrap().to_string_lossy(), r.frames, t.elapsed().as_secs_f64());
+            for c in &r.candidates {
+                println!("  start {:6.2}s length {:5.2}s blend {:.2}s ratio {:.2} ghost {:.3}", c.start, c.length, c.blend.unwrap_or(0.0), c.ratio, c.ghost.unwrap_or(0.0));
+            }
+        }
+    }
     #[test]
     fn auto_blend_matches_library_js() {
         let c = |ratio, start, length| LoopCandidate {
@@ -578,11 +702,54 @@ mod tests {
             ratio,
             similarity: 0.0,
             blend: None,
+            ghost: None,
         };
         assert_eq!(auto_blend(&c(0.9, 3.0, 6.0)), 0.0);
         assert_eq!(auto_blend(&c(1.3, 3.0, 6.0)), 0.278);
         assert_eq!(auto_blend(&c(2.0, 3.0, 6.0)), 0.5);
         assert_eq!(auto_blend(&c(2.0, 0.2, 6.0)), 0.167);
+    }
+    /// A still scene with random particles (like Wallpaper Engine fireflies) never repeats: the search must answer
+    /// with a cross-fade that hides the join, and see that only a small part of the picture is faded.
+    #[test]
+    fn particles_get_a_clean_cross_fade() {
+        let n = 540;
+        let (mut lo, mut hi) = (vec![0u8; n * FW * FH], vec![0u8; n * RW * RH]);
+        let mut seed = 12345u64;
+        let mut rnd = |m: usize| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as usize % m
+        };
+        // 30 slow particles (one pixel every 6 frames), each living 120 frames, respawning at random places
+        let mut parts: Vec<(usize, usize, usize)> = (0..30).map(|_| (rnd(FW), rnd(FH), rnd(120))).collect();
+        for k in 0..n {
+            let f = &mut lo[k * FW * FH..(k + 1) * FW * FH];
+            f.iter_mut().enumerate().for_each(|(i, p)| *p = 60 + (i % 13) as u8 * 5);
+            for p in parts.iter_mut() {
+                p.2 += 1;
+                if p.2 >= 120 {
+                    *p = (rnd(FW), rnd(FH), 0);
+                }
+                if k % 6 == 0 {
+                    p.0 = (p.0 + 1) % FW;
+                }
+                f[p.1 * FW + p.0] = 250;
+            }
+            let lk = lo[k * FW * FH..(k + 1) * FW * FH].to_vec();
+            let h = &mut hi[k * RW * RH..(k + 1) * RW * RH];
+            for y in 0..RH {
+                for x in 0..RW {
+                    h[y * RW + x] = lk[(y / 3) * FW + x / 3];
+                }
+            }
+        }
+        let f = LoopFrames { n, lo, hi, hw: false };
+        let none = |_s0: usize| -> Result<Vec<Vec<u8>>> { unreachable!() };
+        let r = find_loops(&f, LoopOptions { fps: 18.0, min_len: 3.0, max_len: 10.0 }, &none, &CancelToken::new(), &|_, _| {}).unwrap();
+        let best = &r.candidates[0];
+        assert!(best.blend.unwrap() >= 0.5, "a cross-fade: {best:?}");
+        assert!(best.ratio < 1.4, "the fade hides the join: {best:?}");
+        assert!(best.ghost.unwrap() < 0.03, "only the particles fade: {best:?}");
     }
     #[test]
     fn finds_a_planted_loop() {

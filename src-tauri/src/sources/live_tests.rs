@@ -115,7 +115,7 @@ fn record_cursor_off_vs_on() {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         });
-        let r = wallpaperengine::record(&c, &item, 5.0, cursor, &|_, _| {}, &Cancel::new());
+        let r = wallpaperengine::record(&c, &item, Some(5.0), cursor, &|_, _| {}, &Cancel::new());
         stop.store(true, std::sync::atomic::Ordering::SeqCst);
         mover.join().unwrap();
         let r = r.unwrap();
@@ -137,7 +137,7 @@ fn record_offscreen_and_covered() {
     std::env::remove_var("COOLERSCREEN_POPOUT_POS");
     let item = first_scene(&c);
     println!("popout position: {:?}", wallpaperengine::popout_position());
-    let r = wallpaperengine::record(&c, &item, 5.0, false, &|_, _| {}, &Cancel::new()).unwrap();
+    let r = wallpaperengine::record(&c, &item, Some(5.0), false, &|_, _| {}, &Cancel::new()).unwrap();
     let dest = c.tmp_dir.join("offscreen.mp4");
     std::fs::rename(&r.file, &dest).unwrap();
     println!("offscreen: {}", dest.display());
@@ -149,7 +149,7 @@ fn record_offscreen_and_covered() {
         std::thread::sleep(std::time::Duration::from_millis(2500));
         let _ = std::process::Command::new("powershell").args(["-NoProfile", "-Command", "Start-Process notepad -WindowStyle Maximized"]).status();
     });
-    let r = wallpaperengine::record(&c, &item, 5.0, false, &|_, _| {}, &Cancel::new());
+    let r = wallpaperengine::record(&c, &item, Some(5.0), false, &|_, _| {}, &Cancel::new());
     cover.join().unwrap();
     let _ = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &format!("Get-Process notepad -ErrorAction SilentlyContinue | Where-Object {{ '{before}' -notmatch ('(^|,)' + $_.Id + '(,|$)') }} | Stop-Process -Force")])
