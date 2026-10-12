@@ -77,3 +77,16 @@ to explore a **companion that stays running**, which turns the screen from a sta
 
 **Suggested first step for 3.0:** a read-only spike. Capture the vendor's live protocol, then push a single test JPEG
 from a scratch tool and measure frames per second and latency on the real screen. Decide 1–2 above from those numbers.
+
+## 3.0 decisions (user, 2026-10-12)
+
+- **Defaults = 2.0 behaviour; every option configurable.** No screen-off at shutdown by default; the companion stopping
+  falls back to the stored loop clip; start with Windows is an opt-in setting; no admin sensor driver by default.
+- **Widgets wanted:** now-playing music, CPU/GPU temps and load, clock/date, and an animated gallery clip behind the
+  widgets.
+- **Companion form:** undecided. Prototype both (small separate helper vs the main app hidden in the tray) and measure
+  before choosing.
+- **Branch:** `v3`; `main` stays 2.0.
+- **Vendor app:** already uninstalled (its folder is empty), so the live protocol is tested directly. Working
+  hypothesis: live mode is raw JPEG frames (FF D8 … FF D9) written straight to bulk OUT 0x02, ended by
+  `FF D9 FF D9` + `00 00 00 00`.
