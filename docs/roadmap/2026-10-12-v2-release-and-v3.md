@@ -138,3 +138,17 @@ returns to the loop clip. Measured on the screen (20 s per run, 16 logical cores
 
 No send errors; encode ~8 ms, send ~4–10 ms per frame. Video is limited by software decode + JPEG encode; next:
 hardware decode in ffmpeg, check source fps/pacing.
+
+### A vs B on hardware (2026-10-12, gradient background, 20 s per row, % of whole PC / private RAM)
+
+| Form | 30 fps | 60 fps | Idle, live off |
+|---|---|---|---|
+| A: separate `cs-companion` | 0.70 % / 35 MB | 0.78 % / 35 MB | — |
+| B: app, window visible | 0.99 % / 240 MB | 0.85 % / 241 MB | 0.10 % / 223 MB |
+| B: app hidden, WebView alive | 0.84 % / 237 MB | 0.87 % / 237 MB | 0.08 % / 223 MB |
+| B: app, window destroyed | 0.96 % / 41 MB | 0.84 % / 41 MB | 0.08 % / 28 MB |
+
+A with the GPU-decoded video background (Ocean Echo, 18 fps): 1.8–1.9 % of PC / 46 MB, plus ffmpeg 11–14 % of one
+core and ~108 MB. No send errors anywhere; the display stayed on afterwards.
+Conclusion: CPU is the same in every form; only the hidden-but-alive WebView costs memory (~200 MB). B with the
+window destroyed matches A, and keeps one program owning the screen (no device clash between two programs).
