@@ -66,7 +66,7 @@ pub struct LiveSettings {
 
 impl Default for LiveSettings {
     fn default() -> Self {
-        LiveSettings { in_app: false, destroy_window: true, background: String::new(), show_seconds: false, music: false, screen_off_on_shutdown: false, on_sleep: "loop".into(), on_lock: "loop".into() }
+        LiveSettings { in_app: false, destroy_window: true, background: String::new(), show_seconds: false, music: true, screen_off_on_shutdown: false, on_sleep: "loop".into(), on_lock: "loop".into() }
     }
 }
 

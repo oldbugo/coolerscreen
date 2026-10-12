@@ -994,7 +994,7 @@ impl App {
                 .and_then(|o| self.lib.source_path(&o))
                 .map(|p| p.to_string_lossy().to_string())
         };
-        // TODO(engine): c.music = l.music once the now-playing widget has a config switch.
+        c.music.enabled = l.music;
         c
     }
 }

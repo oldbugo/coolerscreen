@@ -104,8 +104,6 @@ fn main() {
             if c.device.fake_mode().is_some() {
                 c.live.set_no_device(true);
             }
-            let c2 = c.clone();
-            std::thread::spawn(move || c2.startup());
             // 3.0 prototype B: off unless the setting is on (or --live-measure is used).
             if let Some(o) = measure.take() {
                 live_app::ensure_tray(app.handle(), false);

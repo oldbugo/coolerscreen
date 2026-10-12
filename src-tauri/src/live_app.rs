@@ -85,8 +85,18 @@ pub fn attach_close_handler(win: &WebviewWindow) {
     });
 }
 
+/// The library start-up work (gallery scan and watcher), once, when the first window is built. `--tray` skips it until then.
+fn ensure_startup(app: &AppHandle) {
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if !DONE.swap(true, Ordering::SeqCst) {
+        let c = app.state::<Core>().0.clone();
+        std::thread::spawn(move || c.startup());
+    }
+}
+
 /// Build the main window (hidden), add the close handler and show it.
 pub fn create_window(app: &AppHandle, show: bool) -> tauri::Result<WebviewWindow> {
+    ensure_startup(app);
     let win = crate::window::create(app)?;
     attach_close_handler(&win);
     if show {
@@ -145,11 +155,7 @@ unsafe extern "system" fn session_proc(hwnd: *mut core::ffi::c_void, msg: u32, w
             // Logoff / shutdown: end the stream (loop clip by default; screen off if the user chose that).
             if wp != 0 {
                 if let Some(h) = HOST.get() {
-                    if cfg().screen_off_on_shutdown {
-                        h.stop_screen_off();
-                    } else {
-                        h.stop();
-                    }
+                    h.stop_fast(cfg().screen_off_on_shutdown);
                 }
             }
             0
@@ -157,7 +163,11 @@ unsafe extern "system" fn session_proc(hwnd: *mut core::ffi::c_void, msg: u32, w
         WM_POWERBROADCAST => {
             if let Some(h) = HOST.get() {
                 match wp as u32 {
-                    PBT_APMSUSPEND if cfg().on_sleep != "keep" => h.hold(SLEEP, std::time::Duration::from_millis(2500)), // TODO(engine): "off" = ScreenOff ending
+                    PBT_APMSUSPEND => match cfg().on_sleep.as_str() {
+                        "loop" => h.hold(SLEEP, std::time::Duration::from_millis(2500)),
+                        "off" => h.hold_screen_off(SLEEP),
+                        _ => {}
+                    },
                     PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => h.release(SLEEP, std::time::Duration::from_secs(3)), // the screen may re-enumerate: the engine reconnects with backoff
                     _ => {}
                 }
@@ -168,9 +178,15 @@ unsafe extern "system" fn session_proc(hwnd: *mut core::ffi::c_void, msg: u32, w
             if let Some(h) = HOST.get() {
                 let h = h.clone();
                 match wp as u32 {
-                    7 if cfg().on_lock != "keep" => {
-                        std::thread::spawn(move || h.hold(LOCK, std::time::Duration::from_secs(3)));
-                    }
+                    7 => match cfg().on_lock.as_str() {
+                        "loop" => {
+                            std::thread::spawn(move || h.hold(LOCK, std::time::Duration::from_secs(3)));
+                        }
+                        "off" => {
+                            std::thread::spawn(move || h.hold_screen_off(LOCK));
+                        }
+                        _ => {}
+                    },
                     8 => h.release(LOCK, std::time::Duration::from_secs(1)),
                     _ => {}
                 }
@@ -350,11 +366,7 @@ pub async fn live_set(app: AppHandle, core: tauri::State<'_, Core>, patch: Value
         if now.in_app != before.in_app {
             apply(&app, false);
         } else if c.live.running() {
-            c.live.set_show_seconds(now.show_seconds);
-            if now.background != before.background {
-                // TODO(engine): switch the background at runtime; for now the stream restarts (about a second of loop clip).
-                c.live.restart_with(c.live_config());
-            }
+            c.live.reload(&c.live_config());
         }
         refresh_tray(&app);
         Ok(c.app_state())

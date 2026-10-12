@@ -8,6 +8,7 @@
 //! Nothing here touches the screen except through `Pipeline` / `LiveSession` (0x15 [00 0A], 0x11 and frames; stop sends
 //! FF D9 FF D9, 0x0E [1], 0x14 [1,0]).
 use crate::live::pipeline::{Pipeline, Sink};
+use crate::live::session::Ending;
 use crate::live::Config;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst};
@@ -29,6 +30,10 @@ pub struct LiveHost {
     resume_gen: AtomicU64,
     /// Overrides for the saved config (tests, measuring).
     cfg_override: Mutex<Option<Config>>,
+    /// The config live was last started or reloaded with (to start again after a screen-off stop).
+    last_cfg: Mutex<Option<Config>>,
+    /// Live was stopped with the screen off for a sleep or lock hold and starts again when the holds are released.
+    off_stopped: AtomicBool,
 }
 
 impl Default for LiveHost {
@@ -39,6 +44,8 @@ impl Default for LiveHost {
             holds: AtomicU32::new(0),
             resume_gen: AtomicU64::new(0),
             cfg_override: Mutex::new(None),
+            last_cfg: Mutex::new(None),
+            off_stopped: AtomicBool::new(false),
         }
     }
 }
@@ -79,6 +86,11 @@ impl LiveHost {
     fn apply_pause(&self) {
         if let Some(p) = self.pipeline() {
             p.shared.paused.store(self.holds.load(SeqCst) != 0, SeqCst);
+        } else if self.holds.load(SeqCst) == 0 && self.off_stopped.swap(false, SeqCst) {
+            let cfg = self.last_cfg.lock().unwrap().clone();
+            if let Some(c) = cfg {
+                self.start_with(c);
+            }
         }
     }
 
@@ -94,6 +106,8 @@ impl LiveHost {
         if g.is_some() {
             return;
         }
+        self.off_stopped.store(false, SeqCst);
+        *self.last_cfg.lock().unwrap() = Some(cfg.clone());
         let sink = if self.no_device.load(SeqCst) { Sink::Null } else { Sink::Device };
         let p = Arc::new(Pipeline::start(&cfg, sink));
         // Started while a hold is set (a device task is running): stay paused until it is done.
@@ -103,23 +117,28 @@ impl LiveHost {
 
     /// Stop live and end the stream properly (the screen plays its loop clip again). Blocks until the threads are done.
     pub fn stop(&self) {
+        self.off_stopped.store(false, SeqCst);
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
             p.stop();
         }
     }
 
-    /// Stop and start again with a new config.
-    /// TODO(engine): replace by the runtime background / config change when it lands (this ends the stream for a moment).
-    pub fn restart_with(&self, cfg: Config) {
-        self.stop();
-        self.start_with(cfg);
+    /// Shutdown or logoff: the fast ending (at most 800 ms), loop clip or screen off.
+    pub fn stop_fast(&self, screen_off: bool) {
+        self.off_stopped.store(false, SeqCst);
+        let p = self.pipeline.lock().unwrap().take();
+        if let Some(p) = p {
+            p.stop_fast(if screen_off { Ending::ScreenOff } else { Ending::LoopClip });
+        }
     }
 
-    /// Stop with the screen switched off instead of the loop clip (the "turn the screen off at shutdown" option).
-    /// TODO(engine): call `stop_with(Ending::ScreenOff)` (fast variant) when it lands; until then the loop clip ending is used.
-    pub fn stop_screen_off(&self) {
-        self.stop();
+    /// Apply a new config while running (fps, seconds, background, music, ...) without ending the stream.
+    pub fn reload(&self, cfg: &Config) {
+        *self.last_cfg.lock().unwrap() = Some(cfg.clone());
+        if let Some(p) = self.pipeline() {
+            p.reload_config(cfg);
+        }
     }
 
     pub fn set_user_paused(&self, paused: bool) {
@@ -139,19 +158,13 @@ impl LiveHost {
     pub fn set_fps(&self, fps: u32) {
         let fps = if fps >= 45 { 60 } else { 30 };
         if let Some(p) = self.pipeline() {
-            p.shared.fps.store(fps, SeqCst);
+            p.set_fps(fps);
         }
         let mut c = Config::load();
         c.fps = fps;
         c.save();
         if let Some(o) = self.cfg_override.lock().unwrap().as_mut() {
             o.fps = fps;
-        }
-    }
-
-    pub fn set_show_seconds(&self, on: bool) {
-        if let Some(p) = self.pipeline() {
-            p.shared.show_seconds.store(on, SeqCst);
         }
     }
 
@@ -162,22 +175,33 @@ impl LiveHost {
         }
     }
 
-    /// Wait (at most `max`) until the stream has ended and the screen is free.
-    /// TODO(engine): use `Pipeline::session_active()` when it lands. Until then: "not connected" held for 600 ms (a connect in
-    /// progress also reads "not connected").
+    /// Wait (at most `max`) until no session is open on the screen. A connect in progress is not open yet, so the state
+    /// must stay closed for a moment.
     fn wait_stream_ended(&self, p: &Pipeline, max: Duration) {
         if self.no_device.load(SeqCst) {
             return;
         }
         let end = Instant::now() + max;
-        let mut stable_since: Option<Instant> = None;
+        let mut closed_since: Option<Instant> = None;
         while Instant::now() < end {
-            if p.shared.connected.load(SeqCst) {
-                stable_since = None;
-            } else if stable_since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_millis(600) {
+            if p.session_active() {
+                closed_since = None;
+            } else if closed_since.get_or_insert_with(Instant::now).elapsed() >= Duration::from_millis(250) {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// Like `hold`, but ends the stream with the screen off (sleep or lock set to turn the screen off). Live is started again
+    /// when all holds are released.
+    pub fn hold_screen_off(&self, bit: u32) {
+        self.resume_gen.fetch_add(1, SeqCst);
+        self.holds.fetch_or(bit, SeqCst);
+        let p = self.pipeline.lock().unwrap().take();
+        if let Some(p) = p {
+            self.off_stopped.store(true, SeqCst);
+            p.stop_with(Ending::ScreenOff);
         }
     }
 
