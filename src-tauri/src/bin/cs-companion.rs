@@ -35,7 +35,8 @@ fn wake_main() {
 fn stop_now() {
     QUIT.store(true, Ordering::SeqCst);
     if let Some(p) = PIPELINE.get() {
-        p.stop();
+        // Quit, Ctrl+C, console close and logoff all come through here: the fast ending (loop clip) keeps it under a second.
+        p.stop_fast(cs_core::live::session::Ending::LoopClip);
     }
     wake_main();
 }
@@ -102,7 +103,7 @@ fn main() {
         print!("{HELP}");
         return;
     }
-    const FLAGS: [&str; 5] = ["--dry-run", "--no-device", "--help", "-h", "--video-only"];
+    const FLAGS: [&str; 8] = ["--dry-run", "--no-device", "--help", "-h", "--video-only", "--fake-music", "--music", "--no-music"];
     const WITH_VALUE: [&str; 6] = ["--video", "--fps", "--measure", "--decode", "--notch", "--frames"];
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -118,6 +119,9 @@ fn main() {
     let mut cfg = Config::load();
     if let Some(v) = arg_val(&args, "--video") {
         cfg.background = Some(v.to_string());
+    }
+    if args.iter().any(|a| a == "--no-music") {
+        cfg.music.enabled = false;
     }
     if let Some(d) = arg_val(&args, "--decode") {
         cfg.video_decode = d.to_string();
@@ -162,6 +166,21 @@ fn dry_run(cfg: &Config) -> i32 {
     let me: HANDLE = unsafe { GetCurrentProcess() };
     let ws0 = mem(me).0;
     let mut r = Renderer::new(sampler.data.clone(), video);
+    let args: Vec<String> = std::env::args().collect();
+    let _watcher;
+    if args.iter().any(|a| a == "--fake-music") {
+        let np = cs_core::live::nowplaying::NowPlaying::demo("A Fairly Long Track Title That Needs Shortening", "Some Artist & Another Artist", true, 83.0, 241.0);
+        r.set_music_source(Some(std::sync::Arc::new(std::sync::Mutex::new(Some(np)))));
+    } else if args.iter().any(|a| a == "--music") {
+        let w = cs_core::live::nowplaying::MusicWatcher::start(None);
+        std::thread::sleep(Duration::from_millis(2500));
+        match w.get() {
+            Some(n) => println!("now playing: {} - {} ({}), {:.0}/{:.0} s, playing {}, cover {}", n.artist, n.title, n.app, n.position(), n.duration_s, n.playing, n.cover.as_ref().map(|c| format!("{}x{}", c.w, c.h)).unwrap_or("none".into())),
+            None => println!("now playing: nothing"),
+        }
+        r.set_music_source(Some(w.data.clone()));
+        _watcher = w;
+    }
     if cfg.notch != "off" {
         r.set_mask(cs_core::live::mask::Mask::from_app_settings());
     }

@@ -8,6 +8,7 @@
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
 pub mod encode;
 pub mod mask;
+pub mod nowplaying;
 pub mod pipeline;
 pub mod render;
 pub mod sensors;
@@ -22,6 +23,21 @@ pub const LH: usize = 756;
 pub const PW: usize = 756;
 pub const PH: usize = 1680;
 
+/// Now-playing card settings.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MusicConfig {
+    pub enabled: bool,
+    /// Prefer the session of this app (part of its AppUserModelId, e.g. "Spotify"); null = whatever is playing.
+    pub preferred_app: Option<String>,
+}
+
+impl Default for MusicConfig {
+    fn default() -> Self {
+        MusicConfig { enabled: true, preferred_app: None }
+    }
+}
+
 /// companion.json (in the CoolerScreen app folder). Defaults follow the standing list: 60 fps, nothing extra on.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -33,6 +49,8 @@ pub struct Config {
     pub show_seconds: bool,
     /// Largest frame in KB (the vendor profile for this screen uses 200).
     pub max_kb: u32,
+    /// Now playing (Windows media sessions).
+    pub music: MusicConfig,
     /// Notch mask: "app" follows the app's setting (settings.json), "off" draws edge to edge.
     pub notch: String,
     /// Background clip decoding: "auto" tries hardware (D3D11) and falls back to software, "software" never uses the GPU.
@@ -41,7 +59,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { fps: 60, background: None, show_seconds: false, max_kb: 200, notch: "app".into(), video_decode: "auto".into() }
+        Config { fps: 60, background: None, show_seconds: false, max_kb: 200, music: MusicConfig::default(), notch: "app".into(), video_decode: "auto".into() }
     }
 }
 

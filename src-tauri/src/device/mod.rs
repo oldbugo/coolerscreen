@@ -307,3 +307,11 @@ impl Screen {
         n
     }
 }
+
+impl Screen {
+    /// Screen off (0x14 [0,0]): only for the live companion's opt-in "screen off" ending, sent as its own transfer after
+    /// FF D9 FF D9. Deliberately not part of `live_key`'s list.
+    pub fn live_screen_off(&mut self) -> Result<(), DevErr> {
+        self.live_write(&frame::frame(0x14, &[0, 0]))
+    }
+}

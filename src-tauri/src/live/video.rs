@@ -20,6 +20,8 @@ pub struct VideoBg {
     pub child_handle: Arc<Mutex<Option<usize>>>,
     /// How the clip is being decoded right now ("d3d11va", "software", ...), for logs and measurements.
     pub decode: Arc<Mutex<String>>,
+    /// The running ffmpeg, so Drop kills this one only (not other ffmpegs the app has started).
+    proc: Arc<Mutex<Option<Child>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -38,7 +40,8 @@ impl VideoBg {
         let handle = Arc::new(Mutex::new(None));
         let mode = std::env::var("CS_VIDEO_DECODE").unwrap_or_else(|_| decode.to_string());
         let how = Arc::new(Mutex::new(String::new()));
-        let (l2, s2, h2, hw2, clip) = (latest.clone(), stop.clone(), handle.clone(), how.clone(), clip.to_path_buf());
+        let proc: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+        let (l2, s2, h2, hw2, p2, clip) = (latest.clone(), stop.clone(), handle.clone(), how.clone(), proc.clone(), clip.to_path_buf());
         let thread = std::thread::spawn(move || {
             // Decode methods to try in order; a start that yields no frame within 6 s moves on to the next one.
             let mut chain: Vec<String> = match mode.as_str() {
@@ -66,6 +69,7 @@ impl VideoBg {
                 let started = Instant::now();
                 let mut got = false;
                 let mut out = child.stdout.take().unwrap();
+                *p2.lock().unwrap() = Some(child);
                 loop {
                     let mut buf = vec![0u8; FRAME_BYTES];
                     if s2.load(Ordering::Relaxed) || out.read_exact(&mut buf).is_err() {
@@ -75,8 +79,10 @@ impl VideoBg {
                     *l2.lock().unwrap() = Some(Arc::new(buf));
                 }
                 *h2.lock().unwrap() = None;
-                let _ = child.kill();
-                let _ = child.wait();
+                if let Some(mut c) = p2.lock().unwrap().take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
                 if !got && accel != "software" && started.elapsed() < Duration::from_secs(6) {
                     crate::device::log(&format!("companion: video decode with {accel} failed, trying the next method"));
                     at += 1;
@@ -87,7 +93,7 @@ impl VideoBg {
                 }
             }
         });
-        Ok(VideoBg { latest, stop, child_handle: handle, decode: how, thread: Some(thread) })
+        Ok(VideoBg { latest, stop, child_handle: handle, decode: how, proc, thread: Some(thread) })
     }
 
     pub fn frame(&self) -> Option<Arc<Vec<u8>>> {
@@ -140,8 +146,10 @@ fn spawn(ffmpeg: &Path, clip: &Path, accel: &str) -> Option<Child> {
 impl Drop for VideoBg {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        // Killing ffmpeg unblocks the reader's read_exact.
-        crate::media::sys::kill_adopted_children();
+        // Killing ffmpeg unblocks the reader's read_exact (only this decoder: the app may have other ffmpegs running).
+        if let Some(c) = self.proc.lock().unwrap().as_mut() {
+            let _ = c.kill();
+        }
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }

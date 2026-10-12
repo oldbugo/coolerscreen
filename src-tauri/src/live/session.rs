@@ -8,6 +8,16 @@ use std::time::{Duration, Instant};
 pub const KEEPALIVE: Duration = Duration::from_millis(1500);
 const END_OF_STREAM: [u8; 4] = [0xff, 0xd9, 0xff, 0xd9];
 
+/// How a live stream ends.
+/// LoopClip (default, the 2.0 behaviour): display on and the stored loop clip plays.
+/// ScreenOff (opt-in): the vendor app's shutdown sequence, the screen turns off (0x14 [0,0]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Ending {
+    #[default]
+    LoopClip,
+    ScreenOff,
+}
+
 pub struct LiveSession {
     scr: Option<Screen>,
     last_keep: Instant,
@@ -50,15 +60,47 @@ impl LiveSession {
         scr.live_write(&self.wire).map_err(|e| e.to_string())
     }
 
-    /// Orderly end: the screen goes back to the stored loop clip with the display on.
-    pub fn stop(mut self) {
+    /// Orderly end with the default ending: the loop clip plays, display on.
+    pub fn stop(self) {
+        self.stop_with(Ending::LoopClip);
+    }
+
+    /// Orderly end. FF D9 FF D9 is always its own transfer; the screen-off command follows as a separate transfer a moment
+    /// later (the vendor notes the firmware rejects the two when they are coalesced).
+    pub fn stop_with(mut self, ending: Ending) {
         if let Some(mut scr) = self.scr.take() {
             let _ = scr.live_write(&END_OF_STREAM);
-            std::thread::sleep(Duration::from_millis(200));
-            let _ = scr.live_key(0x0e, &[1]);
-            std::thread::sleep(Duration::from_millis(100));
-            let _ = scr.live_key(0x14, &[1, 0]);
+            match ending {
+                Ending::LoopClip => {
+                    std::thread::sleep(Duration::from_millis(200));
+                    let _ = scr.live_key(0x0e, &[1]);
+                    std::thread::sleep(Duration::from_millis(100));
+                    let _ = scr.live_key(0x14, &[1, 0]);
+                }
+                Ending::ScreenOff => {
+                    std::thread::sleep(Duration::from_millis(2));
+                    let _ = scr.live_screen_off();
+                }
+            }
             std::thread::sleep(Duration::from_millis(300));
+            scr.close();
+        }
+    }
+
+    /// Shutdown variant: the same writes with only a 2 ms gap, no settling waits. Completes in well under a second.
+    pub fn stop_fast(mut self, ending: Ending) {
+        if let Some(mut scr) = self.scr.take() {
+            let _ = scr.live_write(&END_OF_STREAM);
+            std::thread::sleep(Duration::from_millis(2));
+            match ending {
+                Ending::LoopClip => {
+                    let _ = scr.live_key(0x0e, &[1]);
+                    let _ = scr.live_key(0x14, &[1, 0]);
+                }
+                Ending::ScreenOff => {
+                    let _ = scr.live_screen_off();
+                }
+            }
             scr.close();
         }
     }

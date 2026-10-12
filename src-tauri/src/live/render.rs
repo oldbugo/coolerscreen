@@ -3,13 +3,16 @@
 //! The panel is limited by the screen: motion along the landscape vertical axis tears, so nothing here moves up or down;
 //! the gradient drifts sideways and the bars grow sideways.
 use super::mask::Mask;
+use super::nowplaying::NowPlaying;
 use super::sensors::Sensors;
 use super::video::VideoBg;
 use super::{LH, LW};
 use ab_glyph::{Font as _, FontVec, PxScale, ScaleFont};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const FALLBACKS: [&str; 4] = ["msyh.ttc", "YuGothM.ttc", "malgun.ttf", "seguisym.ttf"];
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
 
 struct Bmp {
@@ -26,6 +29,10 @@ struct Bmp {
 struct Fonts {
     regular: Option<FontVec>,
     bold: Option<FontVec>,
+    /// For characters Segoe UI lacks (CJK, symbols): loaded the first time one is needed (msyh.ttc alone is ~19 MB).
+    fallback: Vec<FontVec>,
+    fb_next: usize,
+    fb_last_used: Option<Instant>,
     cache: HashMap<(char, u32, bool), Bmp>,
 }
 
@@ -37,13 +44,35 @@ impl Fonts {
         };
         let regular = load(&["segoeui.ttf", "arial.ttf", "tahoma.ttf"]);
         let bold = load(&["segoeuib.ttf", "arialbd.ttf", "tahomabd.ttf"]).or_else(|| load(&["segoeui.ttf", "arial.ttf"]));
-        Fonts { regular, bold, cache: HashMap::new() }
+        Fonts { regular, bold, fallback: Vec::new(), fb_next: 0, fb_last_used: None, cache: HashMap::new() }
     }
 
     fn glyph(&mut self, c: char, px: u32, bold: bool) -> Option<&Bmp> {
         let key = (c, px, bold);
         if !self.cache.contains_key(&key) {
-            let f = if bold { self.bold.as_ref() } else { self.regular.as_ref() }?;
+            let need_fb = {
+                let p = if bold { self.bold.as_ref() } else { self.regular.as_ref() }?;
+                c != ' ' && p.glyph_id(c).0 == 0
+            };
+            let mut fb_at: Option<usize> = None;
+            if need_fb {
+                self.fb_last_used = Some(Instant::now());
+                // Load fallback fonts one at a time, only as far as needed (each is 10-20 MB).
+                loop {
+                    if let Some(i) = self.fallback.iter().position(|f| f.glyph_id(c).0 != 0) {
+                        fb_at = Some(i);
+                        break;
+                    }
+                    let Some(n) = FALLBACKS.get(self.fb_next) else { break };
+                    self.fb_next += 1;
+                    let dir = std::path::Path::new(r"C:\Windows\Fonts");
+                    if let Some(f) = std::fs::read(dir.join(n)).ok().and_then(|b| FontVec::try_from_vec(b).ok()) {
+                        self.fallback.push(f);
+                    }
+                }
+            }
+            let p = if bold { self.bold.as_ref() } else { self.regular.as_ref() }?;
+            let f = match fb_at { Some(i) => &self.fallback[i], None => p };
             let scale = PxScale::from(px as f32);
             let id = f.glyph_id(c);
             let adv = f.as_scaled(scale).h_advance(id);
@@ -66,6 +95,15 @@ impl Fonts {
             self.cache.insert(key, bmp);
         }
         self.cache.get(&key)
+    }
+
+    /// Free the fallback fonts when no character has needed them for a while (the glyph bitmaps stay cached).
+    fn trim_fallback(&mut self) {
+        if !self.fallback.is_empty() && self.fb_last_used.is_some_and(|t| t.elapsed() > Duration::from_secs(10)) {
+            self.fallback.clear();
+            self.fallback.shrink_to_fit();
+            self.fb_next = 0;
+        }
     }
 
     fn width(&mut self, s: &str, px: u32, bold: bool) -> f32 {
@@ -105,8 +143,17 @@ pub struct Renderer {
     /// the tick, the clock second or the background video frame changed.
     tick: u64,
     bars_tick: u64,
-    last_key: Option<(u64, usize, bool, u16)>,
+    last_key: Option<(u64, usize, bool, u16, u64)>,
     mask: Mask,
+    /// Now-playing source (shared with the watcher thread), the fade of its card, and the per-track cover scaled for the card.
+    music: Option<Arc<Mutex<Option<NowPlaying>>>>,
+    music_alpha: f32,
+    music_tick: u64,
+    cover: Option<(u64, Vec<u8>)>,
+    /// Card and left-scrim backgrounds for the current notch inset (premultiplied RGBA).
+    card_ov: Vec<u8>,
+    scrim_ov: Vec<u8>,
+    layout_inset: usize,
     /// Accumulated microseconds per stage (background, clock, panel), for profiling.
     pub timing_us: [u64; 3],
     /// Panel background and bar tracks, drawn once (premultiplied RGBA, PANEL_W x PANEL_H); blended each frame.
@@ -117,6 +164,8 @@ const PANEL_X: usize = 1040;
 const PANEL_Y: usize = 48;
 const PANEL_W: usize = 592;
 const PANEL_H: usize = 660;
+const CARD_Y: usize = 478;
+const CARD_H: usize = 220;
 
 fn build_panel_overlay() -> Vec<u8> {
     let mut pm = Pixmap::new(PANEL_W as u32, PANEL_H as u32).unwrap();
@@ -143,7 +192,19 @@ fn blend_overlay(dst: &mut [u8], ov: &[u8], x0: usize, y0: usize, w: usize, h: u
 
 impl Renderer {
     pub fn new(sensors: Arc<Mutex<Sensors>>, video: Option<VideoBg>) -> Renderer {
-        Renderer { pm: Pixmap::new(LW as u32, LH as u32).unwrap(), fonts: Fonts::load(), sensors, video, t0: Instant::now(), bars: [0.0; 5], tick: 0, bars_tick: 0, last_key: None, mask: Mask::none(), timing_us: [0; 3], panel_ov: build_panel_overlay() }
+        Renderer { pm: Pixmap::new(LW as u32, LH as u32).unwrap(), fonts: Fonts::load(), sensors, video, t0: Instant::now(), bars: [0.0; 5], tick: 0, bars_tick: 0, last_key: None, mask: Mask::none(), music: None, music_alpha: 0.0, music_tick: 0, cover: None, card_ov: Vec::new(), scrim_ov: Vec::new(), layout_inset: usize::MAX, timing_us: [0; 3], panel_ov: build_panel_overlay() }
+    }
+
+    /// Where now-playing comes from (None: no music card).
+    pub fn set_music_source(&mut self, m: Option<Arc<Mutex<Option<NowPlaying>>>>) {
+        self.music = m;
+        self.last_key = None;
+    }
+
+    /// Replace the background clip (None: the animated gradient).
+    pub fn set_video(&mut self, v: Option<VideoBg>) {
+        self.video = v;
+        self.last_key = None;
     }
 
     /// Set the notch mask (applied as the last step; the clock keeps clear of a left band).
@@ -175,17 +236,42 @@ impl Renderer {
         let now = local_time();
         let vframe = self.video.as_ref().and_then(|v| v.frame());
         let vkey = vframe.as_ref().map(|a| Arc::as_ptr(a) as usize).unwrap_or(0);
+        // Now playing: fade the card in and out (stepped per tick), and redraw when track, state, a progress step (3 per
+        // second) or the fade changed.
+        let np = self.music.as_ref().and_then(|m| m.lock().unwrap().clone());
+        let want = np.as_ref().is_some_and(|n| n.visible());
+        if self.tick != self.music_tick {
+            let steps = (self.tick - self.music_tick).min(10) as f32;
+            self.music_tick = self.tick;
+            let target = if want { 1.0 } else { 0.0 };
+            self.music_alpha += (target - self.music_alpha).clamp(-0.2 * steps, 0.2 * steps);
+        }
+        let np = if self.music_alpha > 0.01 { np } else { None };
+        let music_key = match &np {
+            Some(n) => (n.track_id << 24) ^ ((n.playing as u64) << 20) ^ (((n.position() * 3.0) as u64) << 4) ^ (self.music_alpha * 5.0) as u64,
+            None => 0,
+        };
         // With a video the widgets follow the video frames (no separate 10 Hz redraw on top of them).
-        let key = (if vkey != 0 { 0 } else { self.tick }, vkey, show_seconds, now.second);
+        let key = (if vkey != 0 { 0 } else { self.tick }, vkey, show_seconds, now.second, music_key);
         if self.last_key == Some(key) {
             return (self.pm.data(), false);
         }
         self.last_key = Some(key);
+        self.fonts.trim_fallback();
+        self.ensure_layout();
         let s = self.sensors.lock().unwrap().clone();
         let t0 = Instant::now();
+        let has_video = vframe.is_some();
         self.background(t, vframe);
+        if has_video {
+            let (sx, sw) = (self.scrim_x(), self.scrim_w());
+            blend_overlay(self.pm.data_mut(), &self.scrim_ov, sx, PANEL_Y, sw, PANEL_H);
+        }
         let t1 = Instant::now();
-        self.clock(&now, show_seconds);
+        self.clock(&now, show_seconds, np.is_some());
+        if let Some(n) = &np {
+            self.music_card(n);
+        }
         let t2 = Instant::now();
         self.panel(&s);
         let t3 = Instant::now();
@@ -196,6 +282,109 @@ impl Renderer {
             self.mask.apply(self.pm.data_mut());
         }
         (self.pm.data(), true)
+    }
+
+    fn scrim_x(&self) -> usize {
+        self.mask.left_inset() as usize + 36
+    }
+    fn scrim_w(&self) -> usize {
+        1000 - self.scrim_x()
+    }
+
+    /// Backgrounds that depend on the notch inset (left scrim, music card), rebuilt when the inset changes.
+    fn ensure_layout(&mut self) {
+        let inset = self.mask.left_inset() as usize;
+        if self.layout_inset == inset {
+            return;
+        }
+        self.layout_inset = inset;
+        let mut sc = Pixmap::new(self.scrim_w() as u32, PANEL_H as u32).unwrap();
+        round_rect(&mut sc, 0.0, 0.0, self.scrim_w() as f32, PANEL_H as f32, 28.0, [0, 0, 0, 96]);
+        self.scrim_ov = sc.data().to_vec();
+        let (cw, ch) = (self.card_w(), CARD_H);
+        let mut cd = Pixmap::new(cw as u32, ch as u32).unwrap();
+        round_rect(&mut cd, 0.0, 0.0, cw as f32, ch as f32, 24.0, [255, 255, 255, 26]);
+        self.card_ov = cd.data().to_vec();
+    }
+
+    fn card_x(&self) -> usize {
+        self.mask.left_inset() as usize + 60
+    }
+    fn card_w(&self) -> usize {
+        1000 - self.card_x()
+    }
+
+    /// The now-playing card under the clock: cover, title, artist, progress bar (grows sideways), times and play state.
+    fn music_card(&mut self, n: &NowPlaying) {
+        let (x, y, w) = (self.card_x(), CARD_Y, self.card_w());
+        let fade = (self.music_alpha.clamp(0.0, 1.0) * 255.0) as u32;
+        blend_overlay_fade(self.pm.data_mut(), &self.card_ov, x, y, w, CARD_H, fade);
+        let a = self.music_alpha.clamp(0.0, 1.0);
+        // cover (scaled once per track)
+        let side = CARD_H - 40;
+        if self.cover.as_ref().map(|c| c.0) != Some(n.track_id) {
+            self.cover = Some((n.track_id, scale_cover(n.cover.as_deref(), side)));
+        }
+        if let Some((_, px)) = &self.cover {
+            blend_overlay_fade(self.pm.data_mut(), px, x + 20, y + 20, side, side, fade);
+        }
+        let tx = (x + 20 + side + 26) as f32;
+        let tw = (w - (20 + side + 26) - 28) as f32;
+        let title = self.fit(&n.title, 38, true, tw);
+        self.text(&title, tx, (y + 66) as f32, 38, true, [255, 255, 255], a);
+        let artist = self.fit(&n.artist, 28, false, tw);
+        self.text(&artist, tx, (y + 108) as f32, 28, false, [190, 197, 214], a);
+        // progress
+        let (by, bh) = (y + 128, 10usize);
+        let frac = if n.duration_s > 0.0 { (n.position() / n.duration_s).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        round_rect(&mut self.pm, tx, by as f32, tw, bh as f32, 5.0, [255, 255, 255, (60.0 * a) as u8]);
+        if frac > 0.0 {
+            round_rect(&mut self.pm, tx, by as f32, (tw * frac).max(bh as f32), bh as f32, 5.0, [255, 255, 255, (255.0 * a) as u8]);
+        }
+        // play / pause icon and times
+        let base = (y + 176) as f32;
+        let (ix, iy) = (tx as usize, y + 156);
+        if n.playing {
+            for r in 0..20usize {
+                let half = if r < 10 { r } else { 19 - r };
+                let wdt = 2 + half * 16 / 10;
+                self.fill_rgb(ix, iy + r, wdt.min(18), 1, [220, 226, 240], a);
+            }
+        } else {
+            self.fill_rgb(ix, iy, 6, 20, [220, 226, 240], a);
+            self.fill_rgb(ix + 10, iy, 6, 20, [220, 226, 240], a);
+        }
+        let el = fmt_time(n.position());
+        self.text(&el, tx + 32.0, base, 24, false, [190, 197, 214], a);
+        if n.duration_s > 0.0 {
+            let tot = fmt_time(n.duration_s);
+            let ww = self.fonts.width(&tot, 24, false);
+            self.text(&tot, tx + tw - ww, base, 24, false, [190, 197, 214], a);
+        }
+    }
+
+    fn fill_rgb(&mut self, x: usize, y: usize, w: usize, h: usize, rgb: [u8; 3], a: f32) {
+        let d = self.pm.data_mut();
+        for yy in y..(y + h).min(LH) {
+            for xx in x..(x + w).min(LW) {
+                let i = (yy * LW + xx) * 4;
+                for k in 0..3 {
+                    d[i + k] = (d[i + k] as f32 + (rgb[k] as f32 - d[i + k] as f32) * a) as u8;
+                }
+            }
+        }
+    }
+
+    /// Shorten `s` with an ellipsis so it fits `max` px.
+    fn fit(&mut self, s: &str, px: u32, bold: bool, max: f32) -> String {
+        if self.fonts.width(s, px, bold) <= max {
+            return s.to_string();
+        }
+        let mut out: String = s.to_string();
+        while !out.is_empty() && self.fonts.width(&format!("{out}\u{2026}"), px, bold) > max {
+            out.pop();
+        }
+        format!("{}\u{2026}", out.trim_end())
     }
 
     fn background(&mut self, t: f32, frame: Option<Arc<Vec<u8>>>) {
@@ -233,7 +422,9 @@ impl Renderer {
         }
     }
 
-    fn clock(&mut self, n: &LocalTime, show_seconds: bool) {
+    fn clock(&mut self, n: &LocalTime, show_seconds: bool, with_music: bool) {
+        // With the music card the clock group moves up to make room (a one-time step, not an animation).
+        let (base, date_base) = if with_music { (350.0, 432.0) } else { (430.0, 520.0) };
         let hhmm = format!("{:02}:{:02}", n.hour, n.minute);
         let size = 300;
         let w = self.fonts.width(&hhmm, size, true);
@@ -242,15 +433,15 @@ impl Renderer {
         // The colon fades in and out instead of blinking hard.
         let frac = (self.tick % 10) as f32 / 10.0;
         let colon_alpha = 0.35 + 0.65 * (0.5 + 0.5 * (frac * std::f32::consts::TAU).cos());
-        self.text_with_colon(&hhmm, x, 430.0, size, colon_alpha);
+        self.text_with_colon(&hhmm, x, base, size, colon_alpha);
         let days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
         let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         let date = format!("{}, {} {}", days[(n.weekday % 7) as usize], n.day, months[((n.month.max(1) - 1) % 12) as usize]);
         let dw = self.fonts.width(&date, 52, false);
-        self.text(&date, 520.0 + self.mask.left_inset() / 2.0 - dw / 2.0, 520.0, 52, false, [215, 220, 232], 1.0);
+        self.text(&date, 520.0 + self.mask.left_inset() / 2.0 - dw / 2.0, date_base, 52, false, [215, 220, 232], 1.0);
         if show_seconds {
             let sec = format!("{:02}", n.second);
-            self.text(&sec, x + w + 10.0, 430.0, 96, true, [200, 210, 235], 0.9);
+            self.text(&sec, x + w + 10.0, base, 96, true, [200, 210, 235], 0.9);
         }
     }
 
@@ -379,4 +570,76 @@ fn hsv(h: f32, s: f32, v: f32) -> Color {
     };
     let m = v - c;
     Color::from_rgba(r + m, g + m, b + m, 1.0).unwrap_or(Color::BLACK)
+}
+
+/// Like blend_overlay with an extra fade (0..=255) applied to the premultiplied source.
+fn blend_overlay_fade(dst: &mut [u8], ov: &[u8], x0: usize, y0: usize, w: usize, h: usize, fade: u32) {
+    for row in 0..h {
+        if y0 + row >= LH {
+            break;
+        }
+        let drow = &mut dst[((y0 + row) * LW + x0) * 4..][..w * 4];
+        let srow = &ov[row * w * 4..][..w * 4];
+        for (dp, sp) in drow.chunks_exact_mut(4).zip(srow.chunks_exact(4)) {
+            let sa = sp[3] as u32 * fade / 255;
+            let inv = 255 - sa;
+            for k in 0..3 {
+                let s = sp[k] as u32 * fade / 255;
+                dp[k] = (s + dp[k] as u32 * inv / 255).min(255) as u8;
+            }
+        }
+    }
+}
+
+/// Scale a cover to a `side` x `side` square (centre crop, bilinear), rounded corners, premultiplied RGBA.
+/// No cover: a neutral tile with a note-like block.
+fn scale_cover(c: Option<&super::nowplaying::Cover>, side: usize) -> Vec<u8> {
+    let mut out = vec![0u8; side * side * 4];
+    let r = 16.0f32;
+    for y in 0..side {
+        for x in 0..side {
+            let i = (y * side + x) * 4;
+            // rounded-corner coverage
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let cx = fx.clamp(r, side as f32 - r);
+            let cy = fy.clamp(r, side as f32 - r);
+            let d = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
+            let cov = (r + 0.5 - d).clamp(0.0, 1.0);
+            if cov <= 0.0 {
+                continue;
+            }
+            let rgb: [f32; 3] = match c {
+                Some(c) if c.w > 0 && c.h > 0 => {
+                    let m = c.w.min(c.h) as f32;
+                    let (ox, oy) = ((c.w as f32 - m) / 2.0, (c.h as f32 - m) / 2.0);
+                    let (sx, sy) = (ox + fx / side as f32 * m - 0.5, oy + fy / side as f32 * m - 0.5);
+                    let (x0, y0) = (sx.floor().clamp(0.0, c.w as f32 - 1.0) as usize, sy.floor().clamp(0.0, c.h as f32 - 1.0) as usize);
+                    let (x1, y1) = ((x0 + 1).min(c.w - 1), (y0 + 1).min(c.h - 1));
+                    let (tx, ty) = ((sx - x0 as f32).clamp(0.0, 1.0), (sy - y0 as f32).clamp(0.0, 1.0));
+                    let px = |xx: usize, yy: usize, k: usize| c.rgba[(yy * c.w + xx) * 4 + k] as f32;
+                    let mut o = [0.0; 3];
+                    for k in 0..3 {
+                        let top = px(x0, y0, k) * (1.0 - tx) + px(x1, y0, k) * tx;
+                        let bot = px(x0, y1, k) * (1.0 - tx) + px(x1, y1, k) * tx;
+                        o[k] = top * (1.0 - ty) + bot * ty;
+                    }
+                    o
+                }
+                _ => {
+                    let note = (x > side * 2 / 5 && x < side * 3 / 5 && y > side / 4 && y < side * 3 / 4) || (x > side / 3 && x < side * 2 / 5 && y > side * 11 / 20 && y < side * 3 / 4);
+                    if note { [200.0, 205.0, 220.0] } else { [58.0, 62.0, 84.0] }
+                }
+            };
+            for k in 0..3 {
+                out[i + k] = (rgb[k] * cov) as u8;
+            }
+            out[i + 3] = (255.0 * cov) as u8;
+        }
+    }
+    out
+}
+
+fn fmt_time(s: f64) -> String {
+    let t = s.max(0.0) as u64;
+    if t >= 3600 { format!("{}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60) } else { format!("{}:{:02}", t / 60, t % 60) }
 }
