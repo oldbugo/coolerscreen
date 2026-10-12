@@ -1,7 +1,7 @@
 //! `cs2 live-test`: 3.0 spike for the screen's live (PC-streamed) mode, firmware > 2.8 protocol as read from the vendor app:
 //!   1. enter live: framed key 0x11, no payload (`55 AA 07 00 11 17 01`); repeated every 1.5 s as a keepalive, between frames
 //!   2. each frame: `u32LE jpegLen | JPEG | u16LE sum`, sum = (4 length bytes + all JPEG bytes) & 0xFFFF, no 55 AA wrapper
-//!   3. JPEG: landscape 1680x756 (2400x1080 x 0.7) baseline, quality 100 stepping down by 2 until <= 260 KB
+//!   3. JPEG: landscape 1680x756 (2400x1080 x 0.7) baseline, quality 100 stepping down by 2 until <= 200 KB (vendor profile)
 //!   4. end: `FF D9 FF D9` as its own transfer, then 0x14 [1,0] (play the loop clip)
 //! Opt-in extras that change stored device state or are not needed: --set-sleep-delay (0x15 [0,10]), --set-brightness (0x03 [0x5F]).
 //! Never sends 0x05/0x0C/0x23/0x01 or any file upload.
@@ -210,9 +210,9 @@ fn run(args: &[String]) -> Result<(), String> {
         _ => 30,
     };
     let quality: u8 = num(args, "--quality")?.unwrap_or(100);
-    let max_kb: usize = num(args, "--max-kb")?.unwrap_or(260);
+    let max_kb: usize = num(args, "--max-kb")?.unwrap_or(200);
     let scale: f64 = num(args, "--scale")?.unwrap_or(0.7);
-    let portrait = match arg_val(args, "--orient").unwrap_or("landscape") {
+    let portrait = match arg_val(args, "--orient").unwrap_or("portrait") {
         "landscape" => false,
         "portrait" => true,
         o => return Err(format!("--orient {o}: use landscape or portrait")),

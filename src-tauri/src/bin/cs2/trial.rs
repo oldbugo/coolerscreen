@@ -177,7 +177,8 @@ impl Rig {
     fn send(&mut self, b: &[u8]) -> R<()> {
         match &mut self.scr {
             Some(s) => s.recovery_raw(b).map_err(|e| e.to_string()),
-            None => Ok(()),
+            None if self.dry => Ok(()),
+            None => Err("screen not open".into()),
         }
     }
     fn sleep(&self, d: Duration) {
@@ -244,8 +245,37 @@ impl Rig {
     fn play_loop(&mut self) -> R<()> {
         self.send(&frame::frame(0x14, &[1, 0]))
     }
+    /// Restart (0x01), trial 6 only: the screen reboots and re-enumerates, so the handle is dropped.
+    fn restart(&mut self) -> R<()> {
+        if let Some(mut s) = self.scr.take() {
+            let r = s.recovery_restart_noreply().map_err(|e| e.to_string());
+            s.close();
+            return r;
+        }
+        Ok(())
+    }
+    /// Reopen after a restart (up to 45 s).
+    fn ensure_open(&mut self) -> R<()> {
+        if self.dry || self.scr.is_some() {
+            return Ok(());
+        }
+        let end = Instant::now() + Duration::from_secs(45);
+        loop {
+            match device::Screen::open_usb() {
+                Ok(s) => {
+                    self.scr = Some(s);
+                    return Ok(());
+                }
+                Err(e) if Instant::now() > end => return Err(format!("could not reopen the screen: {e}")),
+                Err(_) => std::thread::sleep(Duration::from_secs(1)),
+            }
+        }
+    }
     /// Restore: display on, then the loop clip. Always attempted, errors reported but not fatal.
     fn wake(&mut self) -> Option<String> {
+        if let Err(e) = self.ensure_open() {
+            return Some(e);
+        }
         let a = self.display_on().err();
         self.sleep(Duration::from_millis(200));
         let b = self.play_loop().err();
@@ -269,7 +299,7 @@ impl Rig {
 // ---------------------------------------------------------------- pictures
 
 const Q_START: u8 = 100;
-const MAX_BYTES: usize = 260_000;
+const MAX_BYTES: usize = 200_000; // vendor profile for this unit: maxSize 200 KB
 
 struct Built {
     wrapped: Vec<Vec<u8>>,
@@ -320,11 +350,13 @@ fn speed_pictures(fps: u32, pool: usize) -> Vec<Canvas> {
     (0..pool)
         .map(|i| {
             let mut c = Canvas::blank(0.7, [10, 40, 30]);
+            // tall bar sweeping left to right and a wide bar sweeping top to bottom (in the landscape picture), so tearing shows on either
+            let x = (2400 - 70) * i / pool.max(1);
+            let y = (1080 - 70) * i / pool.max(1);
+            c.drect(x, 0, 70, 1080, [255, 230, 0]);
+            c.drect(0, y, 2400, 70, [60, 160, 255]);
             c.text(300, 80, 24, &format!("{fps} FPS"));
             c.text(300, 380, 24, &format!("F{i:04}"));
-            c.drect(150, 760, 2100, 200, [30, 30, 30]);
-            let x = 150 + (2100 - 120) * i / pool.max(1);
-            c.drect(x, 760, 120, 200, [255, 230, 0]);
             c
         })
         .collect()
@@ -352,18 +384,19 @@ fn announce(inp: &Input, what: &str, look: &str) -> R<()> {
     inp.enter("Press Enter when you're looking at the screen.")
 }
 
+/// Trial 1 (portrait = the way the original app sends it) and trial 2 (landscape, only if 1 was wrong).
 fn orient_trial(cx: &mut Ctx, id: &str, portrait: bool) -> R<String> {
     let (title, what) = if portrait {
-        ("Orientation, sideways picture", "The screen will show a picture that is sent the other way round (a tall picture). It stays up for about 10 seconds.")
+        ("Picture direction, the standard way", "The screen will show a picture with the words THIS WAY UP and a yellow arrow. It is sent the way the original Lovingcool app sends pictures. It stays up for about 10 seconds.")
     } else {
-        ("Orientation, normal picture", "The screen will show a wide picture with the words THIS WAY UP and a yellow arrow. It stays up for about 10 seconds.")
+        ("Picture direction, the other way", "The screen will show the same picture sent the other way round (turned a quarter). Only needed if trial 1 did not look right. It stays up for about 10 seconds.")
     };
     announce(cx.inp, &format!("Trial {id}: {title}\n{what}"), "Is the writing the right way up and the right way round? Is the arrow pointing up? Does the picture reach all four edges? Can you read TOP, BOTTOM, LEFT and RIGHT near the edges, or are some hidden (for example by the notch)?")?;
     let b = build(vec![orientation_picture()], portrait)?;
     if cx.rig.dry {
-        dry_save(if portrait { "trial2-portrait.jpg" } else { "trial1-landscape.jpg" }, &b);
+        dry_save(if portrait { "trial1-portrait.jpg" } else { "trial2-landscape.jpg" }, &b);
     }
-    cx.log.put(id, "start", json!({ "portrait": portrait, "size": [b.dims.0, b.dims.1], "jpeg_kb": round(b.jpeg_kb), "quality": b.quality }));
+    cx.log.put(id, "start", json!({ "sent_as_portrait": portrait, "size": [b.dims.0, b.dims.1], "jpeg_kb": round(b.jpeg_kb), "quality": b.quality }));
     cx.rig.enter_live()?;
     println!("Showing the picture now...");
     let st = cx.rig.stream(&b.wrapped, 2.0, 10.0)?;
@@ -389,21 +422,23 @@ fn yn(v: Option<bool>) -> &'static str {
     }
 }
 
+const SPEEDS: [u32; 5] = [15, 20, 25, 30, 60];
+
 fn smooth_trial(cx: &mut Ctx, id: &str) -> R<String> {
     announce(
         cx.inp,
-        &format!("Trial {id}: Smoothness\nThe screen will show a counter and a yellow bar sweeping left to right, first at 10 pictures per second, then 30, then 60, about 8 seconds each. The speed is written on the screen."),
-        "Is the bar moving smoothly, a bit jerky, very jerky, or frozen? Remember how each speed looked, I will ask afterwards.",
+        &format!("Trial {id}: Smoothness\nThe screen will show a counter, a tall yellow bar moving sideways and a wide blue bar moving downwards. The speed goes 15, 20, 25, 30 and then 60 pictures per second, about 6 seconds each. The speed is written on the screen."),
+        "Do the bars move in a clean straight line (smooth), or do they tear (the bar looks broken into pieces that are not lined up, or jumps)? If it tears, which bar is worse? Remember how each speed looked, I will ask afterwards.",
     )?;
     cx.rig.enter_live()?;
     let mut results = Vec::new();
-    for fps in [10u32, 30, 60] {
-        let b = build(speed_pictures(fps, 30), false)?;
+    for fps in SPEEDS {
+        let b = build(speed_pictures(fps, 30), true)?;
         if cx.rig.dry {
             dry_save(&format!("trial3-{fps}fps.jpg"), &b);
         }
         println!("Now showing {fps} FPS...");
-        let st = cx.rig.stream(&b.wrapped, fps as f64, 8.0)?;
+        let st = cx.rig.stream(&b.wrapped, fps as f64, 6.0)?;
         println!("   (sent {:.1} pictures per second)", st.sent as f64 / st.secs.max(0.001));
         cx.log.put(id, "measured", st.json(fps as f64, b.jpeg_kb, b.quality));
         results.push((fps, st.sent as f64 / st.secs.max(0.001)));
@@ -415,9 +450,14 @@ fn smooth_trial(cx: &mut Ctx, id: &str) -> R<String> {
     println!("Finished. The screen is going back to normal.");
     let mut parts = Vec::new();
     for (fps, got) in results {
-        let a = cx.inp.choice(&format!("How did the {fps} FPS part look?"), &["Smooth", "Slightly jerky", "Very jerky", "Frozen / nothing moved"])?;
-        cx.log.put(id, "answer", json!({ "speed": fps, "achieved_send_fps": round(got), "look": a }));
-        parts.push(format!("{fps} fps (sent {got:.0}): {}", a.as_deref().unwrap_or("skipped")));
+        let a = cx.inp.choice(&format!("How did the {fps} FPS part look?"), &["Smooth", "Slight tearing", "Bad tearing", "Frozen / nothing moved"])?;
+        let worse = if matches!(a.as_deref(), Some("Slight tearing") | Some("Bad tearing")) {
+            cx.inp.choice("Which bar was worse?", &["The tall bar moving sideways", "The wide bar moving downwards", "Both the same"])?
+        } else {
+            None
+        };
+        cx.log.put(id, "answer", json!({ "speed": fps, "achieved_send_fps": round(got), "look": a, "worse_bar": worse }));
+        parts.push(format!("{fps} fps (sent {got:.0}): {}{}", a.as_deref().unwrap_or("skipped"), worse.map(|w| format!(" [{w}]")).unwrap_or_default()));
     }
     let note = cx.inp.note()?;
     cx.log.put(id, "answers", json!({ "note": note }));
@@ -426,48 +466,59 @@ fn smooth_trial(cx: &mut Ctx, id: &str) -> R<String> {
 
 #[derive(Clone, Copy)]
 enum End {
-    Plain,        // FF D9 FF D9, then loop clip
-    DisplayOn,    // FF D9 FF D9, display on, loop clip, display on again 5 s later
-    Zeros,        // FF D9 FF D9, 00 00 00 00, loop clip
+    Baseline,    // FF D9 FF D9, loop clip, display on
+    VendorTimer, // 0x15 [00 0A] before going live and again after FF D9 FF D9, then loop clip, display on
+    Restart,     // FF D9 FF D9, restart (0x01): the original app's own way out
+}
+
+/// The exact bytes the original app sent on every connect: 55 AA 09 00 15 00 0A 27 01.
+fn vendor_timer() -> Vec<u8> {
+    frame::frame(0x15, &[0x00, 0x0a])
 }
 
 fn black_trial(cx: &mut Ctx, id: &str, end: End) -> R<String> {
     let (title, how) = match end {
-        End::Plain => ("Black-screen timer, normal ending", "The moving counter stops and the screen is told to go back to the normal clip. Nothing else is sent afterwards."),
-        End::DisplayOn => ("Black-screen timer, with an extra wake-up", "Same, but the screen is also told to stay on, once straight away and once more 5 seconds later."),
-        End::Zeros => ("Black-screen timer, another ending", "Same as the normal ending, but a different closing signal is used first."),
+        End::Baseline => ("Does it go black? Plain ending", "When the counter stops, the screen is told to go back to the normal clip and to stay on. Nothing else is sent."),
+        End::VendorTimer => ("Does it go black? With the original app's timer setting", "This sends the same timer setting the original Lovingcool app sent every time it connected, once before the counter and once when it stops. Then the screen is told to go back to the normal clip and to stay on."),
+        End::Restart => ("Does it go black? Ending with a restart", "When the counter stops, the screen is restarted, which is how the original app always ended. The start-up clip will play first and then the normal loop (about 15 seconds)."),
     };
     announce(
         cx.inp,
         &format!("Trial {id}: {title}\nThe screen will show a moving counter for 10 seconds. {how}\nThen I will ask you to watch the screen for up to 2 minutes, to see whether it turns black by itself."),
         "After the counter stops: does the normal clip come back, and does the screen turn black later? Press Enter the moment it goes black. If it is still on after 2 minutes, type n and press Enter.",
     )?;
-    let b = build(speed_pictures(10, 30), false)?;
+    let b = build(speed_pictures(30, 30), true)?;
     if cx.rig.dry {
         dry_save(&format!("trial{id}.jpg"), &b);
     }
+    if matches!(end, End::VendorTimer) {
+        cx.rig.send(&vendor_timer())?;
+        cx.log.put(id, "sent_before_live", json!({ "what": "timer setting, key 0x15 [00 0A]" }));
+        cx.rig.sleep(Duration::from_millis(100));
+    }
     cx.rig.enter_live()?;
     println!("Showing the counter...");
-    let st = cx.rig.stream(&b.wrapped, 10.0, 10.0)?;
-    cx.log.put(id, "measured", st.json(10.0, b.jpeg_kb, b.quality));
+    let st = cx.rig.stream(&b.wrapped, 30.0, 10.0)?;
+    cx.log.put(id, "measured", st.json(30.0, b.jpeg_kb, b.quality));
     cx.rig.end_stream()?;
-    let mut later: Vec<(f64, Vec<u8>, &str)> = Vec::new();
     match end {
-        End::Plain => cx.rig.play_loop()?,
-        End::DisplayOn => {
+        End::Baseline => {
+            cx.rig.play_loop()?;
             cx.rig.display_on()?;
-            cx.rig.sleep(Duration::from_millis(200));
-            cx.rig.play_loop()?;
-            later.push((5.0, frame::frame(0x0e, &[1]), "display on again"));
         }
-        End::Zeros => {
-            cx.rig.sleep(Duration::from_millis(50));
-            cx.rig.send(&[0, 0, 0, 0])?;
-            cx.rig.sleep(Duration::from_millis(200));
+        End::VendorTimer => {
+            cx.rig.send(&vendor_timer())?;
+            cx.rig.sleep(Duration::from_millis(100));
             cx.rig.play_loop()?;
+            cx.rig.display_on()?;
         }
+        End::Restart => cx.rig.restart()?,
     }
-    cx.log.put(id, "end_sequence_sent", json!({ "variant": match end { End::Plain => "FFD9, 0x14[1,0]", End::DisplayOn => "FFD9, 0x0E[1], 0x14[1,0], +5s 0x0E[1]", End::Zeros => "FFD9, 00000000, 0x14[1,0]" } }));
+    cx.log.put(id, "end_sequence_sent", json!({ "variant": match end {
+        End::Baseline => "FFD9, 0x14[1,0], 0x0E[1]",
+        End::VendorTimer => "0x15[00 0A] before live; FFD9, 0x15[00 0A], 0x14[1,0], 0x0E[1]",
+        End::Restart => "FFD9, 0x01 restart",
+    }, "info_poll_note": "poll uses 0x06 (not the 0x11 keepalive); it may or may not affect the screen timer" }));
     println!("\nThe stream has ended. WATCH THE SCREEN NOW.\n   Press Enter the moment it goes black. If it is still on after 2 minutes, type n and press Enter.");
     cx.inp.flush();
     let t0 = Instant::now();
@@ -476,12 +527,7 @@ fn black_trial(cx: &mut Ctx, id: &str, end: End) -> R<String> {
     let mut cap = max;
     while t0.elapsed().as_secs_f64() < cap {
         let el = t0.elapsed().as_secs_f64();
-        for l in later.iter_mut().filter(|l| l.0 <= el && !l.2.is_empty()) {
-            let r = cx.rig.send(&l.1).err();
-            cx.log.put(id, "later_send", json!({ "what": l.2, "at_s": round(el), "error": r }));
-            l.2 = "";
-        }
-        if cx.poll && el >= next_poll {
+        if cx.poll && cx.rig.scr.is_some() && el >= next_poll {
             next_poll += 5.0;
             let (on, raw) = cx.rig.info_display_on();
             cx.log.put(id, "poll_display_on", json!({ "at_s": round(el), "display_on": on, "raw": raw }));
@@ -503,7 +549,10 @@ fn black_trial(cx: &mut Ctx, id: &str, end: End) -> R<String> {
     let wake_err = cx.rig.wake();
     cx.log.put(id, "wake", json!({ "error": wake_err }));
     println!("The screen is being woken up and set back to the normal clip.");
-    let seen = cx.inp.choice("What did you see in the first few seconds after the counter stopped?", &["The normal clip came back", "The last counter picture stayed frozen", "Black straight away", "Something else"])?;
+    let seen = cx.inp.choice(
+        "What did the screen show right after the stream ended?",
+        if matches!(end, End::Restart) { &["Start-up clip, then the normal loop", "Black", "The last counter picture stayed frozen", "Something else"] } else { &["The normal clip", "Black", "The last counter picture stayed frozen", "Something else"] },
+    )?;
     let note = cx.inp.note()?;
     cx.log.put(id, "answers", json!({ "seconds_to_black_user": user_black.map(round), "still_on_after_waiting": user_never, "seconds_to_black_tool": auto_black.map(round), "after_stream": seen, "note": note }));
     let res = match (user_black, user_never) {
@@ -511,17 +560,17 @@ fn black_trial(cx: &mut Ctx, id: &str, end: End) -> R<String> {
         (None, true) => "still on after waiting".to_string(),
         _ => "no answer".to_string(),
     };
-    Ok(format!("{title}: {res}; tool saw black at {}", auto_black.map(|a| format!("{a:.0} s")).unwrap_or("never / no info".into())))
+    Ok(format!("{title}: {res}; right after: {}; tool saw black at {}", seen.as_deref().unwrap_or("skipped"), auto_black.map(|a| format!("{a:.0} s")).unwrap_or("never / no info".into())))
 }
 
 fn list() {
     println!("\nTrials:");
-    println!("  1) Orientation: normal picture (THIS WAY UP and an arrow), about 20 seconds");
-    println!("  2) Orientation: sideways picture (only needed if 1 was not correct)");
-    println!("  3) Smoothness at 10, 30 and 60 pictures per second, about 1 minute");
-    println!("  4) Does the screen turn black afterwards? Normal ending, up to 2.5 minutes");
-    println!("  5) Same, with an extra stay-on signal, up to 2.5 minutes");
-    println!("  6) Same, with a different closing signal, up to 2.5 minutes");
+    println!("  1) Picture direction: the standard way (THIS WAY UP and an arrow), about 20 seconds");
+    println!("  2) Picture direction: the other way (only needed if 1 was not correct)");
+    println!("  3) Smoothness at 15, 20, 25, 30 and 60 pictures per second (looking for tearing), about 1 minute");
+    println!("  4) Does the screen turn black afterwards? Plain ending, up to 2.5 minutes");
+    println!("  5) Same, but sending the original app's timer setting first, up to 2.5 minutes");
+    println!("  6) Same, but ending with a restart like the original app (start-up clip plays), up to 2.5 minutes");
     println!("  a) All of them in order");
     println!("  q) Quit");
 }
@@ -577,14 +626,14 @@ pub fn trial(args: &[String]) -> i32 {
             log.put(&id, "begin", json!({}));
             let mut cx = Ctx { rig, inp: &inp, log: &mut log, poll };
             let r = match n {
-                1 => orient_trial(&mut cx, &id, false),
-                2 => orient_trial(&mut cx, &id, true),
+                1 => orient_trial(&mut cx, &id, true),
+                2 => orient_trial(&mut cx, &id, false),
                 3 => smooth_trial(&mut cx, &id),
-                4 => black_trial(&mut cx, &id, End::Plain),
-                5 => black_trial(&mut cx, &id, End::DisplayOn),
-                _ => black_trial(&mut cx, &id, End::Zeros),
+                4 => black_trial(&mut cx, &id, End::Baseline),
+                5 => black_trial(&mut cx, &id, End::VendorTimer),
+                _ => black_trial(&mut cx, &id, End::Restart),
             };
-            // Always restore, whatever happened (a second wake is harmless).
+            // Always restore, whatever happened (a second wake is harmless; reopens the screen after a restart).
             let _ = cx.rig.end_stream();
             let w = cx.rig.wake();
             cx.log.put(&id, "final_wake", json!({ "error": w }));
