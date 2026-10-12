@@ -70,7 +70,8 @@ const S = {
   showing: null, // null = the tuning (original), or a version id
   draft: null, est: { state: 'idle' }, adding: [],
   missingDismissed: false, outcomes: new Map(), dismissed: new Set(), loadedAt: Date.now(),
-  view: 'gallery', // 'gallery' (home) | 'detail'
+  view: null, // 'mine' (My clips) | 'browse' (Browse) | 'detail' (one clip)
+  home: 'mine', // the home view the open clip was reached from ('mine' | 'browse')
   manualLoop: false, // "Edit loop manually…" panel open
 };
 const DEFAULT_FRAME = { zoom: 1, x: 0.5, y: 0.5 };
@@ -183,7 +184,7 @@ async function loadApp() {
 async function loadOriginals() {
   const r = await call('originals_list');
   S.originals = r.originals; S.longMissing = r.longMissing; S.rev = r.rev;
-  if (S.sel && !S.originals.find(o => o.id === S.sel)) { S.sel = null; S.detail = null; if (S.view === 'detail') setView('gallery'); }
+  if (S.sel && !S.originals.find(o => o.id === S.sel)) { S.sel = null; S.detail = null; if (S.view === 'detail') setView(S.home); }
   renderLibrary();
   renderBanners();
   renderGallery();
@@ -303,33 +304,69 @@ window.addEventListener('drop', e => {
   importFiles([...(e.dataTransfer?.files || [])]);
 });
 
-// ---------- Browse (home): My clips + the sources ticked here (only sources enabled in Settings > Sources appear) ----------
+// ---------- home views: My clips (local clips) | Browse (the sources ticked there; only sources enabled in Settings > Sources) ----------
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable: the choice just isn't remembered */ } }
+const HOME_KEY = 'cs.home';
+const NAV = { mine: 'navMine', browse: 'navBrowse' };
 function setView(v) {
+  const prev = S.view;
   S.view = v;
-  if (v === 'gallery') $('homeBtn').setAttribute('aria-current', 'page'); else $('homeBtn').removeAttribute('aria-current');
-  $('galleryView').hidden = v !== 'gallery';
+  if (v !== 'detail') S.home = v;
+  for (const [name, id] of Object.entries(NAV)) {
+    const b = $(id);
+    if (v === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    b.classList.toggle('parent', v === 'detail' && S.home === name); // the view the open clip came from
+  }
+  $('mineView').hidden = v !== 'mine';
+  $('browseView').hidden = v !== 'browse';
   document.querySelector('.panes').hidden = v !== 'detail';
   if (v !== 'detail') stopPreviewLoop();
-  if (v === 'gallery') renderGallery();
+  // Entering a home view is when its order is (re)computed; while you stay there, background updates never reorder cards.
+  if (v === 'mine' && prev !== 'mine') freezeMine();
+  if (v === 'browse' && prev !== 'browse') freezeBrowse();
+  if (v !== 'detail') renderGallery();
 }
-$('homeBtn').onclick = () => showGallery();
-// Back to Browse from anywhere in a clip: Esc, Backspace or Alt+Left (never while typing, or over a dialog / the drawer).
+function goHome(v) { // the user picked a home view in the top bar
+  S.userNavigated = true;
+  lsSet(HOME_KEY, v);
+  if (S.view !== v) setView(v);
+}
+$('navMine').onclick = () => goHome('mine');
+$('navBrowse').onclick = () => goHome('browse');
+// Back from anywhere in a clip to the view it was opened from: Esc, Backspace or Alt+Left (never while typing, or over a
+// dialog / the drawer). On a home view, Ctrl+F or / focuses its filter field.
 window.addEventListener('keydown', e => {
-  if (e.defaultPrevented || S.view !== 'detail') return;
+  if (e.defaultPrevented) return;
   if (document.querySelector('.backdrop') || !$('drawerBack').hidden) return;
   const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  if (S.view === 'mine' || S.view === 'browse') {
+    if ((e.ctrlKey && !e.altKey && (e.key === 'f' || e.key === 'F')) || (!typing && e.key === '/')) {
+      e.preventDefault();
+      const q = (S.view === 'mine' ? mineUI : browseUI).q;
+      if (!q.closest('[hidden]')) { q.focus(); q.select(); }
+    }
+    return;
+  }
+  if (S.view !== 'detail') return;
   const back = (e.key === 'ArrowLeft' && e.altKey) || (!typing && !e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'Escape' || e.key === 'Backspace'));
   if (!back) return;
   if (!typing && t && t.closest && t.closest('.menu, .versions-pop')) return; // those handle Esc themselves
   e.preventDefault();
   showGallery();
 });
+// Back to the home view the clip was opened from, focusing the card you came from.
 function showGallery() {
-  setView('gallery');
-  const card = S.sel && document.querySelector(`.g-card[data-id="${S.sel}"]`);
-  const f = card || $('galleryView').querySelector('.g-card');
+  setView(S.home);
+  let f = null;
+  if (S.home === 'mine') f = (S.sel && mineUI.box.querySelector(`.g-card[data-id="${CSS.escape(S.sel)}"]`)) || mineUI.box.querySelector('.g-card');
+  else {
+    const card = BV.lastKey && browseUI.box.querySelector(`.s-card[data-key="${CSS.escape(BV.lastKey)}"]`);
+    f = (card && card.querySelector('button')) || browseUI.box.querySelector('.g-grid button');
+  }
   if (f) f.focus();
 }
+const backLabel = () => (S.home === 'browse' ? '‹ Browse' : '‹ My clips');
 
 const B = { sources: [], ticked: ['mine'], desktopApp: false, data: new Map(), jobs: new Map(), loaded: false };
 const enabledSources = () => B.sources.filter(s => s.enabled && s.kind !== 'action');
@@ -385,8 +422,8 @@ function loadMoreSources() {
     if (B.ticked.includes(s.id) && d && d.hasMore && !d.loading && !d.error) loadSourcePage(s.id);
   }
 }
-$('galleryView').addEventListener('scroll', () => {
-  const b = $('galleryView');
+$('browseView').addEventListener('scroll', () => {
+  const b = $('browseView');
   if (b.scrollTop + b.clientHeight > b.scrollHeight - 500) loadMoreSources();
 }, { passive: true });
 
@@ -411,6 +448,7 @@ async function addFromSource(src, item, { record = false } = {}) {
     const r = await pollJob(jobId, j => { st.progress = j.progress || 0; st.status = j.status === 'waiting' ? plainWait(j.message) : j.message || 'Working'; updateSourceCard(key); });
     B.jobs.delete(key);
     item.inGallery = r.originalId;
+    BV.stick.add(key); // stays visible under "Not added" (and in place) until the view is re-entered
     toast(`"${item.title}" is in your gallery.`);
     await loadOriginals();
   } catch (e) { st.error = e.message; }
@@ -442,7 +480,7 @@ function sourceAction(src, item) {
     return el('div', { class: 'th-action' }, el('div', { class: 'progress th-progress', role: 'progressbar', 'aria-label': `Adding ${item.title}`, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, el('div', { style: `width:${pct}%` })),
       el('span', { class: 'small muted num one-line th-pct', text: `${job.status} ${pct}%` }));
   }
-  if (item.inGallery) return el('div', { class: 'th-action' }, el('span', { class: 'chip ok', text: 'In your gallery' }), el('button', { class: 'btn ghost', text: 'Open', onclick: () => select(item.inGallery) }));
+  if (item.inGallery) return el('div', { class: 'th-action' }, el('span', { class: 'chip ok', text: 'In your gallery' }), el('button', { class: 'btn ghost', text: 'Open', 'aria-label': `Open ${item.title}`, onclick: () => { BV.lastKey = key; select(item.inGallery); } }));
   if (item.action === 'none') return el('div', { class: 'th-action' }, el('span', { class: 'chip', text: 'Not supported', title: item.note || '' }), el('span', { class: 'small muted one-line', text: item.note || '' }));
   const rec = item.action === 'record';
   const canRec = !rec || B.desktopApp;
@@ -461,21 +499,25 @@ function updateSourceCard(key) {
   if (src && item) card.querySelector('.th-action').replaceWith(sourceAction(src, item));
 }
 
-// One grid per section ("My clips" and every ticked source). The grids and their cards are kept between renders and
-// reconciled by key, so a card whose state changes (Not added -> Downloading -> In your gallery) is replaced in its own
-// <li> and every other card stays exactly where it is: nothing is re-sorted or rebuilt wholesale.
-const GRID = new Map(); // section id -> { wrap, title, ul, cache: Map(key -> { li, sig }) }
+// One grid per section (My clips has one; Browse has one per ticked source). The grids and their cards are kept between
+// renders and reconciled by key, so a card whose state changes (Not added -> Downloading -> In your gallery) is replaced
+// in its own <li> and every other card stays exactly where it is: nothing is re-sorted or rebuilt wholesale. The order of
+// the cards is decided when you enter a view or change its sort (see freezeMine / freezeBrowse), never by a background
+// update; later arrivals are only inserted or appended.
+const GRID = new Map(); // section id ('mine' or a source id) -> { wrap, title, note, ul, cache: Map(key -> { li, sig }) }
 function gridSection(id) {
   let g = GRID.get(id);
   if (!g) {
     const title = el('h2', { class: 'g-sec' });
+    const note = el('div', { class: 'g-none small muted', hidden: true });
     const ul = el('ul', { class: 'g-grid', 'aria-label': 'Clips' });
-    g = { wrap: el('section', { class: 'g-section' }, title, ul), title, ul, cache: new Map() };
+    g = { wrap: el('section', { class: 'g-section' }, title, note, ul), title, note, ul, cache: new Map() };
     GRID.set(id, g);
   }
   return g;
 }
-function reconcile(g, entries) {
+// `retain`: keys that are only filtered out for now; their cards stay cached so clearing the filter doesn't rebuild them.
+function reconcile(g, entries, retain = null) {
   const keep = new Set();
   let cur = g.ul.firstChild;
   for (const e of entries) {
@@ -486,81 +528,251 @@ function reconcile(g, entries) {
     if (c.li === cur) cur = cur.nextSibling; else g.ul.insertBefore(c.li, cur);
   }
   while (cur) { const n = cur.nextSibling; cur.remove(); cur = n; }
-  for (const k of [...g.cache.keys()]) if (!keep.has(k)) g.cache.delete(k);
+  for (const k of [...g.cache.keys()]) if (!keep.has(k) && !(retain && retain.has(k))) g.cache.delete(k);
+}
+// Keeps the first visible card where it is even if cards above it were added or removed while `fn` re-renders `box`.
+function keepScroll(box, fn) {
+  const scroll = box.scrollTop;
+  const boxTop = box.getBoundingClientRect().top;
+  const idOf = c => c.dataset.key || c.dataset.id;
+  const anchorEl = scroll > 0 && [...box.querySelectorAll('.g-card')].find(c => c.getBoundingClientRect().bottom > boxTop + 4 && idOf(c));
+  const anchor = anchorEl ? { key: idOf(anchorEl), top: anchorEl.getBoundingClientRect().top } : null;
+  fn();
+  box.scrollTop = scroll;
+  if (anchor) { const a2 = [...box.querySelectorAll('.g-card')].find(c => idOf(c) === anchor.key); if (a2) box.scrollTop += a2.getBoundingClientRect().top - anchor.top; }
 }
 const addingIds = new WeakMap();
 let addingSeq = 0;
+const matches = (text, q) => !q || String(text || '').toLowerCase().includes(q);
+const byName = (a, b) => String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
 
 function renderGallery() {
-  const box = $('galleryView');
-  if (box.hidden) return;
-  const scroll = box.scrollTop;
-  // Scroll anchor: keep the first visible card where it is even if cards above it were added or removed.
-  const boxTop = box.getBoundingClientRect().top;
-  const anchorEl = scroll > 0 && [...box.querySelectorAll(".g-card")].find(c => c.getBoundingClientRect().bottom > boxTop + 4 && (c.dataset.key || c.dataset.id));
-  const anchor = anchorEl ? { key: anchorEl.dataset.key || anchorEl.dataset.id, top: anchorEl.getBoundingClientRect().top } : null;
-  box.textContent = '';
-  const mine = B.ticked.includes('mine');
-  const link = B.sources.find(s => s.id === 'link' && s.enabled);
-  box.append(el('div', { class: 'g-head' }, el('h1', { class: 'g-title', text: 'Browse' }), el('span', { class: 'grow' }),
-    link ? el('button', { class: 'btn secondary', text: 'Add from link…', onclick: addFromLink }) : null,
-    el('button', { class: 'btn ghost', text: 'Open Gallery folder', onclick: () => $('openFolder').click() })));
-  // source chips: My clips always; others only when enabled in Settings
-  const chip = (id, label, count) => el('label', { class: 'src-chip' + (B.ticked.includes(id) ? ' on' : '') },
-    el('input', { type: 'checkbox', checked: B.ticked.includes(id), onchange: e => setTicked(id, e.target.checked) }), label,
-    count != null ? el('span', { class: 'muted num', text: ` ${count}` }) : null);
-  const chips = el('div', { class: 'src-chips', role: 'group', 'aria-label': 'Show clips from' }, chip('mine', 'My clips', S.originals.length));
-  for (const s of enabledSources()) { const d = B.data.get(s.id); chips.append(chip(s.id, s.name, d && d.total != null ? d.total : null)); }
-  chips.append(el('button', { class: 'btn ghost small-btn', text: 'Sources…', title: 'Settings > Sources', onclick: () => openDrawer('setSources') }));
-  box.append(chips);
+  if (S.view === 'mine') renderMine();
+  else if (S.view === 'browse') renderBrowse();
+}
 
-  const shown = [];
-  if (mine) {
-    if (!S.originals.length && !S.adding.length) box.append(el('p', { class: 'muted g-empty', text: 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). You\'ll pick the loop and preview it before anything is sent.' }));
-    const entries = [{ key: 'add-tile', sig: 'x', make: () => el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
+// ----- My clips -----
+const MINE_SORTS = [['added', 'Recently added'], ['name', 'Name (A–Z)'], ['longest', 'Longest first'], ['shortest', 'Shortest first'], ['onscreen', 'On screen first']];
+const M = { q: '', sort: MINE_SORTS.some(([v]) => v === lsGet('cs.mineSort')) ? lsGet('cs.mineSort') : 'added', order: [] };
+function mineCmp(sort) {
+  const name = (a, b) => byName(a.name, b.name);
+  const added = (a, b) => String(b.created || '').localeCompare(String(a.created || '')) || name(a, b);
+  const dur = o => (o.isImage || !Number.isFinite(o.duration) ? null : o.duration);
+  const byDur = sign => (a, b) => {
+    const x = dur(a), y = dur(b);
+    if (x == null || y == null) return (x == null) - (y == null) || name(a, b); // pictures (no length) last
+    return sign * (x - y) || name(a, b);
+  };
+  if (sort === 'name') return name;
+  if (sort === 'longest') return byDur(-1);
+  if (sort === 'shortest') return byDur(1);
+  if (sort === 'onscreen') return (a, b) => (!!b.onScreen - !!a.onScreen) || ((b.versionCount > 0) - (a.versionCount > 0)) || added(a, b);
+  return added;
+}
+function freezeMine() { M.order = [...S.originals].sort(mineCmp(M.sort)).map(o => o.id); }
+// The clips in the frozen order; a clip that arrived since is inserted where the sort puts it, without moving the others.
+function mineOrdered() {
+  const byId = new Map(S.originals.map(o => [o.id, o]));
+  M.order = M.order.filter(id => byId.has(id));
+  const placed = new Set(M.order);
+  if (S.originals.some(o => !placed.has(o.id))) {
+    const sorted = [...S.originals].sort(mineCmp(M.sort)).map(o => o.id);
+    sorted.forEach((id, i) => {
+      if (placed.has(id)) return;
+      let at = M.order.length;
+      for (let j = i + 1; j < sorted.length; j++) if (placed.has(sorted[j])) { at = M.order.indexOf(sorted[j]); break; }
+      M.order.splice(at, 0, id);
+      placed.add(id);
+    });
+  }
+  return M.order.map(id => byId.get(id));
+}
+const mineUI = (() => {
+  const box = $('mineView');
+  const count = el('span', { class: 'muted num g-count' });
+  const linkBtn = el('button', { class: 'btn secondary', text: 'Add from link…', onclick: addFromLink, hidden: true });
+  const head = el('div', { class: 'g-head' }, el('h1', { class: 'g-title', id: 'mineTitle', text: 'My clips' }), count, el('span', { class: 'grow' }),
+    el('div', { class: 'g-actions' },
+      el('button', { class: 'btn secondary', text: 'Add file…', onclick: () => $('fileInput').click() }), linkBtn,
+      el('button', { class: 'btn ghost', text: 'Open Gallery folder', onclick: () => $('openFolder').click() })));
+  const q = el('input', { type: 'search', id: 'mineQ', class: 'g-filter', placeholder: 'Filter by name', autocomplete: 'off' });
+  q.spellcheck = false;
+  q.addEventListener('input', () => { M.q = q.value; renderGallery(); });
+  const sort = el('select', { id: 'mineSort' }, MINE_SORTS.map(([value, text]) => el('option', { value, text })));
+  sort.value = M.sort;
+  sort.onchange = () => { M.sort = sort.value; lsSet('cs.mineSort', M.sort); freezeMine(); renderGallery(); };
+  const tools = el('div', { class: 'g-tools', role: 'search', 'aria-label': 'Filter and sort my clips' },
+    el('label', { class: 'g-tool g-tool-q' }, el('span', { class: 'sr-only', text: 'Filter my clips by name' }), q),
+    el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Sort' }), sort));
+  const body = el('div');
+  box.append(head, tools, body);
+  return { box, count, linkBtn, q, tools, body };
+})();
+function renderMine() {
+  const u = mineUI;
+  if (u.box.hidden) return;
+  keepScroll(u.box, () => {
+    u.body.textContent = '';
+    u.linkBtn.hidden = !B.sources.some(s => s.id === 'link' && s.enabled);
+    const all = mineOrdered();
+    const q = M.q.trim().toLowerCase();
+    const list = q ? all.filter(o => matches(o.name, q) || matches(o.fileName, q)) : all;
+    u.count.textContent = !all.length ? '' : q ? `${list.length} of ${all.length}` : `${all.length} clip${all.length > 1 ? 's' : ''}`;
+    u.tools.hidden = all.length < 2 && !q; // nothing to sort or filter yet
+    if (!all.length && !S.adding.length) u.body.append(el('p', { class: 'muted g-empty' }, 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). You\'ll pick the loop and preview it before anything is sent. ',
+      'Or ', el('button', { class: 'btn ghost inline-btn', text: 'browse your sources', onclick: () => goHome('browse') }), '.'));
+    const entries = [];
+    if (!q) entries.push({ key: 'add-tile', sig: 'x', make: () => el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
       el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
-      el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' })) }];
+      el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' })) });
     for (const a of S.adding) {
       if (!addingIds.has(a)) addingIds.set(a, ++addingSeq);
       entries.push({ key: 'adding:' + addingIds.get(a), sig: a.name, make: () => el('div', { class: 'g-card adding', 'aria-busy': 'true' }, el('div', { class: 'g-thumb skeleton' }),
         el('div', { class: 'g-name', text: a.name }), el('div', { class: 'g-chips' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'small muted', text: 'Adding…' }))) });
     }
-    for (const o of S.originals) entries.push({ key: 'o:' + o.id, sig: JSON.stringify(o), make: () => myClipCard(o) });
+    for (const o of list) entries.push({ key: 'o:' + o.id, sig: JSON.stringify(o), make: () => myClipCard(o) });
     const g = gridSection('mine');
-    reconcile(g, entries);
-    shown.push({ id: 'mine', name: 'My clips', g });
-  }
-  const notes = [];
-  for (const s of enabledSources()) {
-    if (!B.ticked.includes(s.id)) continue;
-    const d = B.data.get(s.id);
-    if (!d) continue;
-    const entries = d.items.map(it => {
-      const job = B.jobs.get(`${s.id}/${it.id}`);
-      return { key: `${s.id}/${it.id}`, sig: JSON.stringify([it.title, it.thumb, it.badge, it.inGallery, it.action, it.note, job ? (job.error ? 'e:' + job.error : 'run') : '']),
-        make: () => {
-          const thumb = el('div', { class: 'g-thumb' }, it.thumb ? el('img', { src: it.thumb, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null,
-            el('span', { class: 'src-badge', text: it.badge ? `${s.name} · ${it.badge}` : s.name }));
-          return el('div', { class: 'g-card s-card', 'data-key': `${s.id}/${it.id}` }, thumb,
-            el('div', { class: 'g-name', text: it.title, title: it.title }), sourceAction(s, it));
-        } };
-    });
-    if (d.loading) for (let i = 0; i < 3; i++) entries.push({ key: `skel:${i}`, sig: 's', make: () => el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' })) });
-    const g = gridSection(s.id);
-    reconcile(g, entries);
-    shown.push({ id: s.id, name: s.name, g });
-    if (d.error) notes.push(el('div', { class: 'notice danger' }, `${s.name}: ${d.error} `, el('button', { class: 'btn secondary', text: 'Try again', onclick: () => { d.error = null; loadSourcePage(s.id, !d.items.length); } })));
-    if (s.id === 'lovingcool' || s.id === 'otherbrands') notes.push(el('p', { class: 'muted small', text: `${s.name}: themes from the vendor's online library; they remain theirs.` }));
-  }
-  for (const k of [...GRID.keys()]) if (!shown.some(x => x.id === k)) GRID.delete(k);
-  for (const x of shown) {
-    x.g.title.textContent = x.name;
-    x.g.title.hidden = shown.length < 2; // headings only when several sections are shown
-    box.append(x.g.wrap);
-  }
-  box.append(...notes);
-  box.scrollTop = scroll;
-  if (anchor) { const a2 = [...box.querySelectorAll(".g-card")].find(c => (c.dataset.key || c.dataset.id) === anchor.key); if (a2) box.scrollTop += a2.getBoundingClientRect().top - anchor.top; }
+    g.title.hidden = true;
+    g.note.hidden = !(q && !list.length);
+    g.note.textContent = '';
+    if (q && !list.length) g.note.append(`No clips match "${M.q.trim()}". `, el('button', { class: 'btn ghost inline-btn', text: 'Clear filter', onclick: () => { u.q.value = ''; M.q = ''; renderGallery(); u.q.focus(); } }));
+    reconcile(g, entries, new Set(all.map(o => 'o:' + o.id)));
+    u.body.append(g.wrap);
+  });
+}
+
+// ----- Browse -----
+// Within each source, clips already in your gallery come first. That split (and the Name sort) is applied when you
+// enter Browse, change Show/Sort or press Refresh; a clip you add while you are here keeps its place.
+const BROWSE_SHOW = [['all', 'All'], ['in', 'In my gallery'], ['out', 'Not added']];
+const BROWSE_SORTS = [['default', 'Source order'], ['name', 'Name (A–Z)']];
+const pick = (list, v, dflt) => (list.some(([x]) => x === v) ? v : dflt);
+const BV = { q: '', show: pick(BROWSE_SHOW, lsGet('cs.browseShow'), 'all'), sort: pick(BROWSE_SORTS, lsGet('cs.browseSort'), 'default'),
+  frozen: new Map(), stick: new Set(), lastKey: null, refreshing: false };
+function arrangeBrowse(items) {
+  const list = [...items];
+  if (BV.sort === 'name') list.sort((a, b) => byName(a.title, b.title));
+  return [...list.filter(i => i.inGallery), ...list.filter(i => !i.inGallery)];
+}
+function freezeBrowse() {
+  BV.stick.clear();
+  BV.frozen.clear();
+  for (const [sid, d] of B.data) if (d.items.length) BV.frozen.set(sid, arrangeBrowse(d.items).map(i => i.id));
+}
+// A source's items in the frozen order; items loaded since (next pages, refresh) are appended, arranged among themselves.
+function browseOrdered(sid, d) {
+  let fo = BV.frozen.get(sid);
+  if (!fo) { fo = []; BV.frozen.set(sid, fo); }
+  const placed = new Set(fo);
+  const fresh = d.items.filter(i => !placed.has(i.id));
+  if (fresh.length) fo.push(...arrangeBrowse(fresh).map(i => i.id));
+  const byId = new Map(d.items.map(i => [i.id, i]));
+  return fo.filter(id => byId.has(id)).map(id => byId.get(id));
+}
+async function refreshBrowse() {
+  if (BV.refreshing) return;
+  BV.refreshing = true; renderGallery();
+  const ids = enabledSources().filter(s => B.ticked.includes(s.id)).map(s => s.id);
+  await Promise.all(ids.map(id => loadSourcePage(id, true)));
+  BV.refreshing = false;
+  if (S.view === 'browse') freezeBrowse();
+  renderGallery();
+}
+const browseUI = (() => {
+  const box = $('browseView');
+  const linkBtn = el('button', { class: 'btn secondary', text: 'Add from link…', onclick: addFromLink, hidden: true });
+  const refresh = el('button', { class: 'btn ghost', text: 'Refresh', title: 'Check the sources for new clips', onclick: refreshBrowse });
+  const head = el('div', { class: 'g-head' }, el('h1', { class: 'g-title', id: 'browseTitle', text: 'Browse' }), el('span', { class: 'grow' }),
+    el('div', { class: 'g-actions' }, linkBtn, refresh));
+  const chips = el('div', { class: 'src-chips', role: 'group', 'aria-label': 'Show clips from' });
+  const q = el('input', { type: 'search', id: 'browseQ', class: 'g-filter', placeholder: 'Filter by title', autocomplete: 'off' });
+  q.spellcheck = false;
+  q.addEventListener('input', () => { BV.q = q.value; renderGallery(); });
+  const show = el('select', { id: 'browseShow' }, BROWSE_SHOW.map(([value, text]) => el('option', { value, text })));
+  show.value = BV.show;
+  show.onchange = () => { BV.show = show.value; lsSet('cs.browseShow', BV.show); freezeBrowse(); renderGallery(); };
+  const sort = el('select', { id: 'browseSort' }, BROWSE_SORTS.map(([value, text]) => el('option', { value, text })));
+  sort.value = BV.sort;
+  sort.onchange = () => { BV.sort = sort.value; lsSet('cs.browseSort', BV.sort); freezeBrowse(); renderGallery(); };
+  const tools = el('div', { class: 'g-tools', role: 'search', 'aria-label': 'Filter and sort Browse' },
+    el('label', { class: 'g-tool g-tool-q' }, el('span', { class: 'sr-only', text: 'Filter Browse by title' }), q),
+    el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Show' }), show),
+    el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Sort' }), sort));
+  const body = el('div');
+  box.append(head, chips, tools, body);
+  return { box, linkBtn, refresh, chips, q, tools, body };
+})();
+function renderBrowse() {
+  const u = browseUI;
+  if (u.box.hidden) return;
+  keepScroll(u.box, () => {
+    u.linkBtn.hidden = !B.sources.some(s => s.id === 'link' && s.enabled);
+    u.refresh.disabled = BV.refreshing;
+    u.refresh.textContent = BV.refreshing ? 'Refreshing…' : 'Refresh';
+    // source chips (only sources enabled in Settings); a chip that had focus keeps it across the rebuild
+    const focused = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.src;
+    u.chips.textContent = '';
+    const srcs = enabledSources();
+    for (const s of srcs) {
+      const d = B.data.get(s.id), on = B.ticked.includes(s.id);
+      u.chips.append(el('label', { class: 'src-chip' + (on ? ' on' : '') },
+        el('input', { type: 'checkbox', checked: on, 'data-src': s.id, onchange: e => setTicked(s.id, e.target.checked) }), s.name,
+        d && d.total != null ? el('span', { class: 'muted num', text: ` ${d.total}` }) : null));
+    }
+    u.chips.append(el('button', { class: 'btn ghost small-btn', text: srcs.length ? 'Sources…' : 'Choose sources…', title: 'Settings > Sources', onclick: () => openDrawer('setSources') }));
+    if (focused) { const f = u.chips.querySelector(`input[data-src="${CSS.escape(focused)}"]`); if (f) f.focus(); }
+
+    u.body.textContent = '';
+    const ticked = srcs.filter(s => B.ticked.includes(s.id));
+    u.tools.hidden = !ticked.length;
+    if (!B.loaded) return;
+    if (!srcs.length) {
+      u.body.append(el('p', { class: 'muted g-empty' }, 'Browse shows clips from sources such as Wallpaper Engine, Lively or the LOVINGCOOL theme library. ',
+        el('button', { class: 'btn ghost inline-btn', text: 'Turn on sources…', onclick: () => openDrawer('setSources') })));
+      return;
+    }
+    if (!ticked.length) { u.body.append(el('p', { class: 'muted g-empty', text: 'Tick a source above to see its clips.' })); return; }
+    const q = BV.q.trim().toLowerCase();
+    const filtering = !!q || BV.show !== 'all';
+    const shown = [], notes = [];
+    for (const s of ticked) {
+      const d = B.data.get(s.id);
+      if (!d) continue;
+      const all = browseOrdered(s.id, d);
+      const list = all.filter(it => matches(it.title, q) && (BV.show === 'all' || (BV.show === 'in'
+        ? !!it.inGallery : !it.inGallery || BV.stick.has(`${s.id}/${it.id}`))));
+      const entries = list.map(it => {
+        const job = B.jobs.get(`${s.id}/${it.id}`);
+        return { key: `${s.id}/${it.id}`, sig: JSON.stringify([it.title, it.thumb, it.badge, it.inGallery, it.action, it.note, job ? (job.error ? 'e:' + job.error : 'run') : '']),
+          make: () => {
+            const thumb = el('div', { class: 'g-thumb' }, it.thumb ? el('img', { src: it.thumb, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null,
+              el('span', { class: 'src-badge', text: it.badge ? `${s.name} · ${it.badge}` : s.name }));
+            return el('div', { class: 'g-card s-card', 'data-key': `${s.id}/${it.id}` }, thumb,
+              el('div', { class: 'g-name', text: it.title, title: it.title }), sourceAction(s, it));
+          } };
+      });
+      if (d.loading) for (let i = 0; i < 3; i++) entries.push({ key: `skel:${i}`, sig: 's', make: () => el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' })) });
+      const g = gridSection(s.id);
+      reconcile(g, entries, new Set(all.map(it => `${s.id}/${it.id}`)));
+      // filtered: say when nothing matches, and offer to look further when the source has more pages
+      g.note.textContent = '';
+      if (filtering && !d.loading && d.items.length) {
+        if (!list.length) g.note.append(d.hasMore ? `Nothing matches among the ${d.items.length} loaded so far. ` : 'Nothing here matches. ');
+        if (d.hasMore && !d.error) g.note.append(el('button', { class: 'btn ghost inline-btn', text: 'Load more', onclick: () => loadSourcePage(s.id) }));
+      }
+      g.note.hidden = !g.note.childNodes.length;
+      shown.push({ id: s.id, name: s.name, g });
+      if (d.error) notes.push(el('div', { class: 'notice danger' }, `${s.name}: ${d.error} `, el('button', { class: 'btn secondary', text: 'Try again', onclick: () => { d.error = null; loadSourcePage(s.id, !d.items.length); } })));
+      if (s.id === 'lovingcool' || s.id === 'otherbrands') notes.push(el('p', { class: 'muted small', text: `${s.name}: themes from the vendor's online library; they remain theirs.` }));
+    }
+    for (const k of [...GRID.keys()]) if (k !== 'mine' && !shown.some(x => x.id === k)) GRID.delete(k);
+    for (const x of shown) {
+      x.g.title.textContent = x.name;
+      x.g.title.hidden = shown.length < 2; // headings only when several sections are shown
+      u.body.append(x.g.wrap);
+    }
+    u.body.append(...notes);
+  });
 }
 
 function myClipCard(o) {
@@ -663,7 +875,7 @@ function buildDetail(d) {
   refs.versions = el('div', { class: 'versions-pop', role: 'dialog', 'aria-label': 'Versions', hidden: true });
   refs.versions.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.defaultPrevented) { e.stopPropagation(); closeVersions(true); } });
   main.append(el('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
-    el('button', { class: 'btn ghost back', text: '‹ Gallery', onclick: showGallery }), el('span', { class: 'muted', 'aria-hidden': 'true', text: '/' }),
+    el('button', { class: 'btn ghost back', text: backLabel(), onclick: showGallery }), el('span', { class: 'muted', 'aria-hidden': 'true', text: '/' }),
     el('span', { class: 'muted small crumb-name', text: d.name })));
   main.append(el('div', { class: 'detail-head' }, refs.titles, refs.renameBtn,
     el('div', { class: 'menu-wrap' }, refs.versionsBtn, refs.versions), refs.more));
@@ -2227,10 +2439,14 @@ $('aSave').onclick = async () => {
 
 // ---------- start ----------
 (async function init() {
-  setView('gallery'); // the app opens on Browse
+  // Opens on the home view chosen last time (My clips by default); with no clips yet, on Browse when a source is on.
+  const stored = lsGet(HOME_KEY);
+  setView(stored === 'browse' ? 'browse' : 'mine');
   await loadApp();
-  loadSources();
+  const sourcesLoaded = loadSources();
   await loadOriginals();
+  await sourcesLoaded;
+  if (!S.userNavigated && S.view === 'mine' && !S.originals.length && !S.adding.length && enabledSources().length) setView('browse');
   renderActivity();
   backend.start();
   checkScreen(); // once at launch (opens the screen briefly); never polled
