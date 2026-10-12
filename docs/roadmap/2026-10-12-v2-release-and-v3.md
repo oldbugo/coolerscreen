@@ -123,3 +123,18 @@ with `cs2 live-test` on the user's screen (fw 3.6). User saw the counter picture
   without sending 0x15 again), so the value is stored. Reading: `0x15 [enable=0, 10]` = don't switch off after live.
   The companion sends `0x15 [00 0A]` on connect like the vendor (2.0 default: the loop keeps playing); an opt-in
   "turn the screen off N s after the companion stops" setting would send `0x15 [1, N]` (to be verified).
+
+### Prototype A (separate `cs-companion` tray program) on hardware (2026-10-12)
+
+User check: readable, "looks pretty good", no flickering; the notch hole shows (mask not yet applied); tray Quit
+returns to the loop clip. Measured on the screen (20 s per run, 16 logical cores):
+
+| Background | fps setting | Companion CPU (% of PC) | RAM | ffmpeg | Frames that change |
+|---|---|---|---|---|---|
+| gradient | 30 | 0.89 % | 43 MB | — | 11/s |
+| gradient | 60 | 0.70 % | 43 MB | — | 11/s |
+| video (Ocean Echo) | 30 | 1.62 % | 54 MB | ~2.7 % of PC, 226 MB | 19/s |
+| video (Ocean Echo) | 60 | 2.55 % | 54 MB | ~2.4 % of PC, 236 MB | 28/s |
+
+No send errors; encode ~8 ms, send ~4–10 ms per frame. Video is limited by software decode + JPEG encode; next:
+hardware decode in ffmpeg, check source fps/pacing.
