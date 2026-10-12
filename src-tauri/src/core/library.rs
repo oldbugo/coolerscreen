@@ -479,7 +479,7 @@ impl Library {
         d.insert("previewKind".into(), json!(if truthy(o.get("isImage")) { "image" } else { "video" }));
         d.insert("fps".into(), o.get("fps").filter(|x| truthy(Some(x))).cloned().unwrap_or(Value::Null));
         let loops = match o.get("loops") {
-            Some(l) if l.is_object() && js_string(l.get("key")) == js_string(o.get("fileMtime")) => {
+            Some(l) if loops_current(&o) => {
                 let mut l = l.clone();
                 if let Some(cs) = l.get_mut("candidates").and_then(Value::as_array_mut) {
                     for c in cs {
@@ -669,6 +669,14 @@ pub fn clean_corners(c: Option<&Value>) -> Value {
 }
 
 /// User settings for a version, cleaned (1.2 `cleanSettings`).
+/// Stored loop results made with an older search are searched again (2 = blend-aware search with the ghost check).
+pub const LOOP_SEARCH_VERSION: u32 = 2;
+
+/// The original's stored loop results are for its current file and the current search.
+pub fn loops_current(o: &Value) -> bool {
+    o.get("loops").map_or(false, |l| l.is_object() && js_string(l.get("key")) == js_string(o.get("fileMtime")) && l.get("search") == Some(&json!(LOOP_SEARCH_VERSION)))
+}
+
 pub fn clean_settings(o: &Value, s: &Value, max_seconds: f64, corners_default: &Value) -> Value {
     let is_image = truthy(o.get("isImage"));
     let duration = o.get("duration").and_then(Value::as_f64).filter(|d| *d != 0.0);
@@ -859,7 +867,7 @@ mod tests {
         let src = d.path().join("clip.mp4");
         std::fs::write(&src, b"x").unwrap();
         let oid = add_original(&l, &src);
-        l.patch_original(&oid, &json!({ "loops": { "key": "1234", "candidates": [{ "preview": format!("/media/o/{oid}/loop-0.mp4?t=1") }] } })).unwrap();
+        l.patch_original(&oid, &json!({ "loops": { "key": "1234", "search": LOOP_SEARCH_VERSION, "candidates": [{ "preview": format!("/media/o/{oid}/loop-0.mp4?t=1") }] } })).unwrap();
         let rel = l.detail(&oid).unwrap();
         assert_eq!(rel["frameUrl"], json!(format!("/media/o/{oid}/frame.jpg")));
         l.set_media_base("http://127.0.0.1:5000/tok/");

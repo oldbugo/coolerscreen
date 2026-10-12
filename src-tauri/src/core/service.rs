@@ -310,7 +310,7 @@ impl App {
     /// A clip just added: find its loops now, in the background, so its loop cards are ready when it is opened.
     pub fn prefind_loops(&self, oid: &str) {
         let Some(o) = self.lib.read_original(oid) else { return };
-        if truthy(o.get("isImage")) || o.get("loops").map_or(false, |l| l.is_object()) {
+        if truthy(o.get("isImage")) || super::library::loops_current(&o) {
             return;
         }
         let _ = self.submit_loop_search(oid, &json!({}), true);
@@ -396,6 +396,7 @@ impl App {
             _ => "undefined".into(),
         }));
         stored.insert("at".into(), json!(js::iso_now()));
+        stored.insert("search".into(), json!(super::library::LOOP_SEARCH_VERSION));
         for (k, v) in &result {
             stored.insert(k.clone(), v.clone());
         }

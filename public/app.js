@@ -430,14 +430,16 @@ $('browseView').addEventListener('scroll', () => {
 async function addFromSource(src, item, { record = false } = {}) {
   let seconds;
   if (record) {
-    const input = el('input', { type: 'number', id: 'recSecs', min: '3', max: '60', step: '1', value: '20', autofocus: true });
+    const input = el('select', { id: 'recSecs', autofocus: true },
+      el('option', { value: 'auto', text: 'Automatic (recommended)' }),
+      ...[30, 60, 120, 180].map(s => el('option', { value: String(s), text: s < 60 ? `${s} seconds` : `${s / 60} minute${s > 60 ? 's' : ''}` })));
     const ok = await openDialog({ title: `Record "${item.title}"`, body: el('div', {},
       el('p', { text: 'This wallpaper is drawn live, so CoolerScreen records it: it opens in a separate Wallpaper Engine window for the length of the recording, then closes that window. Your desktop wallpaper is not changed.' }),
-      el('div', { class: 'field' }, el('label', { for: 'recSecs', text: 'Record for (seconds)' }), input),
-      el('p', { class: 'muted small', text: 'Later you choose the loop from the recording, like with any clip.' })),
+      el('div', { class: 'field' }, el('label', { for: 'recSecs', text: 'Record for' }), input),
+      el('p', { class: 'muted small', text: 'Automatic stops as soon as the recording holds a seamless loop (at least 30 seconds). Wallpapers with random effects like rain or fireflies never repeat exactly, so those record the full 2 minutes and get a cross-fade. The loops are found right after, in the background.' })),
       actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Record', value: true, kind: 'primary' }] });
     if (!ok) return;
-    seconds = Math.min(60, Math.max(3, Number(input.value) || 20));
+    seconds = input.value === 'auto' ? undefined : Number(input.value);
   }
   const key = `${src.id}/${item.id}`;
   const st = { progress: 0, status: record ? 'Starting the recording' : 'Starting' };
@@ -971,7 +973,17 @@ function updateTimeline() {
 }
 
 // ----- loop cards -----
-const SMOOTH = r => (r <= 1.05 ? 'Seamless' : r <= 1.6 ? 'Nearly seamless' : 'Small jump');
+// How a loop's join looks: a hard cut like a normal frame step, or a cross-fade (blend) that hides it. A fade over a
+// moving scene shows a brief double image (ghost = share of the picture), so it only counts as seamless when small.
+const seamKind = c => {
+  const r = c.ratio, fade = (c.blend || 0) > 0;
+  if (!fade && r <= 1.05) return 'seamless';
+  if (fade && r <= 1.35) return (c.ghost || 0) <= 0.03 ? 'fade' : 'soft';
+  return r <= 1.6 ? 'nearly' : 'jump';
+};
+const SEAM_TEXT = { seamless: 'Seamless', fade: 'Seamless fade', soft: 'Soft fade', nearly: 'Nearly seamless', jump: 'Small jump' };
+const SEAM_CHIP = { seamless: 'ok', fade: 'ok', soft: 'accent', nearly: 'accent', jump: 'warn' };
+const SMOOTH = c => SEAM_TEXT[seamKind(c)];
 const loopJobs = new Map(); // originalId -> running search
 function sameLoop(c, dr) { return dr && Math.abs(c.start - dr.start) < 0.0015 && Math.abs(c.length - dr.length) < 0.0015; }
 function maybeAutoSearchLoops(d) {
@@ -1039,10 +1051,10 @@ function renderLoopCards() {
     const v = el('video', { src: c.preview, muted: true, loop: true, autoplay: true, playsInline: true, 'aria-hidden': 'true' });
     v.muted = true;
     const card = el('button', { class: 'loop-card' + (selected ? ' selected' : ''), role: 'radio', 'aria-checked': String(selected),
-      'aria-label': `Loop ${i + 1}: ${fmtSecs(c.length)}, ${SMOOTH(c.ratio).toLowerCase()}${i === 0 ? ', best' : ''}`, onclick: () => pickLoop(c) },
+      'aria-label': `Loop ${i + 1}: ${fmtSecs(c.length)}, ${SMOOTH(c).toLowerCase()}${i === 0 ? ', best' : ''}`, onclick: () => pickLoop(c) },
       el('div', { class: 'loop-video' }, v),
       el('div', { class: 'loop-meta' }, el('b', { class: 'num', text: fmtSecs(c.length) }),
-        el('span', { class: 'chip ' + (c.ratio <= 1.05 ? 'ok' : c.ratio <= 1.6 ? 'accent' : 'warn'), text: SMOOTH(c.ratio) }),
+        el('span', { class: 'chip ' + SEAM_CHIP[seamKind(c)], text: SMOOTH(c), title: (c.blend || 0) > 0 ? `Cross-fades the last ${c.blend.toFixed(2)} s into the start` + (seamKind(c) === 'soft' ? ' (part of the picture moves, so it shows a brief double image)' : '') : 'Plays straight through: the end runs into the start like any other frame' }),
         i === 0 ? el('span', { class: 'small muted', text: 'Best' }) : null));
     box.append(el('li', {}, card));
   });
@@ -1776,7 +1788,7 @@ async function searchLoops() {
   refs.lsBtn.disabled = false;
 }
 const pollJob = (jobId, onUpdate) => backend.job(jobId, onUpdate);
-const seamWords = ratio => (ratio <= 1.05 ? 'seamless' : ratio <= 1.6 ? 'nearly seamless' : 'a visible jump');
+const seamWords = c => ({ seamless: 'seamless', fade: 'seamless with a cross-fade', soft: 'a soft cross-fade with a brief double image', nearly: 'nearly seamless', jump: 'a visible jump' })[seamKind(c)];
 function renderLoopResults(list) {
   const ul = refs.lsResults;
   ul.textContent = '';
@@ -1785,7 +1797,7 @@ function renderLoopResults(list) {
   for (const c of list) {
     const a = el('canvas', { width: tw, height: th, class: 'ls-thumb', 'aria-hidden': 'true' });
     const b = el('canvas', { width: tw, height: th, class: 'ls-thumb', 'aria-hidden': 'true' });
-    const text = `Start ${fmtT2(c.start)} → end ${fmtT2(c.end)} · ${fmtSecs(c.length)} (${c.frames} frames) · the jump looks like ${c.ratio.toFixed(1)}× a normal frame step (${seamWords(c.ratio)})`;
+    const text = `Start ${fmtT2(c.start)} → end ${fmtT2(c.end)} · ${fmtSecs(c.length)} (${c.frames} frames) · the join looks like ${c.ratio.toFixed(1)}× a normal frame step${(c.blend || 0) > 0 ? ` with a ${c.blend.toFixed(2)} s cross-fade` : ``} (${seamWords(c)})`;
     const use = el('button', { class: 'btn secondary', text: 'Use', 'aria-label': `Use: ${text}`, onclick: () => {
       setTrim(c.startFrame / srcFps(), c.frames / OUT_FPS(), c.startFrame / srcFps());
       if (view.zoomed) { fitView(); positionTrim(); drawFilmstrip(); }

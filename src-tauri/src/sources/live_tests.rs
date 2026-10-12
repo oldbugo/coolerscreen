@@ -159,3 +159,18 @@ fn record_offscreen_and_covered() {
     std::fs::rename(&r.file, &dest).unwrap();
     println!("covered: {}", dest.display());
 }
+
+/// Automatic recording (`CS_REC_ID`, e.g. we-1279609970): stops early when a seamless loop turns up, else 2 min.
+#[test]
+#[ignore]
+fn record_auto() {
+    let c = ctx();
+    let id = std::env::var("CS_REC_ID").unwrap_or_else(|_| "we-1279609970".into());
+    let item = wallpaperengine::scan(&c).into_iter().find(|e| e.id == id).expect("that wallpaper");
+    let t = std::time::Instant::now();
+    let r = wallpaperengine::record(&c, &item, None, false, &|_, _| {}, &Cancel::new()).unwrap();
+    let ff = c.ffmpeg.clone();
+    let info = crate::media::probe::probe(&ff, &r.file).unwrap();
+    println!("{} recorded {:.1}s of video in {:?}", item.title, info.duration.unwrap_or(0.0), t.elapsed());
+    std::fs::remove_file(&r.file).unwrap();
+}
