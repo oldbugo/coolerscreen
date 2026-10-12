@@ -306,11 +306,24 @@ window.addEventListener('drop', e => {
 // ---------- Browse (home): My clips + the sources ticked here (only sources enabled in Settings > Sources appear) ----------
 function setView(v) {
   S.view = v;
+  if (v === 'gallery') $('homeBtn').setAttribute('aria-current', 'page'); else $('homeBtn').removeAttribute('aria-current');
   $('galleryView').hidden = v !== 'gallery';
   document.querySelector('.panes').hidden = v !== 'detail';
   if (v !== 'detail') stopPreviewLoop();
   if (v === 'gallery') renderGallery();
 }
+$('homeBtn').onclick = () => showGallery();
+// Back to Browse from anywhere in a clip: Esc, Backspace or Alt+Left (never while typing, or over a dialog / the drawer).
+window.addEventListener('keydown', e => {
+  if (e.defaultPrevented || S.view !== 'detail') return;
+  if (document.querySelector('.backdrop') || !$('drawerBack').hidden) return;
+  const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  const back = (e.key === 'ArrowLeft' && e.altKey) || (!typing && !e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'Escape' || e.key === 'Backspace'));
+  if (!back) return;
+  if (!typing && t && t.closest && t.closest('.menu, .versions-pop')) return; // those handle Esc themselves
+  e.preventDefault();
+  showGallery();
+});
 function showGallery() {
   setView('gallery');
   const card = S.sel && document.querySelector(`.g-card[data-id="${S.sel}"]`);
@@ -335,16 +348,33 @@ async function setTicked(id, on) {
   try { B.ticked = (await call('browse_set', { ticked: B.ticked })).ticked; } catch {}
   if (on && id !== 'mine' && !B.data.has(id)) loadSourcePage(id);
 }
+// The theme servers return pages in an unstable order, so each page is sorted deterministically (newest id first, then
+// title) and items already shown never move: later pages are appended, a refresh updates known items in place and puts
+// new ones in front.
+const byNewest = (x, y) => {
+  const nx = /^\d+$/.test(x.id), ny = /^\d+$/.test(y.id);
+  if (nx && ny && Number(x.id) !== Number(y.id)) return Number(y.id) - Number(x.id);
+  return String(y.id).localeCompare(String(x.id)) || String(x.title).localeCompare(String(y.title));
+};
 async function loadSourcePage(id, refresh = false) {
   let d = B.data.get(id);
-  if (refresh || !d) { d = { items: [], page: 0, hasMore: true, loading: false, error: null, total: null }; B.data.set(id, d); }
-  if (d.loading || !d.hasMore) return;
+  const fresh = !d;
+  if (fresh) { d = { items: [], page: 0, hasMore: true, loading: false, error: null, total: null }; B.data.set(id, d); }
+  const reload = refresh && !fresh && d.items.length > 0; // refresh: re-read page 1, keep everything shown
+  if (d.loading || (!d.hasMore && !reload)) return;
   d.loading = true; d.error = null; renderGallery();
   try {
-    const r = await call('source_items', { sourceId: id, page: d.page + 1, refresh });
-    const seen = new Set(d.items.map(i => i.id));
-    d.items.push(...r.items.filter(i => !seen.has(i.id)));
-    d.page = r.page; d.hasMore = r.hasMore && r.items.length > 0; d.total = r.total;
+    const r = await call('source_items', { sourceId: id, page: reload ? 1 : d.page + 1, refresh });
+    const known = new Map(d.items.map(i => [i.id, i]));
+    const added = [];
+    for (const it of [...r.items].sort(byNewest)) {
+      const old = known.get(it.id);
+      if (old) Object.assign(old, it, old.inGallery && !it.inGallery ? { inGallery: old.inGallery } : {});
+      else { known.set(it.id, it); added.push(it); }
+    }
+    if (reload) d.items.unshift(...added); else d.items.push(...added);
+    if (!reload) { d.page = r.page; d.hasMore = r.hasMore && r.items.length > 0; }
+    d.total = r.total;
   } catch (e) { d.error = e.message; }
   d.loading = false;
   renderGallery();
@@ -431,10 +461,44 @@ function updateSourceCard(key) {
   if (src && item) card.querySelector('.th-action').replaceWith(sourceAction(src, item));
 }
 
+// One grid per section ("My clips" and every ticked source). The grids and their cards are kept between renders and
+// reconciled by key, so a card whose state changes (Not added -> Downloading -> In your gallery) is replaced in its own
+// <li> and every other card stays exactly where it is: nothing is re-sorted or rebuilt wholesale.
+const GRID = new Map(); // section id -> { wrap, title, ul, cache: Map(key -> { li, sig }) }
+function gridSection(id) {
+  let g = GRID.get(id);
+  if (!g) {
+    const title = el('h2', { class: 'g-sec' });
+    const ul = el('ul', { class: 'g-grid', 'aria-label': 'Clips' });
+    g = { wrap: el('section', { class: 'g-section' }, title, ul), title, ul, cache: new Map() };
+    GRID.set(id, g);
+  }
+  return g;
+}
+function reconcile(g, entries) {
+  const keep = new Set();
+  let cur = g.ul.firstChild;
+  for (const e of entries) {
+    keep.add(e.key);
+    let c = g.cache.get(e.key);
+    if (!c) { c = { li: el('li'), sig: null }; g.cache.set(e.key, c); }
+    if (c.sig !== e.sig) { c.li.textContent = ''; c.li.append(e.make()); c.sig = e.sig; }
+    if (c.li === cur) cur = cur.nextSibling; else g.ul.insertBefore(c.li, cur);
+  }
+  while (cur) { const n = cur.nextSibling; cur.remove(); cur = n; }
+  for (const k of [...g.cache.keys()]) if (!keep.has(k)) g.cache.delete(k);
+}
+const addingIds = new WeakMap();
+let addingSeq = 0;
+
 function renderGallery() {
   const box = $('galleryView');
   if (box.hidden) return;
   const scroll = box.scrollTop;
+  // Scroll anchor: keep the first visible card where it is even if cards above it were added or removed.
+  const boxTop = box.getBoundingClientRect().top;
+  const anchorEl = scroll > 0 && [...box.querySelectorAll(".g-card")].find(c => c.getBoundingClientRect().bottom > boxTop + 4 && (c.dataset.key || c.dataset.id));
+  const anchor = anchorEl ? { key: anchorEl.dataset.key || anchorEl.dataset.id, top: anchorEl.getBoundingClientRect().top } : null;
   box.textContent = '';
   const mine = B.ticked.includes('mine');
   const link = B.sources.find(s => s.id === 'link' && s.enabled);
@@ -449,35 +513,54 @@ function renderGallery() {
   for (const s of enabledSources()) { const d = B.data.get(s.id); chips.append(chip(s.id, s.name, d && d.total != null ? d.total : null)); }
   chips.append(el('button', { class: 'btn ghost small-btn', text: 'Sources…', title: 'Settings > Sources', onclick: () => openDrawer('setSources') }));
   box.append(chips);
-  const ul = el('ul', { class: 'g-grid', 'aria-label': 'Clips' });
+
+  const shown = [];
   if (mine) {
     if (!S.originals.length && !S.adding.length) box.append(el('p', { class: 'muted g-empty', text: 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). You\'ll pick the loop and preview it before anything is sent.' }));
-    for (const a of S.adding) {
-      ul.append(el('li', {}, el('div', { class: 'g-card adding', 'aria-busy': 'true' }, el('div', { class: 'g-thumb skeleton' }),
-        el('div', { class: 'g-name', text: a.name }), el('div', { class: 'g-chips' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'small muted', text: 'Adding…' })))));
-    }
-    ul.append(el('li', {}, el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
+    const entries = [{ key: 'add-tile', sig: 'x', make: () => el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
       el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
-      el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' }))));
-    for (const o of S.originals) ul.append(el('li', {}, myClipCard(o)));
+      el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' })) }];
+    for (const a of S.adding) {
+      if (!addingIds.has(a)) addingIds.set(a, ++addingSeq);
+      entries.push({ key: 'adding:' + addingIds.get(a), sig: a.name, make: () => el('div', { class: 'g-card adding', 'aria-busy': 'true' }, el('div', { class: 'g-thumb skeleton' }),
+        el('div', { class: 'g-name', text: a.name }), el('div', { class: 'g-chips' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'small muted', text: 'Adding…' }))) });
+    }
+    for (const o of S.originals) entries.push({ key: 'o:' + o.id, sig: JSON.stringify(o), make: () => myClipCard(o) });
+    const g = gridSection('mine');
+    reconcile(g, entries);
+    shown.push({ id: 'mine', name: 'My clips', g });
   }
   const notes = [];
   for (const s of enabledSources()) {
     if (!B.ticked.includes(s.id)) continue;
     const d = B.data.get(s.id);
     if (!d) continue;
-    for (const it of d.items) {
-      const thumb = el('div', { class: 'g-thumb' }, it.thumb ? el('img', { src: it.thumb, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null,
-        el('span', { class: 'src-badge', text: it.badge ? `${s.name} · ${it.badge}` : s.name }));
-      ul.append(el('li', {}, el('div', { class: 'g-card s-card', 'data-key': `${s.id}/${it.id}` }, thumb,
-        el('div', { class: 'g-name', text: it.title, title: it.title }), sourceAction(s, it))));
-    }
-    if (d.loading) for (let i = 0; i < 3; i++) ul.append(el('li', {}, el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' }))));
+    const entries = d.items.map(it => {
+      const job = B.jobs.get(`${s.id}/${it.id}`);
+      return { key: `${s.id}/${it.id}`, sig: JSON.stringify([it.title, it.thumb, it.badge, it.inGallery, it.action, it.note, job ? (job.error ? 'e:' + job.error : 'run') : '']),
+        make: () => {
+          const thumb = el('div', { class: 'g-thumb' }, it.thumb ? el('img', { src: it.thumb, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null,
+            el('span', { class: 'src-badge', text: it.badge ? `${s.name} · ${it.badge}` : s.name }));
+          return el('div', { class: 'g-card s-card', 'data-key': `${s.id}/${it.id}` }, thumb,
+            el('div', { class: 'g-name', text: it.title, title: it.title }), sourceAction(s, it));
+        } };
+    });
+    if (d.loading) for (let i = 0; i < 3; i++) entries.push({ key: `skel:${i}`, sig: 's', make: () => el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' })) });
+    const g = gridSection(s.id);
+    reconcile(g, entries);
+    shown.push({ id: s.id, name: s.name, g });
     if (d.error) notes.push(el('div', { class: 'notice danger' }, `${s.name}: ${d.error} `, el('button', { class: 'btn secondary', text: 'Try again', onclick: () => { d.error = null; loadSourcePage(s.id, !d.items.length); } })));
     if (s.id === 'lovingcool' || s.id === 'otherbrands') notes.push(el('p', { class: 'muted small', text: `${s.name}: themes from the vendor's online library; they remain theirs.` }));
   }
-  box.append(ul, ...notes);
+  for (const k of [...GRID.keys()]) if (!shown.some(x => x.id === k)) GRID.delete(k);
+  for (const x of shown) {
+    x.g.title.textContent = x.name;
+    x.g.title.hidden = shown.length < 2; // headings only when several sections are shown
+    box.append(x.g.wrap);
+  }
+  box.append(...notes);
   box.scrollTop = scroll;
+  if (anchor) { const a2 = [...box.querySelectorAll(".g-card")].find(c => (c.dataset.key || c.dataset.id) === anchor.key); if (a2) box.scrollTop += a2.getBoundingClientRect().top - anchor.top; }
 }
 
 function myClipCard(o) {

@@ -336,7 +336,8 @@ summary h3 { display: inline; color: var(--text); }
 .empty .row { justify-content: center; }
 
 /* dialogs and drawer */
-.backdrop, .drawer-back { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 50; }
+/* --cs-bar-h (32 px, set by js/titlebar.js in the desktop shell) is the transparent window title bar: overlays start below it. */
+.backdrop, .drawer-back { position: fixed; inset: var(--cs-bar-h, 0px) 0 0 0; background: rgba(0,0,0,.55); z-index: 50; }
 .backdrop { display: grid; place-items: center; padding: var(--s4); }
 .dialog { background: var(--surface-1); border: 1px solid var(--border-strong); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: var(--s5);
   width: min(480px, 100%); max-height: 90vh; overflow-y: auto; animation: pop .2s ease-out; }
@@ -349,7 +350,7 @@ summary h3 { display: inline; color: var(--text); }
 .swap figure { margin: 0; flex: 1; min-width: 0; }
 .swap img, .swap .noimg { width: 100%; aspect-ratio: 20 / 9; object-fit: cover; border-radius: 6px; background: #000; border: 1px solid var(--border-strong); display: block; }
 .swap figcaption { font-size: var(--fs-small); color: var(--text-muted); margin-top: var(--s1); overflow-wrap: anywhere; }
-.drawer { position: absolute; right: 0; top: 0; bottom: 0; width: min(420px, 100%); background: var(--surface-1); border-left: 1px solid var(--border-strong);
+.drawer { position: absolute; right: 0; top: var(--s5); bottom: 0; border-top-left-radius: var(--r-lg); /* the gap keeps its close button clear of the window buttons */ width: min(420px, 100%); background: var(--surface-1); border-left: 1px solid var(--border-strong);
   box-shadow: var(--shadow); display: flex; flex-direction: column; animation: slide .2s ease-out; outline: none; }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; padding: var(--s4) var(--s5); border-bottom: 1px solid var(--border); }
 .drawer-body { overflow-y: auto; padding: 0 var(--s5) var(--s5); }
@@ -358,6 +359,12 @@ summary h3 { display: inline; color: var(--text); }
 .status-line { margin-bottom: var(--s2); }
 @keyframes pop { from { transform: scale(.97); opacity: 0; } }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
+.home-btn { display: inline-flex; align-items: center; gap: var(--s2); height: 32px; padding: 0 var(--s3); border-radius: var(--r-md); border: 1px solid transparent;
+  background: transparent; color: var(--text); cursor: pointer; font-size: var(--fs-small); }
+.home-btn:hover { background: var(--surface-3); }
+.home-btn[aria-current="page"] { color: var(--text-muted); }
+.g-sec { margin: var(--s5) 0 var(--s2); font-size: 15px; line-height: 22px; }
+.g-sec:first-of-type { margin-top: var(--s3); }
 .toast { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); background: var(--surface-3); border: 1px solid var(--border-strong); padding: var(--s2) var(--s4);
   border-radius: var(--r-md); box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 60; max-width: 80vw; }
 .toast.show { opacity: 1; }

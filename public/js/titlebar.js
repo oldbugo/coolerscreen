@@ -19,7 +19,7 @@ if (T) {
     close: '<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1"/></svg>',
   };
   const CSS = `
-:root{--cs-controls-w:${BTN_W * 3}px}
+:root{--cs-controls-w:${BTN_W * 3}px;--cs-bar-h:${BAR_H}px}
 #cs-titlebar{position:fixed;top:0;right:0;height:${BAR_H}px;width:${BTN_W * 3}px;z-index:2147483000;display:flex;
   background:transparent;pointer-events:none;-webkit-user-select:none;user-select:none}
 #cs-titlebar button{pointer-events:auto;width:${BTN_W}px;height:${BAR_H}px;border:0;margin:0;padding:0;border-radius:0;display:grid;
