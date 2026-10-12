@@ -5,6 +5,7 @@
 //! The sender connects with backoff, reconnects when the screen disappears, and ends the stream properly (loop clip keeps
 //! playing) when paused or stopped. While there is no connection nothing is rendered.
 use super::encode::{frame_budget, rotate_cw, JpegEncoder};
+use super::mask::Mask;
 use super::render::Renderer;
 use super::sensors::Sampler;
 use super::session::LiveSession;
@@ -137,6 +138,8 @@ pub struct Pipeline {
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// Raw process handle of the background-video ffmpeg, for measuring.
     pub video_child: Arc<Mutex<Option<usize>>>,
+    /// How the background clip is decoded ("d3d11va", "software", ...); empty without a clip.
+    pub video_decode: Arc<Mutex<String>>,
 }
 
 fn log(s: &str) {
@@ -159,16 +162,17 @@ impl Pipeline {
         let rgba_pool: Arc<Pool<Vec<u8>>> = Arc::new(Pool(Mutex::new(Vec::new())));
         let jpeg_pool: Arc<Pool<Vec<u8>>> = Arc::new(Pool(Mutex::new(Vec::new())));
         let video_child = Arc::new(Mutex::new(None));
+        let video_decode = Arc::new(Mutex::new(String::new()));
         let mut threads = Vec::new();
 
         // render
         {
             let (sh, slot, pool) = (shared.clone(), rgba_slot.clone(), rgba_pool.clone());
-            let (bg, vc) = (cfg.background.clone(), video_child.clone());
-            let fps0 = sh.fps.load(Relaxed);
+            let (bg, vc, vd) = (cfg.background.clone(), video_child.clone(), video_decode.clone());
+            let (decode, notch) = (cfg.video_decode.clone(), cfg.notch.clone());
             threads.push(std::thread::spawn(move || {
                 let sampler = Sampler::start();
-                let video = bg.as_deref().filter(|b| !b.is_empty()).and_then(|b| match VideoBg::start(std::path::Path::new(b), fps0) {
+                let video = bg.as_deref().filter(|b| !b.is_empty()).and_then(|b| match VideoBg::start(std::path::Path::new(b), &decode) {
                     Ok(v) => Some(v),
                     Err(e) => {
                         log(&format!("background clip not used: {e}"));
@@ -179,12 +183,13 @@ impl Pipeline {
                     *vc.lock().unwrap() = Some(0);
                     let v_handle = v.child_handle.clone();
                     // The child handle appears once ffmpeg has started; mirror it for the measurer.
-                    let vc2 = vc.clone();
+                    let (vc2, vd2, how) = (vc.clone(), vd.clone(), v.decode.clone());
                     std::thread::spawn(move || {
                         for _ in 0..50 {
                             std::thread::sleep(Duration::from_millis(100));
                             if let Some(h) = *v_handle.lock().unwrap() {
                                 *vc2.lock().unwrap() = Some(h);
+                                *vd2.lock().unwrap() = how.lock().unwrap().clone();
                                 break;
                             }
                         }
@@ -194,6 +199,11 @@ impl Pipeline {
                 if !r.has_fonts() {
                     log("no system font found (Segoe UI / Arial): text is not drawn");
                 }
+                let follow_app = notch != "off";
+                let mut last_mask_check = Instant::now();
+                if follow_app {
+                    r.set_mask(Mask::from_app_settings());
+                }
                 let mut next = Instant::now();
                 let mut last_emit = Instant::now();
                 while !sh.quit.load(Relaxed) {
@@ -201,6 +211,10 @@ impl Pipeline {
                         std::thread::sleep(Duration::from_millis(100));
                         next = Instant::now();
                         continue;
+                    }
+                    if follow_app && last_mask_check.elapsed() > Duration::from_secs(3) {
+                        last_mask_check = Instant::now();
+                        r.set_mask(Mask::from_app_settings()); // picks up a notch change made in the app
                     }
                     let period = Duration::from_secs_f64(1.0 / sh.fps.load(Relaxed).max(1) as f64);
                     let t = Instant::now();
@@ -359,7 +373,7 @@ impl Pipeline {
             }));
         }
 
-        Pipeline { shared, threads: Mutex::new(threads), video_child }
+        Pipeline { shared, threads: Mutex::new(threads), video_child, video_decode }
     }
 
     /// Ask every thread to finish and wait for them; the sender ends the stream (loop clip, display on) first.

@@ -2,6 +2,7 @@
 //! Background (animated gradient, or a decoded clip), big clock, and a sensor panel.
 //! The panel is limited by the screen: motion along the landscape vertical axis tears, so nothing here moves up or down;
 //! the gradient drifts sideways and the bars grow sideways.
+use super::mask::Mask;
 use super::sensors::Sensors;
 use super::video::VideoBg;
 use super::{LH, LW};
@@ -105,6 +106,7 @@ pub struct Renderer {
     tick: u64,
     bars_tick: u64,
     last_key: Option<(u64, usize, bool, u16)>,
+    mask: Mask,
     /// Accumulated microseconds per stage (background, clock, panel), for profiling.
     pub timing_us: [u64; 3],
     /// Panel background and bar tracks, drawn once (premultiplied RGBA, PANEL_W x PANEL_H); blended each frame.
@@ -141,7 +143,15 @@ fn blend_overlay(dst: &mut [u8], ov: &[u8], x0: usize, y0: usize, w: usize, h: u
 
 impl Renderer {
     pub fn new(sensors: Arc<Mutex<Sensors>>, video: Option<VideoBg>) -> Renderer {
-        Renderer { pm: Pixmap::new(LW as u32, LH as u32).unwrap(), fonts: Fonts::load(), sensors, video, t0: Instant::now(), bars: [0.0; 5], tick: 0, bars_tick: 0, last_key: None, timing_us: [0; 3], panel_ov: build_panel_overlay() }
+        Renderer { pm: Pixmap::new(LW as u32, LH as u32).unwrap(), fonts: Fonts::load(), sensors, video, t0: Instant::now(), bars: [0.0; 5], tick: 0, bars_tick: 0, last_key: None, mask: Mask::none(), timing_us: [0; 3], panel_ov: build_panel_overlay() }
+    }
+
+    /// Set the notch mask (applied as the last step; the clock keeps clear of a left band).
+    pub fn set_mask(&mut self, m: Mask) {
+        if m != self.mask {
+            self.mask = m;
+            self.last_key = None;
+        }
     }
 
     /// Force the next render to redraw (for benchmarks).
@@ -165,7 +175,8 @@ impl Renderer {
         let now = local_time();
         let vframe = self.video.as_ref().and_then(|v| v.frame());
         let vkey = vframe.as_ref().map(|a| Arc::as_ptr(a) as usize).unwrap_or(0);
-        let key = (self.tick, vkey, show_seconds, now.second);
+        // With a video the widgets follow the video frames (no separate 10 Hz redraw on top of them).
+        let key = (if vkey != 0 { 0 } else { self.tick }, vkey, show_seconds, now.second);
         if self.last_key == Some(key) {
             return (self.pm.data(), false);
         }
@@ -181,6 +192,9 @@ impl Renderer {
         self.timing_us[0] += (t1 - t0).as_micros() as u64;
         self.timing_us[1] += (t2 - t1).as_micros() as u64;
         self.timing_us[2] += (t3 - t2).as_micros() as u64;
+        if !self.mask.is_none() {
+            self.mask.apply(self.pm.data_mut());
+        }
         (self.pm.data(), true)
     }
 
@@ -223,7 +237,7 @@ impl Renderer {
         let hhmm = format!("{:02}:{:02}", n.hour, n.minute);
         let size = 300;
         let w = self.fonts.width(&hhmm, size, true);
-        let cx = if show_seconds { 470.0 } else { 520.0 };
+        let cx = (if show_seconds { 470.0 } else { 520.0 }) + self.mask.left_inset() / 2.0;
         let x = cx - w / 2.0;
         // The colon fades in and out instead of blinking hard.
         let frac = (self.tick % 10) as f32 / 10.0;
@@ -233,7 +247,7 @@ impl Renderer {
         let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
         let date = format!("{}, {} {}", days[(n.weekday % 7) as usize], n.day, months[((n.month.max(1) - 1) % 12) as usize]);
         let dw = self.fonts.width(&date, 52, false);
-        self.text(&date, 520.0 - dw / 2.0, 520.0, 52, false, [215, 220, 232], 1.0);
+        self.text(&date, 520.0 + self.mask.left_inset() / 2.0 - dw / 2.0, 520.0, 52, false, [215, 220, 232], 1.0);
         if show_seconds {
             let sec = format!("{:02}", n.second);
             self.text(&sec, x + w + 10.0, 430.0, 96, true, [200, 210, 235], 0.9);

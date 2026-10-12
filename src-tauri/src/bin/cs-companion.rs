@@ -76,11 +76,54 @@ fn arg_val<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
+const HELP: &str = "cs-companion: live clock and sensor display for the CoolerScreen screen (prototype A)
+
+USAGE
+  cs-companion [options]            run with a tray icon (Pause/Resume, 30/60 fps, Quit)
+  cs-companion --dry-run            write sample frames to work/companion-dry/ (no screen needed)
+  cs-companion --measure SECONDS    CPU, memory and timing for 30 and 60 fps (add --video to include a clip)
+  cs-companion --help
+
+OPTIONS
+  --video FILE        use a clip as animated background (overrides companion.json)
+  --fps 30|60         live frame rate (overrides companion.json)
+  --decode MODE       auto (GPU first, software fallback) or software
+  --notch MODE        app (follow the CoolerScreen notch setting) or off
+  --video-only        with --measure: skip the gradient runs
+  --no-device         do not touch the screen: frames are discarded (tray and --measure)
+
+Settings file: %APPDATA%\\CoolerScreen\\companion.json. Quit, Ctrl+C or logoff ends the stream and the screen
+plays its normal loop clip again. Nothing starts with Windows.
+";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h" || a == "/?") {
+        print!("{HELP}");
+        return;
+    }
+    const FLAGS: [&str; 5] = ["--dry-run", "--no-device", "--help", "-h", "--video-only"];
+    const WITH_VALUE: [&str; 6] = ["--video", "--fps", "--measure", "--decode", "--notch", "--frames"];
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if WITH_VALUE.contains(&a.as_str()) {
+            it.next();
+        } else if !FLAGS.contains(&a.as_str()) {
+            eprintln!("unknown option: {a}
+
+{HELP}");
+            std::process::exit(2);
+        }
+    }
     let mut cfg = Config::load();
     if let Some(v) = arg_val(&args, "--video") {
         cfg.background = Some(v.to_string());
+    }
+    if let Some(d) = arg_val(&args, "--decode") {
+        cfg.video_decode = d.to_string();
+    }
+    if let Some(n) = arg_val(&args, "--notch") {
+        cfg.notch = n.to_string();
     }
     if let Some(f) = arg_val(&args, "--fps").and_then(|v| v.parse().ok()) {
         cfg.fps = f;
@@ -106,7 +149,7 @@ fn dry_run(cfg: &Config) -> i32 {
     let _ = std::fs::create_dir_all(&dir);
     let sampler = Sampler::start();
     std::thread::sleep(Duration::from_millis(1300)); // first sensor sample
-    let video = cfg.background.as_deref().and_then(|b| match cs_core::live::video::VideoBg::start(std::path::Path::new(b), cfg.fps) {
+    let video = cfg.background.as_deref().and_then(|b| match cs_core::live::video::VideoBg::start(std::path::Path::new(b), &cfg.video_decode) {
         Ok(v) => Some(v),
         Err(e) => {
             eprintln!("video background not used: {e}");
@@ -119,6 +162,9 @@ fn dry_run(cfg: &Config) -> i32 {
     let me: HANDLE = unsafe { GetCurrentProcess() };
     let ws0 = mem(me).0;
     let mut r = Renderer::new(sampler.data.clone(), video);
+    if cfg.notch != "off" {
+        r.set_mask(cs_core::live::mask::Mask::from_app_settings());
+    }
     println!("working set: {:.1} MB before the renderer, {:.1} MB after loading fonts and buffers", ws0, mem(me).0);
     if !r.has_fonts() {
         eprintln!("warning: no system font found, text will be missing");
@@ -183,7 +229,8 @@ fn measure(base: &Config, secs: u64, use_device: bool) -> i32 {
     let cores: f64 = std::env::var("NUMBER_OF_PROCESSORS").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
     let me: HANDLE = unsafe { GetCurrentProcess() };
     println!("measuring {secs} s per run, {} (cores: {cores})", if use_device { "WITH the screen" } else { "no screen (frames are discarded)" });
-    let mut runs: Vec<(u32, bool)> = vec![(30, false), (60, false)];
+    let video_only = std::env::args().any(|a| a == "--video-only");
+    let mut runs: Vec<(u32, bool)> = if video_only { vec![] } else { vec![(30, false), (60, false)] };
     if base.background.is_some() {
         runs.extend([(30, true), (60, true)]);
     } else {

@@ -7,6 +7,7 @@
 //!   video     animated background: decode a clip through the bundled ffmpeg as raw frames
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
 pub mod encode;
+pub mod mask;
 pub mod pipeline;
 pub mod render;
 pub mod sensors;
@@ -32,11 +33,15 @@ pub struct Config {
     pub show_seconds: bool,
     /// Largest frame in KB (the vendor profile for this screen uses 200).
     pub max_kb: u32,
+    /// Notch mask: "app" follows the app's setting (settings.json), "off" draws edge to edge.
+    pub notch: String,
+    /// Background clip decoding: "auto" tries hardware (D3D11) and falls back to software, "software" never uses the GPU.
+    pub video_decode: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { fps: 60, background: None, show_seconds: false, max_kb: 200 }
+        Config { fps: 60, background: None, show_seconds: false, max_kb: 200, notch: "app".into(), video_decode: "auto".into() }
     }
 }
 
