@@ -4,6 +4,8 @@ use serde_json::{json, Value};
 
 /// Unsolicited status frames (every ~2 s over WinUSB); never a reply.
 pub const STATUS_KEY: u8 = 0x22;
+/// Count of status frames skipped by `Parser` (read by the `cs2 live-test` spike).
+pub static STATUS_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Longest frame accepted from the screen (its replies are small JSON objects; info is ~400 bytes).
 pub const MAX_FRAME: usize = 8 * 1024;
 
@@ -63,6 +65,7 @@ impl Parser {
             }
             let f: Vec<u8> = self.rx.drain(..len).collect();
             if f[4] == STATUS_KEY {
+                STATUS_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 continue;
             }
             let body = &f[5..len - 2];
