@@ -9,6 +9,7 @@ pub mod fake_media;
 pub mod gallery;
 pub mod jobobject;
 pub mod js;
+pub mod live_host;
 pub mod library;
 pub mod mask;
 pub mod media_server;

@@ -1,29 +1,35 @@
 // CoolerScreen 2.0 shell: Tauri 2 + system WebView2, seamless frameless window.
 // The Rust core (src/core) serves the UI through Tauri commands/events and a local media server.
+// 3.0 prototype B (live companion inside the app, off by default): live_app.rs (tray, hide on close), live_measure.rs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod live_app;
+mod live_measure;
 mod window;
 
 use cs_core::core::commands::{self as cc, Core, EventRelay, TauriEvents};
 use cs_core::core::media_server::MediaServer;
 use cs_core::core::App;
 use std::sync::{Arc, Mutex};
-use tauri::{Emitter, Manager, RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent};
 
 
 /// Keeps the media server alive for the app's lifetime.
 struct Media(#[allow(dead_code)] Mutex<Option<MediaServer>>);
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let measure = live_measure::parse(&args);
+    if let Some(m) = &measure {
+        // Measuring without the screen must not touch USB at all (the page checks the screen when it starts).
+        if m.no_device && std::env::var_os("COOLERSCREEN_FAKE_DEVICE").is_none() {
+            std::env::set_var("COOLERSCREEN_FAKE_DEVICE", "winusb");
+        }
+    }
     let relay = Arc::new(EventRelay::default());
     let core = App::new(cs_core::core::paths::base(), cs_core::backends(), relay.clone(), env!("CARGO_PKG_VERSION"));
+    let mut measure = measure;
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| live_app::show_main(app)))
         .manage(Core(core.clone()))
         .manage(Media(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
@@ -32,6 +38,7 @@ fn main() {
             window::win_state,
             window::win_close,
             window::win_force_close,
+            live_app::live_set,
             cc::app_state,
             cc::settings_update,
             cc::activity,
@@ -77,21 +84,7 @@ fn main() {
             if let Ok(res) = app.path().resource_dir() {
                 app.state::<Core>().0.device.set_scripts_dir(res.join("scripts"));
             }
-            let win = window::create(app)?;
-            let w2 = win.clone();
-            win.on_window_event(move |e| {
-                if let WindowEvent::CloseRequested { api, .. } = e {
-                    if window::force_close_requested() {
-                        return;
-                    }
-                    // An upload in progress: keep the window and let the page ask in its own dialog.
-                    if w2.app_handle().state::<Core>().0.uploading() {
-                        api.prevent_close();
-                        let _ = w2.emit("close-guard", ());
-                    }
-                }
-            });
-            win.show()?;
+            live_app::create_window(app.handle(), true)?;
             let c = app.state::<Core>().0.clone();
             let resolver_app = c.clone();
             match MediaServer::start(Arc::new(move |p: &str, q: &str| resolver_app.resolve_media(p, q))) {
@@ -103,17 +96,37 @@ fn main() {
                 }
                 Err(e) => eprintln!("Media server failed to start: {e}"),
             }
-            std::thread::spawn(move || c.startup());
+            // A fake screen (tests, COOLERSCREEN_FAKE_DEVICE) means live frames are discarded too: never USB.
+            if c.device.fake_mode().is_some() {
+                c.live.set_no_device(true);
+            }
+            let c2 = c.clone();
+            std::thread::spawn(move || c2.startup());
+            // 3.0 prototype B: off unless the setting is on (or --live-measure is used).
+            if let Some(o) = measure.take() {
+                live_app::ensure_tray(app.handle(), false);
+                live_measure::spawn(app.handle().clone(), o);
+            } else if c.settings.load().live_in_app() {
+                live_app::apply(app.handle());
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building CoolerScreen");
 
-    app.run(|app, event| {
-        if let RunEvent::Exit = event {
+    app.run(|app, event| match event {
+        // The last window closed: with the live tray the app stays (it ends only with the tray's Quit).
+        RunEvent::ExitRequested { code, api, .. } => {
+            if code.is_none() && live_app::keep_running() {
+                api.prevent_exit();
+            }
+        }
+        RunEvent::Exit => {
+            app.state::<Core>().0.live.stop(); // ends the live stream: the screen plays its loop clip again
             app.state::<Core>().0.shutdown();
             // ffmpeg children (Job Object) and the media scratch files (raw intermediates)
             cs_core::media::shutdown();
         }
+        _ => {}
     });
 }

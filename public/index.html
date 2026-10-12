@@ -127,6 +127,21 @@
         <p id="gMsg" class="muted small" role="status"></p>
       </section>
 
+      <section id="setLive" aria-labelledby="hLive">
+        <h3 id="hLive">Live screen (experimental)</h3>
+        <p class="muted small">Off by default. When on, closing the window keeps CoolerScreen in the tray (look for its icon near the clock) and the screen shows a live clock and PC stats. Use Quit in the tray menu to end it; the screen then plays its normal clip again. Sending a clip or restarting the screen pauses live and brings it back afterwards.</p>
+        <div class="src-row">
+          <div class="src-top"><label for="lvOn" class="src-name">Show live stats on the screen</label><input type="checkbox" id="lvOn" role="switch"></div>
+        </div>
+        <div class="src-row">
+          <div class="src-top"><label for="lvDestroy" class="src-name">Free the window's memory while it is in the tray</label><input type="checkbox" id="lvDestroy" role="switch"></div>
+          <p class="muted small">Uses less memory; the window takes a moment longer to come back.</p>
+        </div>
+        <div class="field"><label for="lvFps">Frames per second</label>
+          <select id="lvFps"><option value="60">60</option><option value="30">30</option></select></div>
+        <p id="lvMsg" class="muted small" role="status"></p>
+      </section>
+
       <section id="setAdvanced" aria-labelledby="hAdv">
         <details>
           <summary><h3 id="hAdv">Advanced</h3></summary>

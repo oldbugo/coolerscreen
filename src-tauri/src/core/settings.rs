@@ -35,6 +35,14 @@ impl Settings {
     pub fn sources(&self) -> &Value {
         &self.0["sources"]
     }
+    /// Run the live companion inside the app (default off).
+    pub fn live_in_app(&self) -> bool {
+        self.0["live"]["inApp"] == true
+    }
+    /// With the live companion in the app: destroy the window (and its WebView) when it is closed to the tray.
+    pub fn live_destroy_window(&self) -> bool {
+        self.0["live"]["destroyWindow"] == true
+    }
 }
 
 pub fn defaults() -> Value {
@@ -197,7 +205,7 @@ pub fn sanitize(s: &Value) -> Settings {
         _ => Value::Null,
     };
     let slots = s.get("slots");
-    Settings(json!({
+    let mut out = json!({
         "mask": mask,
         "maxSeconds": num(clamp_num(s.get("maxSeconds"), 10.0, 1.0, 120.0)),
         "galleryDir": gallery_dir,
@@ -206,7 +214,14 @@ pub fn sanitize(s: &Value) -> Settings {
         "capacity": capacity,
         "slots": { "startup": clean_slot(slots.and_then(|x| x.get("startup"))), "standby": clean_slot(slots.and_then(|x| x.get("standby"))) },
         "sources": clean_sources(s.get("sources")),
-    }))
+    });
+    // 3.0 prototype B: written only when switched on, so a settings.json that never used it stays identical to 2.0.
+    let live = s.get("live");
+    let on = |k: &str| live.and_then(|x| x.get(k)) == Some(&Value::Bool(true));
+    if on("inApp") || on("destroyWindow") {
+        out["live"] = json!({ "inApp": on("inApp"), "destroyWindow": on("destroyWindow") });
+    }
+    Settings(out)
 }
 
 /// Reads and writes settings.json; read-modify-write goes through `update` so concurrent tasks don't lose changes.

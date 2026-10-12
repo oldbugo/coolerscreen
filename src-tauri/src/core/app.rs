@@ -27,12 +27,14 @@ pub trait Events: Send + Sync + 'static {
 pub struct NoEvents;
 impl Events for NoEvents {}
 
-struct SinkAdapter(Arc<dyn Events>);
+struct SinkAdapter(Arc<dyn Events>, Arc<super::live_host::LiveHost>);
 impl JobSink for SinkAdapter {
     fn job(&self, job: &Job) {
         self.0.job(job)
     }
     fn device_busy(&self, busy: bool) {
+        // Live (prototype B) steps aside first, so the device task finds the screen free.
+        self.1.device_busy(busy);
         self.0.device_busy(busy)
     }
 }
@@ -69,6 +71,8 @@ pub struct App {
     pub sources: Arc<dyn SourceCatalog>,
     pub events: Arc<dyn Events>,
     pub device: DeviceService,
+    /// 3.0 prototype B: the live companion engine hosted in this process (idle unless started).
+    pub live: Arc<super::live_host::LiveHost>,
     pub(crate) gallery: GalleryState,
     pub app_version: String,
     pub media_base: Mutex<String>,
@@ -101,7 +105,8 @@ impl App {
         lib.set_splash_version(backends.media.splash_version());
         // COOLERSCREEN_BLOCK_MEDIA_DURING_UPLOAD=1: 1.2's full block (fallback if uploads stall on hardware).
         let policy = if std::env::var("COOLERSCREEN_BLOCK_MEDIA_DURING_UPLOAD").is_ok_and(|v| v == "1") { Policy::blocking() } else { Policy::default() };
-        let sched = Scheduler::new(Limits::default(), policy, Arc::new(SinkAdapter(events.clone())));
+        let live = super::live_host::LiveHost::new();
+        let sched = Scheduler::new(Limits::default(), policy, Arc::new(SinkAdapter(events.clone(), live.clone())));
         let app = Arc::new(App {
             lib: lib.clone(),
             settings: settings.clone(),
@@ -110,6 +115,7 @@ impl App {
             sources: backends.sources,
             events: events.clone(),
             device,
+            live,
             gallery: GalleryState::default(),
             app_version: app_version.to_string(),
             media_base: Mutex::new(String::new()),

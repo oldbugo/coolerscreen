@@ -110,6 +110,7 @@ impl App {
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
             "missingNoticeDays": super::gallery::MISSING_NOTICE_DAYS, "notchKey": key, "oldNotchCount": self.old_notch_count(&key),
             "mediaBase": self.media_base.lock().unwrap().clone(), "backend": "rust",
+            "live": { "inApp": s.live_in_app(), "destroyWindow": s.live_destroy_window(), "status": self.live.status() },
         })
     }
 

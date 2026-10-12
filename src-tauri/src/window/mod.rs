@@ -12,7 +12,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{App, Emitter, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{AppHandle, Emitter, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 #[cfg(windows)]
 mod rect;
@@ -32,8 +32,13 @@ pub fn force_close_requested() -> bool {
     FORCE_CLOSE.load(Ordering::SeqCst)
 }
 
+/// Forget a "close anyway" confirmation (the window was hidden to the tray instead of closed).
+pub fn clear_force_close() {
+    FORCE_CLOSE.store(false, Ordering::SeqCst);
+}
+
 /// Builds the main window (hidden; the caller shows it). The caller adds its own `CloseRequested` guard.
-pub fn create(app: &mut App) -> tauri::Result<WebviewWindow> {
+pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let saved = load_saved(app);
     let win = WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
         .title("CoolerScreen")
@@ -95,7 +100,7 @@ fn state_path() -> std::path::PathBuf {
 /// Reads window.json. Anything unreadable, nonsensical or not on a connected monitor gives `None` (default size and
 /// place). Otherwise the rectangle is clamped into the work area of the monitor it mostly sits on. All arithmetic is
 /// in i64 so a corrupt file cannot overflow.
-fn load_saved(app: &App) -> Option<Saved> {
+fn load_saved(app: &AppHandle) -> Option<Saved> {
     let text = std::fs::read_to_string(state_path()).ok()?;
     let mut s = serde_json::from_str::<Saved>(text.trim_start_matches('\u{feff}')).ok()?;
     if !(s.scale.is_finite() && s.scale > 0.4 && s.scale < 8.0) || s.w > 100_000 || s.h > 100_000 {

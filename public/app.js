@@ -2382,6 +2382,24 @@ $('scrSetup').onclick = runSetup;
 $('scrSetupAgain').onclick = runSetup;
 $('aRestore').onclick = runRestore;
 
+// ---------- Settings > Live screen (3.0 prototype B) ----------
+function renderLiveSettings() {
+  const l = (S.app && S.app.live) || {};
+  $('lvOn').checked = !!l.inApp;
+  $('lvDestroy').checked = !!l.destroyWindow;
+  $('lvDestroy').disabled = !l.inApp;
+  const st = l.status || {};
+  $('lvFps').value = String(st.fps >= 45 || !st.fps ? 60 : 30);
+  $('lvMsg').textContent = !l.inApp ? '' : st.deviceHold ? 'Paused while the screen is busy.' : st.paused ? 'Paused from the tray.' : st.connected ? 'Live on the screen.' : 'Connecting to the screen…';
+}
+async function liveSet(patch) {
+  try { S.app = await call('live_set', { patch }); renderLiveSettings(); }
+  catch (e) { toast(e.message, true); renderLiveSettings(); }
+}
+$('lvOn').onchange = () => liveSet({ inApp: $('lvOn').checked });
+$('lvDestroy').onchange = () => liveSet({ destroyWindow: $('lvDestroy').checked });
+$('lvFps').onchange = () => liveSet({ fps: Number($('lvFps').value) });
+
 function fillSettings() {
   const a = S.app;
   if (!a) return;
@@ -2395,6 +2413,7 @@ function fillSettings() {
   renderScreenSettings();
   drawNotch();
   renderSourcesSettings();
+  renderLiveSettings();
 }
 function formMask() {
   return {
