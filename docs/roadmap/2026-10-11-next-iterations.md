@@ -39,6 +39,23 @@ lower with a trimmed FFmpeg build. Faster start, less memory.
 - **Gate:** device parity on hardware, plus measured size and memory. If it fails, stay on
   Electron 1.x and revisit Electrobun or Deno desktop when they mature.
 
+### Performance (user priority for 2.0; measured 2026-10-11)
+Findings: `docs/perf/2026-10-11-performance-investigation.md`. The slowness is pipeline design,
+not language: a single FIFO queue with no priority or cancellation (clicking through 5 clips
+took 65 s and 214 ffmpeg runs for abandoned clips), plus redundant decode/scale work in the
+estimate, loop check and Save as version. A Rust rewrite alone is about neutral. Phase 1 must
+build in, in this order:
+1. Scheduler with priority (selected clip first) and cancellation (kill work for clips the user
+   left); separate limits for CPU encodes, GPU decodes and the exclusive screen upload.
+2. Decode the selection once into raw frames (tag `-color_range pc`), then a two-point size
+   model plus one parallel round for the exact quality; Save as version reuses the winning encode.
+3. New-clip order: loop search first, estimate only the picked loop.
+4. One-pass loop frames (192x108 and 64x36 together); loop cards rendered in parallel at 320x144.
+5. NVDEC/NVENC for HEVC, 4K and long sources and for proxies (detect, fall back to CPU).
+6. Scaler threads (identical output, 1.2–1.8x faster).
+7. Rust/SIMD loop compute and Tauri events last (worth under 1 s).
+Expected: opening a new clip 19–32 s → about 4–10 s; Save as version 7–12 s → about 0.4–2.7 s.
+
 ### Phase 1: port the backend
 - Replace the local HTTP server with Tauri commands and events; the UI's `api()` layer moves
   to `invoke()`, with no visual change. Serve media with Tauri's asset protocol.
