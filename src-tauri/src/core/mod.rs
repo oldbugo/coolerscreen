@@ -2,6 +2,7 @@
 //! interfaces the media (WS2) and sources (WS3) workstreams implement. See docs/v2/api-contract.md.
 pub mod api;
 pub mod app;
+pub mod autostart;
 pub mod commands;
 pub mod device_service;
 pub mod error;

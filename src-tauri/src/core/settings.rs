@@ -35,13 +35,77 @@ impl Settings {
     pub fn sources(&self) -> &Value {
         &self.0["sources"]
     }
+    /// The 3.0 live screen settings (defaults when absent).
+    pub fn live(&self) -> LiveSettings {
+        LiveSettings::from_value(self.0.get("live"))
+    }
     /// Run the live companion inside the app (default off).
     pub fn live_in_app(&self) -> bool {
-        self.0["live"]["inApp"] == true
+        self.live().in_app
     }
-    /// With the live companion in the app: destroy the window (and its WebView) when it is closed to the tray.
+    /// With the live companion in the app: destroy the window (and its WebView) when it is closed to the tray (default on).
     pub fn live_destroy_window(&self) -> bool {
-        self.0["live"]["destroyWindow"] == true
+        self.live().destroy_window
+    }
+}
+
+/// 3.0 live screen (all off or "like 2.0" by default; `destroy_window` is on once live is on, by the user's decision).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveSettings {
+    pub in_app: bool,
+    pub destroy_window: bool,
+    /// Gallery clip (original id) used as the animated background; empty = animated gradient.
+    pub background: String,
+    pub show_seconds: bool,
+    pub music: bool,
+    pub screen_off_on_shutdown: bool,
+    /// "loop" (default: the screen plays its loop clip), "keep" (live keeps running) or "off" (screen off).
+    pub on_sleep: String,
+    pub on_lock: String,
+}
+
+impl Default for LiveSettings {
+    fn default() -> Self {
+        LiveSettings { in_app: false, destroy_window: true, background: String::new(), show_seconds: false, music: false, screen_off_on_shutdown: false, on_sleep: "loop".into(), on_lock: "loop".into() }
+    }
+}
+
+impl LiveSettings {
+    pub fn from_value(v: Option<&Value>) -> LiveSettings {
+        let d = LiveSettings::default();
+        let b = |k: &str, dflt: bool| v.and_then(|x| x.get(k)).and_then(Value::as_bool).unwrap_or(dflt);
+        let mode = |k: &str, dflt: &str| match v.and_then(|x| x.get(k)).and_then(Value::as_str) {
+            Some(m) if ["loop", "keep", "off"].contains(&m) => m.to_string(),
+            _ => dflt.to_string(),
+        };
+        LiveSettings {
+            in_app: b("inApp", d.in_app),
+            destroy_window: b("destroyWindow", d.destroy_window),
+            background: str80(v.and_then(|x| x.get("background")), 80).unwrap_or_default(),
+            show_seconds: b("showSeconds", d.show_seconds),
+            music: b("music", d.music),
+            screen_off_on_shutdown: b("screenOffOnShutdown", d.screen_off_on_shutdown),
+            on_sleep: mode("onSleep", &d.on_sleep),
+            on_lock: mode("onLock", &d.on_lock),
+        }
+    }
+    /// Only the keys that differ from the defaults.
+    pub fn to_min_value(&self) -> Value {
+        let d = LiveSettings::default();
+        let mut m = Map::new();
+        if self.in_app != d.in_app { m.insert("inApp".into(), json!(self.in_app)); }
+        if self.destroy_window != d.destroy_window { m.insert("destroyWindow".into(), json!(self.destroy_window)); }
+        if self.background != d.background { m.insert("background".into(), json!(self.background)); }
+        if self.show_seconds != d.show_seconds { m.insert("showSeconds".into(), json!(self.show_seconds)); }
+        if self.music != d.music { m.insert("music".into(), json!(self.music)); }
+        if self.screen_off_on_shutdown != d.screen_off_on_shutdown { m.insert("screenOffOnShutdown".into(), json!(self.screen_off_on_shutdown)); }
+        if self.on_sleep != d.on_sleep { m.insert("onSleep".into(), json!(self.on_sleep)); }
+        if self.on_lock != d.on_lock { m.insert("onLock".into(), json!(self.on_lock)); }
+        Value::Object(m)
+    }
+    pub fn to_full_value(&self) -> Value {
+        json!({ "inApp": self.in_app, "destroyWindow": self.destroy_window, "background": self.background, "showSeconds": self.show_seconds, "music": self.music,
+            "screenOffOnShutdown": self.screen_off_on_shutdown, "onSleep": self.on_sleep, "onLock": self.on_lock })
     }
 }
 
@@ -216,10 +280,11 @@ pub fn sanitize(s: &Value) -> Settings {
         "sources": clean_sources(s.get("sources")),
     });
     // 3.0 prototype B: written only when switched on, so a settings.json that never used it stays identical to 2.0.
-    let live = s.get("live");
-    let on = |k: &str| live.and_then(|x| x.get(k)) == Some(&Value::Bool(true));
-    if on("inApp") || on("destroyWindow") {
-        out["live"] = json!({ "inApp": on("inApp"), "destroyWindow": on("destroyWindow") });
+    // 3.0 live screen: written only when something differs from the defaults, so a settings.json that never used it stays
+    // identical to 2.0.
+    let live = LiveSettings::from_value(s.get("live")).to_min_value();
+    if !live.as_object().is_none_or(|o| o.is_empty()) {
+        out["live"] = live;
     }
     Settings(out)
 }

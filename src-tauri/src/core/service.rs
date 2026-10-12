@@ -110,7 +110,7 @@ impl App {
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
             "missingNoticeDays": super::gallery::MISSING_NOTICE_DAYS, "notchKey": key, "oldNotchCount": self.old_notch_count(&key),
             "mediaBase": self.media_base.lock().unwrap().clone(), "backend": "rust",
-            "live": { "inApp": s.live_in_app(), "destroyWindow": s.live_destroy_window(), "status": self.live.status() },
+            "live": { "settings": s.live().to_full_value(), "status": self.live.status(), "autostart": super::autostart::is_on() },
         })
     }
 
@@ -976,4 +976,25 @@ pub fn encode_uri_component(s: &str) -> String {
         }
     }
     out
+}
+
+impl App {
+    /// The live engine's config for this app: companion.json (fps, ...) with the app's live settings on top
+    /// (show seconds; the background clip is a Gallery clip chosen in Settings, resolved to its file).
+    pub fn live_config(&self) -> crate::live::Config {
+        let l = self.settings.load().live();
+        let mut c = crate::live::Config::load();
+        c.show_seconds = l.show_seconds;
+        c.background = if l.background.is_empty() {
+            None
+        } else {
+            self.lib
+                .read_original(&l.background)
+                .filter(|o| !truthy(o.get("isImage")))
+                .and_then(|o| self.lib.source_path(&o))
+                .map(|p| p.to_string_lossy().to_string())
+        };
+        // TODO(engine): c.music = l.music once the now-playing widget has a config switch.
+        c
+    }
 }

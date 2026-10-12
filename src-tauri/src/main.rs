@@ -19,6 +19,8 @@ struct Media(#[allow(dead_code)] Mutex<Option<MediaServer>>);
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let measure = live_measure::parse(&args);
+    // `--tray` (the Windows start-up entry): no window, live on, icon in the tray.
+    let tray_only = args.iter().any(|a| a == cs_core::core::autostart::TRAY_FLAG);
     if let Some(m) = &measure {
         // Measuring without the screen must not touch USB at all (the page checks the screen when it starts).
         if m.no_device && std::env::var_os("COOLERSCREEN_FAKE_DEVICE").is_none() {
@@ -84,7 +86,9 @@ fn main() {
             if let Ok(res) = app.path().resource_dir() {
                 app.state::<Core>().0.device.set_scripts_dir(res.join("scripts"));
             }
-            live_app::create_window(app.handle(), true)?;
+            if !tray_only {
+                live_app::create_window(app.handle(), true)?;
+            }
             let c = app.state::<Core>().0.clone();
             let resolver_app = c.clone();
             match MediaServer::start(Arc::new(move |p: &str, q: &str| resolver_app.resolve_media(p, q))) {
@@ -106,8 +110,8 @@ fn main() {
             if let Some(o) = measure.take() {
                 live_app::ensure_tray(app.handle(), false);
                 live_measure::spawn(app.handle().clone(), o);
-            } else if c.settings.load().live_in_app() {
-                live_app::apply(app.handle());
+            } else if tray_only || c.settings.load().live_in_app() {
+                live_app::apply(app.handle(), tray_only);
             }
             Ok(())
         })

@@ -5,8 +5,9 @@
 //! Nothing starts with Windows and nothing runs unless the setting is on.
 use cs_core::core::commands::Core;
 use cs_core::core::error::CoreError;
-use cs_core::core::live_host::LiveHost;
-use serde_json::{json, Value};
+use cs_core::core::live_host::{LiveHost, LOCK, SLEEP};
+use cs_core::core::settings::LiveSettings;
+use serde_json::Value;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -20,6 +21,12 @@ const PAUSE_TEXT: &str = "Pause live (screen shows its normal clip)";
 static TRAY_ON: AtomicBool = AtomicBool::new(false);
 static HOST: OnceLock<Arc<LiveHost>> = OnceLock::new();
 static IDS: Mutex<Option<Ids>> = Mutex::new(None);
+/// The live settings as last applied (the session window's procedure has no other way to reach them).
+static CFG: Mutex<Option<LiveSettings>> = Mutex::new(None);
+
+fn cfg() -> LiveSettings {
+    CFG.lock().unwrap().clone().unwrap_or_default()
+}
 
 #[derive(Clone)]
 struct Ids {
@@ -131,13 +138,41 @@ fn icon(app: &AppHandle) -> tray_icon::Icon {
 
 unsafe extern "system" fn session_proc(hwnd: *mut core::ffi::c_void, msg: u32, wp: usize, lp: isize) -> isize {
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
+    const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
     match msg {
         WM_QUERYENDSESSION => 1,
         WM_ENDSESSION => {
-            // Logoff / shutdown: end the stream so the screen plays its loop clip.
+            // Logoff / shutdown: end the stream (loop clip by default; screen off if the user chose that).
             if wp != 0 {
                 if let Some(h) = HOST.get() {
-                    h.stop();
+                    if cfg().screen_off_on_shutdown {
+                        h.stop_screen_off();
+                    } else {
+                        h.stop();
+                    }
+                }
+            }
+            0
+        }
+        WM_POWERBROADCAST => {
+            if let Some(h) = HOST.get() {
+                match wp as u32 {
+                    PBT_APMSUSPEND if cfg().on_sleep != "keep" => h.hold(SLEEP, std::time::Duration::from_millis(2500)), // TODO(engine): "off" = ScreenOff ending
+                    PBT_APMRESUMEAUTOMATIC | PBT_APMRESUMESUSPEND => h.release(SLEEP, std::time::Duration::from_secs(3)), // the screen may re-enumerate: the engine reconnects with backoff
+                    _ => {}
+                }
+            }
+            1
+        }
+        WM_WTSSESSION_CHANGE => {
+            if let Some(h) = HOST.get() {
+                let h = h.clone();
+                match wp as u32 {
+                    7 if cfg().on_lock != "keep" => {
+                        std::thread::spawn(move || h.hold(LOCK, std::time::Duration::from_secs(3)));
+                    }
+                    8 => h.release(LOCK, std::time::Duration::from_secs(1)),
+                    _ => {}
                 }
             }
             0
@@ -154,7 +189,10 @@ fn make_session_window() {
         let class: Vec<u16> = "CoolerScreenLiveHost\0".encode_utf16().collect();
         let wc = WNDCLASSW { lpfnWndProc: Some(session_proc), lpszClassName: class.as_ptr(), ..std::mem::zeroed() };
         RegisterClassW(&wc);
-        CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null());
+        let hwnd = CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 0, 0, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null());
+        if !hwnd.is_null() {
+            windows_sys::Win32::System::RemoteDesktop::WTSRegisterSessionNotification(hwnd, 0); // lock / unlock of this session
+        }
     });
 }
 
@@ -238,13 +276,14 @@ pub fn quit_app(app: &AppHandle) {
 
 /// Make the running app match the settings: on = live engine + tray; off = both gone and the window brought back.
 /// Starting live does not block (the engine connects on its own threads); stopping waits for the stream to end.
-pub fn apply(app: &AppHandle) {
+pub fn apply(app: &AppHandle, force: bool) {
     let core = app.state::<Core>().0.clone();
-    let on = core.settings.load().live_in_app();
+    let l = core.settings.load().live();
+    *CFG.lock().unwrap() = Some(l.clone());
     let _ = HOST.set(core.live.clone());
-    if on {
+    if l.in_app || force {
         ensure_tray(app, true);
-        core.live.start();
+        core.live.start_with(core.live_config());
     } else {
         let a = app.clone();
         std::thread::spawn(move || {
@@ -276,34 +315,46 @@ pub fn ensure_tray(app: &AppHandle, wait: bool) {
 
 // ---------------------------------------------------------------- commands (Settings page)
 
-/// `{ inApp?, destroyWindow?, fps?, paused? }` -> app_state (with `live`).
+/// Any of: inApp, destroyWindow, background (Gallery clip id or ""), showSeconds, music, screenOffOnShutdown,
+/// onSleep / onLock ("loop" | "keep" | "off"), fps (30 | 60), paused, autostart -> app_state (with `live`).
 #[tauri::command]
 pub async fn live_set(app: AppHandle, core: tauri::State<'_, Core>, patch: Value) -> Result<Value, CoreError> {
     let c = core.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut change_app = false;
-        c.settings
-            .update(|s| {
-                let mut live = s.get("live").cloned().filter(Value::is_object).unwrap_or(json!({}));
-                for k in ["inApp", "destroyWindow"] {
-                    if let Some(b) = patch.get(k).and_then(Value::as_bool) {
-                        if live.get(k).and_then(Value::as_bool) != Some(b) && k == "inApp" {
-                            change_app = true;
-                        }
-                        live[k] = json!(b);
-                    }
-                }
-                s["live"] = live;
-            })
-            .map_err(|e| CoreError::new(e.to_string()))?;
+        let before = c.settings.load().live();
+        let mut now = before.clone();
+        let b = |k: &str| patch.get(k).and_then(Value::as_bool);
+        let s = |k: &str| patch.get(k).and_then(Value::as_str);
+        if let Some(v) = b("inApp") { now.in_app = v; }
+        if let Some(v) = b("destroyWindow") { now.destroy_window = v; }
+        if let Some(v) = b("showSeconds") { now.show_seconds = v; }
+        if let Some(v) = b("music") { now.music = v; }
+        if let Some(v) = b("screenOffOnShutdown") { now.screen_off_on_shutdown = v; }
+        if let Some(v) = s("background") { now.background = v.chars().take(80).collect(); }
+        if let Some(v) = s("onSleep").filter(|v| ["loop", "keep", "off"].contains(v)) { now.on_sleep = v.into(); }
+        if let Some(v) = s("onLock").filter(|v| ["loop", "keep", "off"].contains(v)) { now.on_lock = v.into(); }
+        let full = now.to_full_value();
+        c.settings.update(|st| st["live"] = full).map_err(|e| CoreError::new(e.to_string()))?;
+        *CFG.lock().unwrap() = Some(now.clone());
         if let Some(f) = patch.get("fps").and_then(Value::as_u64) {
             c.live.set_fps(f as u32);
         }
-        if let Some(p) = patch.get("paused").and_then(Value::as_bool) {
+        if let Some(p) = b("paused") {
             c.live.set_user_paused(p);
         }
-        if change_app {
-            apply(&app);
+        if let Some(on) = b("autostart") {
+            if !cs_core::core::autostart::set(on) {
+                return Err(CoreError::new("Windows would not let CoolerScreen change its start-up entry."));
+            }
+        }
+        if now.in_app != before.in_app {
+            apply(&app, false);
+        } else if c.live.running() {
+            c.live.set_show_seconds(now.show_seconds);
+            if now.background != before.background {
+                // TODO(engine): switch the background at runtime; for now the stream restarts (about a second of loop clip).
+                c.live.restart_with(c.live_config());
+            }
         }
         refresh_tray(&app);
         Ok(c.app_state())
