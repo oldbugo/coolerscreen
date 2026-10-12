@@ -13,7 +13,7 @@ const MAX_FRAMES: usize = 7200;
 const KEEPALIVE: Duration = Duration::from_millis(1500);
 
 /// 5x7 glyphs, one row per byte (bit 4 = leftmost column).
-fn glyph(c: char) -> [u8; 7] {
+pub(crate) fn glyph(c: char) -> [u8; 7] {
     match c {
         '0' => [14, 17, 19, 21, 25, 17, 14],
         '1' => [4, 12, 4, 4, 4, 4, 14],
@@ -30,20 +30,41 @@ fn glyph(c: char) -> [u8; 7] {
         'F' => [31, 16, 16, 30, 16, 16, 16],
         'T' => [31, 4, 4, 4, 4, 4, 4],
         'S' => [15, 16, 16, 14, 1, 1, 30],
+        'A' => [14, 17, 17, 31, 17, 17, 17],
+        'B' => [30, 17, 17, 30, 17, 17, 30],
+        'C' => [14, 17, 16, 16, 16, 17, 14],
+        'D' => [30, 17, 17, 17, 17, 17, 30],
+        'E' => [31, 16, 16, 30, 16, 16, 31],
+        'G' => [14, 17, 16, 23, 17, 17, 15],
+        'H' => [17, 17, 17, 31, 17, 17, 17],
+        'I' => [14, 4, 4, 4, 4, 4, 14],
+        'K' => [17, 18, 20, 24, 20, 18, 17],
+        'L' => [16, 16, 16, 16, 16, 16, 31],
+        'M' => [17, 27, 21, 21, 17, 17, 17],
+        'N' => [17, 17, 25, 21, 19, 17, 17],
+        'O' => [14, 17, 17, 17, 17, 17, 14],
+        'P' => [30, 17, 17, 30, 16, 16, 16],
+        'R' => [30, 17, 17, 30, 20, 18, 17],
+        'U' => [17, 17, 17, 17, 17, 17, 14],
+        'V' => [17, 17, 17, 17, 17, 10, 4],
+        'W' => [17, 17, 17, 21, 21, 27, 17],
+        'X' => [17, 17, 10, 4, 10, 17, 17],
+        'Y' => [17, 17, 10, 4, 4, 4, 4],
+        '-' => [0, 0, 0, 31, 0, 0, 0],
         _ => [0; 7],
     }
 }
 
 /// Landscape RGB canvas, scaled from the 2400x1080 design by `k`.
-struct Canvas {
-    w: usize,
-    h: usize,
-    k: f64,
-    rgb: Vec<u8>,
+pub(crate) struct Canvas {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) k: f64,
+    pub(crate) rgb: Vec<u8>,
 }
 
 impl Canvas {
-    fn u(&self, v: usize) -> usize {
+    pub(crate) fn u(&self, v: usize) -> usize {
         ((v as f64 * self.k).round() as usize).max(1)
     }
 
@@ -79,12 +100,12 @@ impl Canvas {
     }
 
     #[inline]
-    fn set(&mut self, x: usize, y: usize, p: [u8; 3]) {
+    pub(crate) fn set(&mut self, x: usize, y: usize, p: [u8; 3]) {
         let i = (y * self.w + x) * 3;
         self.rgb[i..i + 3].copy_from_slice(&p);
     }
 
-    fn rect(&mut self, x0: usize, y0: usize, w: usize, h: usize, p: [u8; 3]) {
+    pub(crate) fn rect(&mut self, x0: usize, y0: usize, w: usize, h: usize, p: [u8; 3]) {
         for y in y0..(y0 + h).min(self.h) {
             for x in x0..(x0 + w).min(self.w) {
                 self.set(x, y, p);
@@ -93,7 +114,7 @@ impl Canvas {
     }
 
     /// Text at design coordinates, `s` design px per glyph pixel, black on a white box.
-    fn text(&mut self, x0: usize, y0: usize, s: usize, text: &str) {
+    pub(crate) fn text(&mut self, x0: usize, y0: usize, s: usize, text: &str) {
         let (x0, y0, s) = (self.u(x0), self.u(y0), self.u(s));
         let w = text.chars().count() * 6 * s + 2 * s;
         self.rect(x0, y0, w, 9 * s, [255; 3]);
@@ -109,7 +130,7 @@ impl Canvas {
     }
 
     /// (width, height, RGB), landscape as is, or rotated 90 deg clockwise (ffmpeg transpose=1: x -> row, y -> column h-1-y).
-    fn pixels(&self, portrait: bool) -> (usize, usize, Vec<u8>) {
+    pub(crate) fn pixels(&self, portrait: bool) -> (usize, usize, Vec<u8>) {
         if !portrait {
             return (self.w, self.h, self.rgb.clone());
         }
@@ -126,7 +147,7 @@ impl Canvas {
 }
 
 /// Baseline JPEG at `start_q`, stepping down by 2 until it is at most `max_bytes` (the vendor's rule). Returns (jpeg, quality).
-fn encode_fit(w: usize, h: usize, rgb: &[u8], start_q: u8, max_bytes: usize) -> Result<(Vec<u8>, u8), String> {
+pub(crate) fn encode_fit(w: usize, h: usize, rgb: &[u8], start_q: u8, max_bytes: usize) -> Result<(Vec<u8>, u8), String> {
     let mut q = start_q;
     loop {
         let mut out = Vec::with_capacity(max_bytes);
@@ -143,7 +164,7 @@ fn encode_fit(w: usize, h: usize, rgb: &[u8], start_q: u8, max_bytes: usize) -> 
 }
 
 /// Live-mode frame: u32LE length | JPEG | u16LE sum of (length bytes + JPEG bytes).
-fn wrap_frame(jpeg: &[u8]) -> Vec<u8> {
+pub(crate) fn wrap_frame(jpeg: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(jpeg.len() + 6);
     v.extend_from_slice(&(jpeg.len() as u32).to_le_bytes());
     v.extend_from_slice(jpeg);
@@ -400,5 +421,51 @@ mod tests {
     #[test]
     fn enter_live_frame_matches_vendor_bytes() {
         assert_eq!(frame::frame(0x11, &[]), vec![0x55, 0xaa, 0x07, 0x00, 0x11, 0x17, 0x01]);
+    }
+}
+
+/// `cs2 wake`: display on (0x0E [1]), then play the loop clip (0x14 [1,0]). Fixes the black screen after a live stream.
+pub fn wake() -> i32 {
+    let r = (|| -> Result<(), String> {
+        let mut scr = device::Screen::open_usb().map_err(|e| e.to_string())?;
+        scr.recovery_raw(&frame::frame(0x0e, &[1])).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(200));
+        scr.recovery_raw(&frame::frame(0x14, &[1, 0])).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(500));
+        scr.close();
+        Ok(())
+    })();
+    match r {
+        Ok(()) => { println!("display on, loop clip playing"); 0 }
+        Err(e) => { eprintln!("wake failed: {e}"); 1 }
+    }
+}
+
+impl Canvas {
+    /// Plain landscape canvas (2400x1080 design, scaled by `k`) filled with one colour.
+    pub(crate) fn blank(k: f64, fill: [u8; 3]) -> Canvas {
+        let w = ((2400.0 * k / 2.0).round() as usize) * 2;
+        let h = ((1080.0 * k / 2.0).round() as usize) * 2;
+        let mut c = Canvas { w, h, k, rgb: vec![0; w * h * 3] };
+        c.rect(0, 0, w, h, fill);
+        c
+    }
+
+    /// Filled rectangle in design coordinates.
+    pub(crate) fn drect(&mut self, x: usize, y: usize, w: usize, h: usize, p: [u8; 3]) {
+        let (x, y, w, h) = (self.u(x), self.u(y), self.u(w), self.u(h));
+        self.rect(x, y, w, h, p);
+    }
+
+    /// Arrow pointing up (design coordinates): triangle head, rectangular shaft.
+    pub(crate) fn arrow_up(&mut self, cx: usize, top: usize, head_h: usize, half_w: usize, shaft_w: usize, shaft_h: usize, p: [u8; 3]) {
+        let (cx, top, hh, hw) = (self.u(cx), self.u(top), self.u(head_h), self.u(half_w));
+        for r in 0..hh {
+            let half = hw * (r + 1) / hh;
+            self.rect(cx - half, top + r, 2 * half, 1, p);
+        }
+        let sw = self.u(shaft_w);
+        let sh = self.u(shaft_h);
+        self.rect(cx - sw / 2, top + hh, sw, sh, p);
     }
 }
