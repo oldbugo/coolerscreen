@@ -48,6 +48,8 @@
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  ; The opt-in "Start CoolerScreen when Windows starts" entry (Settings > Live screen) must not outlive the app.
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "CoolerScreen"
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

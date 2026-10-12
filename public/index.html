@@ -128,18 +128,32 @@
       </section>
 
       <section id="setLive" aria-labelledby="hLive">
-        <h3 id="hLive">Live screen (experimental)</h3>
-        <p class="muted small">Off by default. When on, closing the window keeps CoolerScreen in the tray (look for its icon near the clock) and the screen shows a live clock and PC stats. Use Quit in the tray menu to end it; the screen then plays its normal clip again. Sending a clip or restarting the screen pauses live and brings it back afterwards.</p>
+        <h3 id="hLive">Live screen</h3>
+        <p class="muted small">Off by default. When on, the screen shows a live clock and PC stats drawn by CoolerScreen. Closing the window then keeps CoolerScreen running in the tray (the icon near the clock); use Quit in its menu to end it, and the screen goes back to its normal clip. Sending a clip or restarting the screen pauses live and brings it back afterwards.</p>
         <div class="src-row">
-          <div class="src-top"><label for="lvOn" class="src-name">Show live stats on the screen</label><input type="checkbox" id="lvOn" role="switch"></div>
+          <div class="src-top"><label for="lvOn" class="src-name">Show live information on the screen</label><input type="checkbox" id="lvOn" role="switch"></div>
+          <p id="lvMsg" class="muted small" role="status"></p>
         </div>
-        <div class="src-row">
-          <div class="src-top"><label for="lvDestroy" class="src-name">Free the window's memory while it is in the tray</label><input type="checkbox" id="lvDestroy" role="switch"></div>
-          <p class="muted small">Uses less memory; the window takes a moment longer to come back.</p>
+        <div id="lvOpts">
+          <div class="field"><label for="lvFps">Smoothness</label>
+            <select id="lvFps"><option value="60">60 frames per second</option><option value="30">30 frames per second</option></select></div>
+          <div class="field"><label for="lvBg">Background</label>
+            <select id="lvBg"></select>
+            <img id="lvBgThumb" class="lv-thumb" alt="" hidden>
+            <p class="muted small">A clip from your Gallery plays behind the clock. Plain uses a slowly moving colour background.</p></div>
+          <div class="src-row"><div class="src-top"><label for="lvSec" class="src-name">Show seconds on the clock</label><input type="checkbox" id="lvSec" role="switch"></div></div>
+          <div class="src-row"><div class="src-top"><label for="lvMusic" class="src-name">Show the music that is playing</label><input type="checkbox" id="lvMusic" role="switch"></div></div>
+          <div class="src-row"><div class="src-top"><label for="lvDestroy" class="src-name">Free memory when the window is closed</label><input type="checkbox" id="lvDestroy" role="switch"></div>
+            <p class="muted small">Recommended. The window takes a moment longer to come back from the tray.</p></div>
+          <div class="field"><label for="lvSleep">When the PC goes to sleep</label>
+            <select id="lvSleep"><option value="loop">Show the normal clip</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
+          <div class="field"><label for="lvLock">When the PC is locked</label>
+            <select id="lvLock"><option value="loop">Show the normal clip</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
+          <div class="src-row"><div class="src-top"><label for="lvShut" class="src-name">Turn the screen off when the PC shuts down</label><input type="checkbox" id="lvShut" role="switch"></div>
+            <p class="muted small">Off: the screen keeps playing its normal clip.</p></div>
+          <div class="src-row"><div class="src-top"><label for="lvAuto" class="src-name">Start CoolerScreen when Windows starts</label><input type="checkbox" id="lvAuto" role="switch"></div>
+            <p class="muted small">It starts hidden in the tray. Turn this off any time; uninstalling also removes it.</p></div>
         </div>
-        <div class="field"><label for="lvFps">Frames per second</label>
-          <select id="lvFps"><option value="60">60</option><option value="30">30</option></select></div>
-        <p id="lvMsg" class="muted small" role="status"></p>
       </section>
 
       <section id="setAdvanced" aria-labelledby="hAdv">

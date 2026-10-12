@@ -123,6 +123,23 @@ The bar at the top shows the screen's status and what is **on screen now**; the 
 
 Settings and versions live in `%APPDATA%\CoolerScreen\`; your original clips are in the Gallery folder.
 
+### Live screen (3.0, optional, off by default)
+
+Settings > **Live screen** makes the screen show a live clock and PC stats (CPU, memory, graphics card) drawn by
+CoolerScreen, over a moving background or a clip from your Gallery. Nothing changes until you turn it on.
+
+- With it on, closing the window leaves CoolerScreen running in the tray (the icon near the clock). Its menu has Open,
+  Pause, 30 / 60 frames per second (60 by default) and **Quit**. Quit stops live and the screen plays its normal clip again.
+  "Free memory when the window is closed" (on by default once live is on) removes the window completely while it is in the
+  tray, so the app uses about 40 MB instead of about 250 MB.
+- Sending a clip, restarting or checking the screen pauses live and brings it back afterwards (the screen can only talk to
+  one program at a time).
+- Extra choices, all off or "normal clip" by default: start CoolerScreen hidden in the tray when Windows starts (a
+  start-up entry that you can turn off here, in Task Manager > Startup, and that uninstalling removes); turn the screen off
+  when the PC shuts down; and what the screen does when the PC sleeps or is locked (show its normal clip, keep live
+  running, or turn off).
+- Startup from a shortcut or script: `CoolerScreen.exe --tray` starts hidden in the tray with live on.
+
 
 ## Undo / restore the original driver
 

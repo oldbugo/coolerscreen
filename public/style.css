@@ -394,3 +394,4 @@ summary h3 { display: inline; color: var(--text); }
 .toast.show { opacity: 1; }
 .toast.bad { border-color: var(--danger); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+.lv-thumb { display: block; max-width: 160px; max-height: 90px; margin-top: 8px; border-radius: 6px; }

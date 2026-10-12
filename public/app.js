@@ -2382,23 +2382,50 @@ $('scrSetup').onclick = runSetup;
 $('scrSetupAgain').onclick = runSetup;
 $('aRestore').onclick = runRestore;
 
-// ---------- Settings > Live screen (3.0 prototype B) ----------
+// ---------- Settings > Live screen ----------
 function renderLiveSettings() {
   const l = (S.app && S.app.live) || {};
-  $('lvOn').checked = !!l.inApp;
-  $('lvDestroy').checked = !!l.destroyWindow;
-  $('lvDestroy').disabled = !l.inApp;
+  const c = l.settings || {};
   const st = l.status || {};
+  $('lvOn').checked = !!c.inApp;
   $('lvFps').value = String(st.fps >= 45 || !st.fps ? 60 : 30);
-  $('lvMsg').textContent = !l.inApp ? '' : st.deviceHold ? 'Paused while the screen is busy.' : st.paused ? 'Paused from the tray.' : st.connected ? 'Live on the screen.' : 'Connecting to the screen…';
+  const bg = $('lvBg');
+  bg.textContent = '';
+  bg.append(el('option', { value: '', text: 'Plain (moving colours)' }));
+  const clips = (S.originals || []).filter(o => !o.isImage);
+  for (const o of clips) bg.append(el('option', { value: o.id, text: o.name }));
+  if (c.background && !clips.some(o => o.id === c.background)) bg.append(el('option', { value: c.background, text: '(clip no longer in the Gallery)' }));
+  bg.value = c.background || '';
+  const cur = clips.find(o => o.id === c.background);
+  const th = $('lvBgThumb');
+  if (cur && cur.assets === 'ready') { th.src = backend.mediaUrl(cur.id, 'thumb.jpg') + `?r=${encodeURIComponent(cur.created)}`; th.hidden = false; } else { th.removeAttribute('src'); th.hidden = true; }
+  $('lvSec').checked = !!c.showSeconds;
+  $('lvMusic').checked = !!c.music;
+  $('lvDestroy').checked = c.destroyWindow !== false;
+  $('lvSleep').value = c.onSleep || 'loop';
+  $('lvLock').value = c.onLock || 'loop';
+  $('lvShut').checked = !!c.screenOffOnShutdown;
+  $('lvAuto').checked = !!l.autostart;
+  $('lvAuto').disabled = !c.inApp && !l.autostart;
+  for (const id of ['lvFps', 'lvBg', 'lvSec', 'lvMusic', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut']) $(id).disabled = !c.inApp;
+  $('lvMsg').textContent = !c.inApp ? '' : st.deviceHold ? 'Paused while the screen is busy.' : st.systemHold ? 'Paused while the PC sleeps or is locked.' : st.paused ? 'Paused from the tray.' : st.connected ? 'Live on the screen.' : 'Connecting to the screen…';
 }
 async function liveSet(patch) {
-  try { S.app = await call('live_set', { patch }); renderLiveSettings(); }
-  catch (e) { toast(e.message, true); renderLiveSettings(); }
+  try { S.app = await call('live_set', { patch }); }
+  catch (e) { toast(e.message, true); }
+  renderLiveSettings();
 }
-$('lvOn').onchange = () => liveSet({ inApp: $('lvOn').checked });
-$('lvDestroy').onchange = () => liveSet({ destroyWindow: $('lvDestroy').checked });
-$('lvFps').onchange = () => liveSet({ fps: Number($('lvFps').value) });
+const liveBind = (id, key, get) => { $(id).onchange = () => liveSet({ [key]: get($(id)) }); };
+liveBind('lvOn', 'inApp', e => e.checked);
+liveBind('lvFps', 'fps', e => Number(e.value));
+liveBind('lvBg', 'background', e => e.value);
+liveBind('lvSec', 'showSeconds', e => e.checked);
+liveBind('lvMusic', 'music', e => e.checked);
+liveBind('lvDestroy', 'destroyWindow', e => e.checked);
+liveBind('lvSleep', 'onSleep', e => e.value);
+liveBind('lvLock', 'onLock', e => e.value);
+liveBind('lvShut', 'screenOffOnShutdown', e => e.checked);
+liveBind('lvAuto', 'autostart', e => e.checked);
 
 function fillSettings() {
   const a = S.app;
