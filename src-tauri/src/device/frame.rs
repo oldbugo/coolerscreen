@@ -6,6 +6,9 @@ use serde_json::{json, Value};
 pub const STATUS_KEY: u8 = 0x22;
 /// Count of status frames skipped by `Parser` (read by the `cs2 live-test` spike).
 pub static STATUS_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Raw bytes and transfers read from bulk IN 0x81 by the WinUSB reader thread (the live-test spike uses these to show whether the screen says anything at all).
+pub static IN_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static IN_TRANSFERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Longest frame accepted from the screen (its replies are small JSON objects; info is ~400 bytes).
 pub const MAX_FRAME: usize = 8 * 1024;
 

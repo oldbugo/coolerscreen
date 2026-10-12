@@ -73,6 +73,8 @@ impl UsbLink {
                 let Some(c) = inp.wait_next_complete(Duration::from_millis(100)) else { continue };
                 match c.status {
                     Ok(()) => {
+                        super::frame::IN_BYTES.fetch_add(c.buffer.len() as u64, Ordering::Relaxed);
+                        super::frame::IN_TRANSFERS.fetch_add(1, Ordering::Relaxed);
                         for m in parser.push(&c.buffer[..]) {
                             let _ = tx.send(m);
                         }

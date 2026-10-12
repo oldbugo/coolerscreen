@@ -4,7 +4,7 @@
 //!   cs2 upload <file> [--intro]   upload an MJPEG .mp4 to the loop slot (0x13; --intro: 0x12), then restart and check
 //!   cs2 restart                   restart the screen and wait for it to come back
 //!   cs2 poll <count> <seconds>    info every <seconds>, <count> times
-//!   cs2 live-test [--frames N] [--quality Q] [--image f.jpg] [--fps F] [--dry-run]   3.0 live-mode spike (bin/cs2/live.rs)
+//!   cs2 live-test [--frames N | --seconds S --fps F] [--orient landscape|portrait] [--scale 0.7] [--quality 100] [--set-sleep-delay] [--set-brightness] [--dry-run]   3.0 live-mode spike (bin/cs2/live.rs)
 use cs_core::device::{self, ops, Slot};
 use std::time::Instant;
 
@@ -89,7 +89,7 @@ fn main() {
         Some("recover-race-delete") => recovery::race_delete(),
         Some("delete-ota") => recovery::delete_ota(),
         _ => {
-            eprintln!("usage: cs2 info | state | restart | upload <file.mp4> [--intro] | poll <count> <seconds> | live-test [--frames N] [--quality Q] [--image f.jpg] [--fps F] [--dry-run]");
+            eprintln!("usage: cs2 info | state | restart | upload <file.mp4> [--intro] | poll <count> <seconds> | live-test [--frames N | --seconds S --fps F] [--orient landscape|portrait] [--scale 0.7] [--quality 100] [--set-sleep-delay] [--set-brightness] [--dry-run]");
             eprintln!("       cs2 unstick | recover-race-delete | delete-ota   (recovery tools, see tools/README.md)");
             eprintln!("       cs2 core-check | core-state | core-restart [--real] | core-send <library>/<oid>/versions/<vid>  (COOLERSCREEN_HOME = scratch folder, or --real)");
             2
