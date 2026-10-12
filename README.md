@@ -41,7 +41,7 @@ settings are kept).
 CoolerScreen 2.0 is a new engine under the same library; your clips, versions and settings carry over with no migration.
 
 - **A native app instead of Electron + Node:** Rust and the system WebView2. There is no Node server, no browser mode and no
-  bundled Chromium: the download is about a quarter of the size, it starts faster and uses less memory.
+  bundled Chromium: the download is about a quarter of the size and it starts faster (memory use is about the same: most of it is WebView2).
 - **Faster work:** thumbnails, loop search, estimates and conversion run in a Rust media pipeline around ffmpeg, scheduled
   by priority (the clip you are looking at first), several at a time, and cancelled when you move on.
 - **Smoother previews:** previews, loop cards and thumbnails stream from a small local media server, so seeking and looping
@@ -49,6 +49,10 @@ CoolerScreen 2.0 is a new engine under the same library; your clips, versions an
 - **A proper window:** seamless frameless look with Windows 11 Snap Layouts on the maximise button, remembers its size and
   position, and asks inside the app before closing during an upload.
 - **Installer and portable zip**, a real app icon, and the recovery tools bundled as `cs2.exe`.
+- **My clips and Browse** tabs, with filter and sort; Browse lists the clips you already have first.
+- **Smarter loops:** the loop finder scores every start and end as it will look on the screen, with a cross-fade where
+  nothing repeats exactly (random particles, rain); loops are found in the background as soon as a clip arrives.
+- **Automatic Wallpaper Engine recording:** stops once it holds a seamless loop, otherwise records 2 minutes.
 - **Sources:** same built-in sources; plug-ins are now declarative `.json` files (no code), see [docs/sources.md](docs/sources.md).
 - Gone: the browser fallback (`npm start`), the Electron app, the `coolerscreen` command line (use the app, or `cs2.exe` for
   recovery).

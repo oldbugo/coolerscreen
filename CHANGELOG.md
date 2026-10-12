@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 - 2026-10-11
+## 2.0.0 - 2026-10-12
 
 A new engine under the same library: CoolerScreen is now a native Windows app (Rust + the system WebView2) instead of
 Electron + Node. Your clips, versions and settings are used as they are, with no migration.
@@ -21,6 +21,17 @@ Electron + Node. Your clips, versions and settings are used as they are, with no
 - **Recovery tools** are part of the app package as `cs2.exe` (`info`, `restart`, `unstick`, `recover-race-delete`,
   `delete-ota`); the 1.x Node tools and the command-line `bin/coolerscreen.js` were removed.
 - Shutting the app down cancels all queued and running jobs and stops their ffmpeg processes.
+- **My clips and Browse** are separate tabs: My clips (your clips, with name filter and sort) and Browse (enabled
+  sources, clips you already have first, filter / show / refresh). Cards never reorder while something downloads.
+- **Loop finder sees what the screen will show:** every start is compared with every end (no sampling) and each pair
+  is scored as a hard cut or with the best cross-fade (1/3 to 1.5 s), counting the part of the picture that would
+  show a double image during the fade. Labels: Seamless, Seamless fade, Soft fade, Nearly seamless, Small jump.
+  Results from the old search are redone when a clip is opened.
+- **Wallpaper Engine recording is automatic by default:** it stops once the recording holds a seamless loop (30 s to
+  2 min), otherwise records 2 min; fixed lengths up to 3 min. Scenes with random effects (rain, fireflies, particles)
+  never repeat exactly, so they get a cross-fade.
+- **Loops are found as soon as a clip arrives** (added, downloaded, recorded or imported), in the background; opening
+  the clip joins that search.
 
 ## 1.2.0 - 2026-10-11
 
