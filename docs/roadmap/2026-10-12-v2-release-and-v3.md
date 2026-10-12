@@ -109,3 +109,17 @@ with `cs2 live-test` on the user's screen (fw 3.6). User saw the counter picture
 - No raw-JPEG mode: bare JPEG bytes are ignored.
 - Sensors in the vendor app: bundled `HWiNFO64.dll` via a .NET helper writing JSON to `%TEMP%\LOVINGCOOL_MONITOR_INTERNAL.bin`.
   Music: Windows SMTC (vendor feature disabled for this brand).
+
+### Live-mode trials, round 2 (2026-10-12)
+
+- **Orientation solved:** frames must be portrait 756x1680 — landscape content rotated 90° clockwise (like the clips).
+  User: "Correct: readable, right way up", fills the screen, all edge words readable.
+- **Tearing is a panel limit:** user: "The line running left to right is always smooth, the line running top to bottom
+  is always tearing" (at 15–60 fps). The panel has no vsync for live frames; motion along the landscape vertical axis
+  tears. Design widgets so moving things move sideways (or fade), not up/down. Vendor default is 30 fps, ≤ 200 KB.
+- **Black screen after live solved (measured with `cs2 info` polling):** with the device's previously stored `0x15`
+  value, the display switched off ~57 s after a stream ended (once; a later `0x0E [1]` + `0x14 [1,0]` stayed on for
+  3+ min). After sending the vendor's own `0x15 [00 0A]` once, the display stayed on (86 s and 97 s checks, the second
+  without sending 0x15 again), so the value is stored. Reading: `0x15 [enable=0, 10]` = don't switch off after live.
+  The companion sends `0x15 [00 0A]` on connect like the vendor (2.0 default: the loop keeps playing); an opt-in
+  "turn the screen off N s after the companion stops" setting would send `0x15 [1, N]` (to be verified).
