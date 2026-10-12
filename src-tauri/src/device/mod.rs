@@ -272,3 +272,38 @@ impl Screen {
 }
 
 pub mod ops;
+
+/// Live-mode writes for the 3.0 companion (WinUSB or serial). Frames and the end-of-stream marker are not 55 AA frames,
+/// and live traffic is far too frequent for the per-MB log line `raw` writes, so this path skips it.
+impl Screen {
+    pub fn live_write(&mut self, buf: &[u8]) -> Result<(), DevErr> {
+        for chunk in buf.chunks(CHUNK) {
+            let r = match &mut self.link {
+                Link::Usb(u) => u.write(chunk, WRITE_TIMEOUT),
+                Link::Serial(s) => s.write(chunk, WRITE_TIMEOUT),
+            };
+            r.map_err(|e| DevErr::new(if e == "TIMEOUT" { "The screen stopped accepting data (USB write timed out).".to_string() } else { format!("USB write failed: {e}") }))?;
+            self.sent += chunk.len() as u64;
+        }
+        Ok(())
+    }
+
+    /// The only framed keys live mode sends: 0x11 enter/keepalive, 0x15 [00 0A] (do not switch the display off after
+    /// a live stream, as the vendor app sends on every connect), 0x0E [1] display on, 0x14 [1,0] play the loop clip.
+    pub fn live_key(&mut self, key: u8, payload: &[u8]) -> Result<(), DevErr> {
+        let ok = matches!((key, payload), (0x11, []) | (0x15, [0x00, 0x0a]) | (0x0e, [1]) | (0x14, [1, 0]));
+        if !ok {
+            return Err(DevErr::new(format!("Refusing to send key 0x{key:x} in live mode")));
+        }
+        self.live_write(&frame::frame(key, payload))
+    }
+
+    /// Discard replies the screen sent (acks of 0x11 etc.) so the channel does not grow during a long session.
+    pub fn live_drain(&mut self) -> usize {
+        let mut n = 0;
+        while self.rx.try_recv().is_ok() {
+            n += 1;
+        }
+        n
+    }
+}
