@@ -335,7 +335,7 @@ impl Renderer {
     }
 
     pub fn has_widget(&self, kind: &str) -> bool {
-        self.theme.theme.widgets.iter().any(|w| w.kind == kind)
+        self.theme.theme.widgets.iter().any(|w| w.kind == kind && self.theme.theme.is_visible(w))
     }
 
     /// The background is the stored base (true) or something else (false); the base already contains its `onBase` items.
@@ -385,6 +385,11 @@ impl Renderer {
 
     pub fn has_fonts(&self) -> bool {
         self.fonts.regular.is_some()
+    }
+
+    /// A real background picture is available (a decoded video frame or the preview still).
+    pub fn has_background_frame(&self) -> bool {
+        self.still.is_some() || self.video.as_ref().is_some_and(|v| v.frame().is_some())
     }
 
     pub fn video(&self) -> Option<&VideoBg> {
@@ -561,6 +566,9 @@ impl Renderer {
             self.bars_tick = self.tick;
         }
         for w in &widgets {
+            if !self.theme.theme.is_visible(w) {
+                continue;
+            }
             let on_base = w.on_base && w.can_be_on_base();
             if only_base && !on_base {
                 continue;
@@ -853,5 +861,18 @@ mod tests {
         r.set_handover(Some((HandTarget::Black, 1.0)));
         let f = r.render().0.to_vec();
         assert!(f.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]));
+    }
+
+    #[test]
+    fn hidden_widgets_and_live_layer_off() {
+        let mut t = ThemeLive::new(Theme::default(), PathBuf::new());
+        t.theme.widgets.push(Widget { id: "t".into(), kind: "text".into(), on_base: true, hidden: true, props: serde_json::json!({ "text": "x" }), ..Widget::default() });
+        assert!(crate::live::render_base_overlay(&t).unwrap().is_none());
+        t.theme.widgets.push(Widget { id: "m".into(), kind: "music".into(), ..Widget::default() });
+        t.theme.live_layer = false;
+        let live = crate::live::render_preview(&t, 320, 144, true).unwrap();
+        t.theme.widgets.clear();
+        let base = crate::live::render_preview(&t, 320, 144, true).unwrap();
+        assert_eq!(png_size(&live), png_size(&base));
     }
 }

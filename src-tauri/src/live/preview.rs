@@ -62,9 +62,10 @@ fn preview_background(t: &ThemeLive) -> Option<Arc<Vec<u8>>> {
 /// is cached (the first call per clip runs ffmpeg once, 100-300 ms).
 pub fn render_preview(t: &ThemeLive, w: u32, h: u32, with_live: bool) -> Result<Vec<u8>, String> {
     let (w, h) = (w.clamp(16, 4096), h.clamp(16, 4096));
+    let with_live = with_live && t.theme.live_layer;
     let mut theme = t.clone();
     if !with_live {
-        theme.theme.widgets.retain(|x| x.on_base && x.can_be_on_base());
+        theme.theme.widgets.retain(|x| x.on_base && x.can_be_on_base() && t.theme.is_visible(x));
     }
     let mut r = Renderer::new(Arc::new(Mutex::new(sample_sensors())), None);
     r.set_sample_mode(true);

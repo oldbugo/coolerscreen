@@ -445,6 +445,7 @@ fn diff(a: &StatsSnap, b: &StatsSnap) -> StatsSnap {
         dropped_before_encode: b.dropped_before_encode - a.dropped_before_encode,
         unchanged_skipped: b.unchanged_skipped - a.unchanged_skipped,
         dropped_before_send: b.dropped_before_send - a.dropped_before_send,
+        gradient_frames: b.gradient_frames - a.gradient_frames,
         send_errors: b.send_errors - a.send_errors,
         reconnects: b.reconnects - a.reconnects,
         quality: b.quality,

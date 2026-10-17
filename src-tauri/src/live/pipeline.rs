@@ -80,6 +80,8 @@ pub struct Stats {
     pub dropped_before_encode: AtomicU64,
     pub unchanged_skipped: AtomicU64,
     pub dropped_before_send: AtomicU64,
+    /// Frames drawn on the placeholder gradient although the theme has a clip (only after the start-up wait timed out).
+    pub gradient_frames: AtomicU64,
     pub send_errors: AtomicU64,
     pub reconnects: AtomicU64,
     pub quality: AtomicU32,
@@ -99,6 +101,7 @@ pub struct StatsSnap {
     pub dropped_before_encode: u64,
     pub unchanged_skipped: u64,
     pub dropped_before_send: u64,
+    pub gradient_frames: u64,
     pub send_errors: u64,
     pub reconnects: u64,
     pub quality: u32,
@@ -119,6 +122,7 @@ impl Stats {
             dropped_before_encode: self.dropped_before_encode.load(Relaxed),
             unchanged_skipped: self.unchanged_skipped.load(Relaxed),
             dropped_before_send: self.dropped_before_send.load(Relaxed),
+            gradient_frames: self.gradient_frames.load(Relaxed),
             send_errors: self.send_errors.load(Relaxed),
             reconnects: self.reconnects.load(Relaxed),
             quality: self.quality.load(Relaxed),
@@ -219,6 +223,8 @@ impl Pipeline {
                 let mut force_apply = true;
                 let mut was_active = false;
                 let mut fade_in_start: Option<Instant> = None;
+                let mut fade_pending = false;
+                let mut bg_wait: Option<Instant> = None;
                 let mut hand_start: Option<Instant> = None;
                 while !sh.quit.load(Relaxed) {
                     // Runtime changes (reload_config / set_background / set_fps / set_theme).
@@ -235,7 +241,8 @@ impl Pipeline {
                     }
                     let active = !sh.paused.load(Relaxed) && sh.connected.load(Relaxed);
                     if active && !was_active {
-                        fade_in_start = Some(Instant::now());
+                        fade_pending = true;
+                        bg_wait = None;
                     }
                     was_active = active;
                     if force_apply {
@@ -260,6 +267,7 @@ impl Pipeline {
                         let key = src.map(|(p, portrait)| (p, portrait, cfg.video_decode.clone()));
                         if key != applied_src {
                             applied_src = key;
+                            bg_wait = None;
                             r.set_video(None);
                             video_on = false;
                             let portrait = applied_src.as_ref().is_some_and(|k| k.1);
@@ -303,6 +311,23 @@ impl Pipeline {
                         std::thread::sleep(Duration::from_millis(10));
                         continue;
                     }
+                    // Never show the placeholder gradient when the theme has a clip: hold until the first real background frame
+                    // is decoded (the screen keeps its own loop; keepalives continue), and start the live-layer fade from that
+                    // frame. After BG_WAIT the gradient may be used (decoding failed).
+                    if applied_src.is_some() && !r.has_background_frame() {
+                        let w0 = *bg_wait.get_or_insert_with(Instant::now);
+                        if w0.elapsed() < BG_WAIT {
+                            std::thread::sleep(Duration::from_millis(10));
+                            next = Instant::now();
+                            continue;
+                        }
+                    } else {
+                        bg_wait = None;
+                    }
+                    if fade_pending {
+                        fade_pending = false;
+                        fade_in_start = Some(Instant::now());
+                    }
                     if cfg.notch != "off" && last_mask_check.elapsed() > Duration::from_secs(3) {
                         last_mask_check = Instant::now();
                         r.set_mask(Mask::from_app_settings()); // picks up a notch change made in the app
@@ -332,6 +357,7 @@ impl Pipeline {
                     r.set_live_alpha(alpha);
                     let period = Duration::from_secs_f64(1.0 / sh.fps.load(Relaxed).max(1) as f64);
                     let t = Instant::now();
+                    let on_gradient = applied_src.is_some() && !r.has_background_frame();
                     let (frame, changed) = r.render();
                     let t1 = Instant::now();
                     // Nothing changed since the last frame (the renderer says so without redrawing): skip rotate, encode and send.
@@ -350,6 +376,9 @@ impl Pipeline {
                         continue;
                     }
                     last_emit = Instant::now();
+                    if on_gradient {
+                        sh.stats.gradient_frames.fetch_add(1, Relaxed);
+                    }
                     let mut buf = pool.get();
                     rotate_cw(frame, &mut buf);
                     let t2 = Instant::now();
@@ -607,6 +636,9 @@ impl Pipeline {
     }
 }
 
+/// How long live start waits for the first real background frame before it falls back to the gradient.
+const BG_WAIT: Duration = Duration::from_secs(3);
+
 /// Length of the hand-over fade at stop: widgets fade out while the background cross-fades (seconds).
 const HANDOVER_FADE_S: f32 = 0.45;
 
@@ -730,5 +762,50 @@ mod handover_tests {
         let s = Instant::now();
         p.stop();
         assert!(s.elapsed() < Duration::from_millis(300));
+    }
+
+    fn quiet() -> Config {
+        let mut c = Config::default();
+        c.music.enabled = false;
+        c.notch = "off".into();
+        c
+    }
+
+    /// The start never draws the placeholder gradient while the theme has a clip: nothing is sent before the first decoded frame.
+    #[test]
+    fn no_gradient_frame_before_the_first_real_background_frame() {
+        let clip = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("Gallery").join("Ocean Echo [we-1635817562].mp4");
+        if !clip.exists() || !crate::media::ffmpeg::locate().exists() {
+            return;
+        }
+        let p = Pipeline::start(&quiet(), Sink::Null);
+        let mut t = ThemeLive::new(Theme::standard_preset(), PathBuf::new());
+        t.fallback_video = Some(clip);
+        p.set_theme(t);
+        // sample while the decoder starts: whenever something has been sent, it was a real frame
+        let t0 = Instant::now();
+        while t0.elapsed() < Duration::from_secs(4) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let s = p.shared.stats.snap();
+        assert!(s.sent > 0, "frames flow once the clip decodes");
+        assert_eq!(s.gradient_frames, 0, "no frame was drawn on the placeholder gradient");
+        p.stop_fast(Ending::LoopClip);
+    }
+
+    /// A clip that never decodes: nothing is sent during the wait, then the gradient is used as a last resort.
+    #[test]
+    fn broken_clip_holds_then_times_out_to_the_gradient() {
+        let bad = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let p = Pipeline::start(&quiet(), Sink::Null);
+        let mut t = ThemeLive::new(Theme::standard_preset(), PathBuf::new());
+        t.fallback_video = Some(bad);
+        p.set_theme(t);
+        std::thread::sleep(Duration::from_millis(1800));
+        assert_eq!(p.shared.stats.snap().sent, 0, "held while waiting for a real frame");
+        std::thread::sleep(Duration::from_millis(2500));
+        let s = p.shared.stats.snap();
+        assert!(s.sent > 0 && s.gradient_frames > 0, "gradient allowed after the timeout");
+        p.stop_fast(Ending::LoopClip);
     }
 }
