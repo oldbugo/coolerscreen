@@ -17,6 +17,7 @@ pub mod mask;
 pub mod media_server;
 pub mod paths;
 pub mod recycle;
+pub mod repair;
 pub mod scheduler;
 pub mod service;
 pub mod settings;

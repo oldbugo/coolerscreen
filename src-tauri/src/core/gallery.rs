@@ -42,7 +42,7 @@ pub fn is_media(p: &Path) -> bool {
     MEDIA_EXT.contains(&ext_lower(p).as_str())
 }
 
-fn same_path(a: &str, b: &Path) -> bool {
+pub(crate) fn same_path(a: &str, b: &Path) -> bool {
     let norm = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase();
     !a.is_empty() && norm(Path::new(a)) == norm(b)
 }
@@ -282,12 +282,26 @@ impl App {
                     && o.get("fileSize").and_then(Value::as_u64) == Some(md.len())
                     && o.get("fileMtime").and_then(Value::as_f64) == Some(mtime_ms(md) as f64)
             });
+            // A file that comes back under the name of an item that is marked missing (or whose file is gone) is that item again, even
+            // if its size or time changed (the next scan then refreshes it like any changed file); never a second item for it.
+            let fname = f.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let twin = twin.or_else(|| {
+                gone.iter().find(|o| {
+                    let id = o["id"].as_str().unwrap_or("");
+                    let file = o["file"].as_str().unwrap_or("");
+                    !claimed.contains(id)
+                        && (truthy(o.get("missing")) || !Path::new(file).exists())
+                        && !fname.is_empty()
+                        && Path::new(file).file_name().map(|n| n.to_string_lossy().to_lowercase()).as_deref() == Some(fname.as_str())
+                })
+            });
             if let Some(t) = twin {
                 let oid = t["id"].as_str().unwrap_or("").to_string();
                 claimed.insert(oid.clone());
                 let ht = matches!(ext_lower(f).as_str(), ".ht" | ".zip");
                 let mut patch = json!({ "file": f.to_string_lossy(), "fileName": f.file_name().map(|n| n.to_string_lossy().to_string()), "missing": null });
-                if !ht {
+                let same_name = t["file"].as_str().and_then(|p| Path::new(p).file_name()).map(|n| n.to_string_lossy().to_lowercase()).as_deref() == Some(fname.as_str());
+                if !ht && !same_name {
                     patch["name"] = json!(f.file_stem().map(|n| n.to_string_lossy().to_string()));
                 }
                 let _ = self.lib.patch_original(&oid, &patch);
@@ -479,6 +493,7 @@ impl App {
         if n > 0 {
             eprintln!("Library: migrated {n} item(s) to originals + versions.");
         }
+        self.repair_duplicates(true);
         self.adopt_cache_only();
         self.gallery_sync();
         self.gallery_watch();

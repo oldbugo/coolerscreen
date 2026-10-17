@@ -89,6 +89,7 @@ fn main() {
             wait_job(app, r["jobId"].as_str().unwrap_or(""))
         }),
         Some("core-apply") if args.len() >= 2 => core_apply(&args[1]),
+        Some("core-repair-plan") => core_run(|app| Ok(serde_json::json!({ "duplicates": app.repair_duplicates(false) }))),
         Some("core-send") if args.len() >= 2 => core_send(std::path::Path::new(&args[1])),
         Some("live-test") => live::live_test(&args[1..]),
         Some("wake") => live::wake(),
@@ -101,7 +102,7 @@ fn main() {
             eprintln!("usage: cs2 info | state | restart | upload <file.mp4> [--intro] | poll <count> <seconds> | live-test [--frames N | --seconds S --fps F] [--orient landscape|portrait] [--scale 0.7] [--quality 100] [--set-sleep-delay] [--set-brightness] [--dry-run]");
             eprintln!("       cs2 trial [--dry-run] [--no-poll] | wake   (guided live-mode trials; see test-live.cmd)");
             eprintln!("       cs2 unstick | recover-race-delete | delete-ota   (recovery tools, see tools/README.md)");
-            eprintln!("       cs2 core-check | core-state | core-restart [--real] | core-send <library>/<oid>/versions/<vid> | core-apply <originalId> [--real]  (COOLERSCREEN_HOME = scratch folder, or --real)");
+            eprintln!("       cs2 core-check | core-state | core-restart [--real] | core-send <library>/<oid>/versions/<vid> | core-apply <originalId> [--real] | core-repair-plan [--real] (read only)  (COOLERSCREEN_HOME = scratch folder, or --real)");
             2
         }
     };

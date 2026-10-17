@@ -725,3 +725,152 @@ fn changing_the_screen_fit_makes_the_stored_base_stale() {
     app.settings_update(&json!({ "screenFit": { "top": 0, "left": 0 } })).unwrap();
     assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(true));
 }
+
+// ---------- a returning file is the same item; duplicates from before are merged ----------
+
+#[test]
+fn a_file_that_comes_back_is_its_missing_item_again() {
+    let (_d, app, _rec, gallery) = setup();
+    put(&gallery.join("Clip [we-1].mp4"), b"first version of the file");
+    app.startup();
+    let ids = |app: &App| app.originals_list()["originals"].as_array().unwrap().iter().map(|o| o["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let a = ids(&app)[0].clone();
+    // it was recorded under another path, then went missing
+    std::fs::remove_file(gallery.join("Clip [we-1].mp4")).unwrap();
+    app.lib.patch_original(&a, &json!({ "file": gallery.join("old").join("CLIP [we-1].mp4").to_string_lossy() })).unwrap();
+    app.gallery_sync();
+    assert!(app.original_get(&a).unwrap()["missing"]["since"].is_string());
+    // it returns (another size and time, as a re-download would give): the same item, not a second one
+    put(&gallery.join("Clip [we-1].mp4"), b"the file again, but a different size");
+    app.gallery_sync();
+    assert_eq!(ids(&app), vec![a.clone()], "no second item for the returning file");
+    let o = app.original_get(&a).unwrap();
+    assert!(o["missing"].is_null(), "no longer missing");
+    assert!(o["file"].as_str().unwrap().ends_with("Clip [we-1].mp4"));
+    assert_eq!(o["name"], json!("Clip"), "the name of the item is kept");
+}
+
+fn dup_record(app: &App, name: &str, file: &std::path::Path, created: &str, missing: bool) -> String {
+    let id = super::library::new_id();
+    app.lib
+        .write_original(&json!({ "id": id, "name": name, "file": file.to_string_lossy(), "fileName": file.file_name().unwrap().to_string_lossy(),
+            "created": created, "fileSize": 10, "fileMtime": 1, "assets": "ready", "missing": if missing { json!({ "since": "2026-10-12T11:09:07Z" }) } else { Value::Null } }))
+        .unwrap();
+    id
+}
+
+fn dup_version(app: &App, oid: &str, n: u32) -> String {
+    let vid = super::library::new_id();
+    app.lib.write_version(oid, &json!({ "id": vid, "originalId": oid, "n": n, "status": "ready", "notchKey": "off", "settings": { "start": 0, "length": 5 } })).unwrap();
+    vid
+}
+
+fn trash(d: &std::path::Path) -> impl Fn(&std::path::Path) -> super::error::CoreResult<()> {
+    let to = d.join("trash");
+    move |p: &std::path::Path| {
+        std::fs::create_dir_all(&to)?;
+        std::fs::rename(p, to.join(p.file_name().unwrap()))?;
+        Ok(())
+    }
+}
+
+fn set_mtime(p: &std::path::Path, secs_ago: u64) {
+    let f = std::fs::File::options().write(true).open(p).unwrap();
+    f.set_modified(std::time::SystemTime::now() - Duration::from_secs(secs_ago)).unwrap();
+}
+
+/// The shape found in the library: the missing item is the one the loop slot and the current theme refer to, the newer item of
+/// the same file has no theme.json (and a version of its own).
+#[test]
+fn duplicates_of_one_file_are_merged_into_the_one_the_screen_uses() {
+    let (d, app, _rec, gallery) = setup();
+    let file = gallery.join("Asuka [we-2782447433].mp4");
+    put(&file, b"the clip");
+    let a = dup_record(&app, "Asuka", &file, "2026-10-01T00:00:00Z", true); // missing, referenced
+    let b = dup_record(&app, "Asuka", &file, "2026-10-12T12:00:00Z", false); // re-imported later
+    let va = dup_version(&app, &a, 1);
+    let vb = dup_version(&app, &b, 1);
+    std::fs::write(app.lib.o_dir(&a).join("theme.json"), r#"{"v":1,"widgets":[{"id":"c","type":"clock","x":0.1,"y":0.1,"w":0.3,"h":0.3}],"baseVersionId":null}"#).unwrap();
+    std::fs::create_dir_all(app.lib.o_dir(&a).join("assets")).unwrap();
+    std::fs::write(app.lib.o_dir(&a).join("assets").join("logo.png"), b"png").unwrap();
+    app.settings.update(|s| s["slots"]["standby"] = json!({ "name": "x", "size": 1000000, "at": "t", "originalId": a, "versionId": va, "themeId": a })).unwrap();
+    // read-only plan first
+    let plan = app.repair_duplicates_with(false, &trash(d.path()));
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0]["keep"]["id"], json!(a), "the item the screen refers to stays");
+    assert_eq!(plan[0]["duplicates"][0]["id"], json!(b));
+    assert_eq!(plan[0]["applied"], json!(false));
+    assert_eq!(app.originals_list()["originals"].as_array().unwrap().len(), 2, "planning changes nothing");
+    assert!(app.lib.find_version(&vb).is_some_and(|(o, _)| o == b));
+    // apply
+    let done = app.repair_duplicates_with(true, &trash(d.path()));
+    assert_eq!(done.len(), 1);
+    let list = app.originals_list();
+    assert_eq!(list["originals"].as_array().unwrap().len(), 1);
+    assert_eq!(list["originals"][0]["id"], json!(a));
+    let o = app.original_get(&a).unwrap();
+    assert!(o["missing"].is_null(), "the file is there: not missing any more");
+    let (owner, v) = app.lib.find_version(&vb).unwrap();
+    assert_eq!(owner, a, "the version of the duplicate moved over");
+    assert_eq!(v["originalId"], json!(a));
+    assert_eq!(app.lib.versions(&a).len(), 2);
+    let ns: Vec<f64> = app.lib.versions(&a).iter().map(|v| v["n"].as_f64().unwrap()).collect();
+    assert!(ns.contains(&1.0) && ns.contains(&2.0), "version numbers stay unique: {ns:?}");
+    assert!(app.lib.find_version(&va).is_some());
+    assert!(app.lib.o_dir(&a).join("theme.json").is_file() && app.lib.o_dir(&a).join("assets").join("logo.png").is_file(), "theme and pictures kept");
+    assert!(!app.lib.o_dir(&b).join("original.json").exists());
+    assert!(d.path().join("trash").join(&b).exists(), "the emptied record went to the bin, not away for good");
+    let sb = app.settings.load().slot("standby").unwrap().clone();
+    assert_eq!((sb["originalId"].as_str(), sb["versionId"].as_str(), sb["themeId"].as_str()), (Some(a.as_str()), Some(va.as_str()), Some(a.as_str())));
+    // nothing left to do
+    assert!(app.repair_duplicates_with(true, &trash(d.path())).is_empty());
+}
+
+/// The screen refers to the newer item, which has its own newer theme.json: it stays, the older theme is kept aside.
+#[test]
+fn merging_keeps_the_newer_theme_and_the_older_one_beside_it_and_repoints_the_slot() {
+    let (d, app, _rec, gallery) = setup();
+    let file = gallery.join("Clip.mp4");
+    put(&file, b"the clip");
+    let a = dup_record(&app, "Clip", &file, "2026-10-01T00:00:00Z", true);
+    let b = dup_record(&app, "Clip", &file, "2026-10-12T12:00:00Z", false);
+    let vb = dup_version(&app, &b, 1);
+    let (ta, tb) = (app.lib.o_dir(&a).join("theme.json"), app.lib.o_dir(&b).join("theme.json"));
+    std::fs::write(&ta, r#"{"v":1,"widgets":[]}"#).unwrap();
+    std::fs::write(&tb, r#"{"v":1,"widgets":[{"id":"t","type":"text","x":0,"y":0,"w":0.2,"h":0.2}]}"#).unwrap();
+    set_mtime(&ta, 3600);
+    set_mtime(&tb, 10);
+    std::fs::create_dir_all(app.lib.o_dir(&b).join("assets")).unwrap();
+    std::fs::write(app.lib.o_dir(&b).join("assets").join("p.png"), b"png").unwrap();
+    app.settings.update(|s| s["slots"]["standby"] = json!({ "name": "x", "size": 1000000, "at": "t", "originalId": b, "versionId": vb, "themeId": b })).unwrap();
+    let plan = app.repair_duplicates_with(true, &trash(d.path()));
+    assert_eq!(plan[0]["keep"]["id"], json!(b), "referenced by the screen: it stays");
+    assert_eq!(app.originals_list()["originals"].as_array().unwrap().len(), 1);
+    let th: Value = serde_json::from_str(&std::fs::read_to_string(app.lib.o_dir(&b).join("theme.json")).unwrap()).unwrap();
+    assert_eq!(th["widgets"].as_array().unwrap().len(), 1, "its own (newer) theme is kept");
+    let prev: Value = serde_json::from_str(&std::fs::read_to_string(app.lib.o_dir(&b).join("theme.prev.json")).unwrap()).unwrap();
+    assert_eq!(prev["widgets"].as_array().unwrap().len(), 0, "the older theme is kept as theme.prev.json");
+    assert!(app.lib.o_dir(&b).join("assets").join("p.png").is_file());
+    assert!(app.original_get(&b).unwrap()["missing"].is_null());
+    assert_eq!(app.settings.load().slot("standby").unwrap()["themeId"], json!(b));
+    // the other way round: the kept item is referenced by the slot, the duplicate holds the newer theme.json, which wins
+    let (d2, app2, _r, g2) = setup();
+    let f2 = g2.join("Clip.mp4");
+    put(&f2, b"the clip");
+    let a2 = dup_record(&app2, "Clip", &f2, "2026-10-12T12:00:00Z", false);
+    let b2 = dup_record(&app2, "Clip", &f2, "2026-10-01T00:00:00Z", true);
+    let (x, y) = (app2.lib.o_dir(&a2).join("theme.json"), app2.lib.o_dir(&b2).join("theme.json"));
+    std::fs::write(&x, r#"{"v":1,"widgets":[]}"#).unwrap();
+    std::fs::write(&y, r#"{"v":1,"widgets":[{"id":"t","type":"text","x":0,"y":0,"w":0.2,"h":0.2}]}"#).unwrap();
+    set_mtime(&x, 3600);
+    set_mtime(&y, 10);
+    let v2 = dup_version(&app2, &b2, 1);
+    let va2 = dup_version(&app2, &a2, 1);
+    app2.settings.update(|s| s["slots"]["standby"] = json!({ "name": "x", "size": 1000000, "at": "t", "originalId": a2, "versionId": va2, "themeId": a2 })).unwrap();
+    let plan = app2.repair_duplicates_with(true, &trash(d2.path()));
+    assert_eq!(plan[0]["keep"]["id"], json!(a2));
+    let th: Value = serde_json::from_str(&std::fs::read_to_string(app2.lib.o_dir(&a2).join("theme.json")).unwrap()).unwrap();
+    assert_eq!(th["widgets"].as_array().unwrap().len(), 1);
+    assert!(app2.lib.o_dir(&a2).join("theme.prev.json").is_file());
+    assert_eq!(app2.lib.find_version(&v2).unwrap().0, a2);
+}
