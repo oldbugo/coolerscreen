@@ -42,7 +42,7 @@ impl Mask {
             _ => {}
         }
         let c = &mask["corners"];
-        if c.get("on").and_then(Value::as_bool) == Some(true) && num(c, "r") > 0.0 {
+        if c.get("on").and_then(Value::as_bool) != Some(false) && num(c, "r") > 0.0 {
             m.corners = Some(num(c, "r") * K);
         }
         m
@@ -100,24 +100,46 @@ impl Mask {
             }
         }
         if let Some(r) = self.corners {
-            let ri = r.ceil() as usize;
-            for (ox, oy, sx, sy) in [(0usize, 0usize, 1.0f32, 1.0f32), (LW - ri, 0, -1.0, 1.0), (0, LH - ri, 1.0, -1.0), (LW - ri, LH - ri, -1.0, -1.0)] {
-                for y in 0..ri {
-                    for x in 0..ri {
-                        // distance from the arc centre of this corner, in the local square
-                        let (lx, ly) = (if sx > 0.0 { x as f32 + 0.5 } else { ri as f32 - x as f32 - 0.5 }, if sy > 0.0 { y as f32 + 0.5 } else { ri as f32 - y as f32 - 0.5 });
-                        let dist = ((lx - r).powi(2) + (ly - r).powi(2)).sqrt();
-                        if lx < r && ly < r && dist > r - 0.5 {
-                            let keep = (r + 0.5 - dist).clamp(0.0, 1.0);
-                            let i = ((oy + y) * LW + ox + x) * 4;
+            // Same geometry as the base's corner PNG (media::assets::corner_mask_file): black outside the visible rectangle
+            // (the canvas minus a notch band) rounded with radius r (at most half its short side), anti-aliased.
+            let (mut x0, mut y0, mut x1, mut y1) = (0.0f32, 0.0f32, LW as f32, LH as f32);
+            if let Some((edge, px)) = &self.band {
+                let px = *px as f32;
+                match edge.as_str() {
+                    "right" => x1 -= px,
+                    "top" => y0 += px,
+                    "bottom" => y1 -= px,
+                    _ => x0 += px,
+                }
+            }
+            let rr = r.round().min(((x1 - x0).min(y1 - y0)) / 2.0).max(0.0);
+            let ri = rr.ceil() as usize + 1;
+            let (cx0, cy0, cx1, cy1) = (x0 as usize, y0 as usize, x1 as usize, y1 as usize);
+            for (ox, oy) in [(cx0, cy0), (cx1.saturating_sub(ri), cy0), (cx0, cy1.saturating_sub(ri)), (cx1.saturating_sub(ri), cy1.saturating_sub(ri))] {
+                for y in oy..(oy + ri).min(LH) {
+                    for x in ox..(ox + ri).min(LW) {
+                        let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                        let dx = (x0 + rr - fx).max(fx - (x1 - rr)).max(0.0);
+                        let dy = (y0 + rr - fy).max(fy - (y1 - rr)).max(0.0);
+                        let a = (dx.hypot(dy) - rr + 0.5).clamp(0.0, 1.0);
+                        if a > 0.0 {
+                            let i = (y * LW + x) * 4;
                             for k in 0..3 {
-                                d[i + k] = (d[i + k] as f32 * keep) as u8;
+                                d[i + k] = (d[i + k] as f32 * (1.0 - a)) as u8;
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    /// The effective corner radius: a theme override (px on 2400x1080, 0 = none) wins over the settings default.
+    pub fn with_corner_override(mut self, theme_px: Option<f32>) -> Mask {
+        if let Some(v) = theme_px {
+            self.corners = if v > 0.0 { Some(v * K) } else { None };
+        }
+        self
     }
 }
 
@@ -147,5 +169,29 @@ mod tests {
         m.apply(&mut f);
         assert_eq!(f[0], 0); // outer corner pixel black
         assert_eq!(f[(LW * 100 + 100) * 4], 255); // inside untouched
+    }
+
+    #[test]
+    fn corners_follow_the_visible_rect_and_theme_override() {
+        // default radius 80 design px (56 canvas px) with a left band: the corners sit at the band's inner edge
+        let m = Mask::from_value(&json!({ "mode": "band", "band": { "edge": "left", "px": 92 }, "corners": { "r": 80 } }));
+        let mut f = vec![255u8; LW * LH * 4];
+        m.apply(&mut f);
+        let px = |x: usize, y: usize| f[(y * LW + x) * 4];
+        assert_eq!(px(67, 0), 0, "top-left corner of the visible area is rounded");
+        assert_eq!(px(67 + 100, 100), 255);
+        assert_eq!(px(LW - 1, LH - 1), 0);
+        // theme override: 0 = none, a number replaces the default
+        let none = m.clone().with_corner_override(Some(0.0));
+        let mut g = vec![255u8; LW * LH * 4];
+        none.apply(&mut g);
+        assert_eq!(g[(0 * LW + 67) * 4], 255);
+        let big = m.clone().with_corner_override(Some(200.0));
+        assert_eq!(m.with_corner_override(None), Mask::from_value(&json!({ "mode": "band", "band": { "edge": "left", "px": 92 }, "corners": { "r": 80 } })));
+        let mut h = vec![255u8; LW * LH * 4];
+        big.apply(&mut h);
+        assert_eq!(h[(40 * LW + 67 + 40) * 4], 0, "larger radius cuts deeper");
+        // 1.2 settings with the toggle off still mean no corners
+        assert!(Mask::from_value(&json!({ "mode": "off", "corners": { "on": false, "r": 80 } })).is_none());
     }
 }

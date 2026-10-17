@@ -272,7 +272,7 @@ impl Pipeline {
                             }
                             _ => {}
                         }
-                        r.set_mask(if cfg.notch == "off" { Mask::none() } else { Mask::from_app_settings() });
+                        r.set_mask(if cfg.notch == "off" { Mask::none() } else { Mask::from_app_settings() }.with_corner_override(r.theme().theme.corners));
                         // A changed background source: drop the old decoder now, the block below starts the new one.
                         let src = background_source(r.theme());
                         let key = src.map(|(p, portrait)| (p, portrait, cfg.video_decode.clone()));
@@ -341,7 +341,7 @@ impl Pipeline {
                     }
                     if cfg.notch != "off" && last_mask_check.elapsed() > Duration::from_secs(3) {
                         last_mask_check = Instant::now();
-                        r.set_mask(Mask::from_app_settings()); // picks up a notch change made in the app
+                        r.set_mask(Mask::from_app_settings().with_corner_override(r.theme().theme.corners)); // picks up a notch change made in the app
                     }
                     // Live-layer opacity: fade in after the session starts; at a stop with a hand-over, fade out while the
                     // background cross-fades to the stored loop's first frame (or to black).
