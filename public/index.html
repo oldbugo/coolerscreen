@@ -139,6 +139,16 @@
         <p id="thMsg" class="muted small" role="status"></p>
       </section>
 
+      <section id="setWeather" aria-labelledby="hWeather">
+        <h3 id="hWeather">Weather</h3>
+        <p id="wxPlace" class="small"></p>
+        <div class="inline-ctl"><input type="search" id="wxQuery" placeholder="City" aria-label="City" maxlength="80" spellcheck="false" autocomplete="off"><button type="button" id="wxGo" class="btn secondary">Search</button></div>
+        <ul id="wxResults" class="wx-results"></ul>
+        <div class="field"><label for="wxUnit">Unit</label><select id="wxUnit"><option value="C">°C</option><option value="F">°F</option></select></div>
+        <p id="wxMsg" class="muted small" role="status"></p>
+        <p class="muted small">Search asks open-meteo.com. Nothing is sent until you press Search.</p>
+      </section>
+
       <section id="setGuides" aria-labelledby="hGuides">
         <h3 id="hGuides">Screen guides</h3>
         <p id="gcLive" class="small"></p>

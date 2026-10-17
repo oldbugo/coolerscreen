@@ -2468,6 +2468,7 @@ function fillSettings() {
   $('cornerR').value = a.cornerRadius || 0; $('edSnap').checked = a.editorSnap !== false; $('thMsg').textContent = '';
   loadGuidesForm();
   loadFitForm();
+  renderWeather();
   $('nMsg').textContent = '';
   const bg = $('notchBg');
   if (S.detail && S.detail.assets === 'ready') { bg.src = backend.mediaUrl(S.detail.id, 'frame.jpg'); bg.hidden = false; } else { bg.removeAttribute('src'); bg.hidden = true; }
@@ -2530,6 +2531,47 @@ $('cornerR').onchange = async () => {
 };
 $('edSnap').onchange = async () => {
   try { S.app = await call('settings_update', { editor: { snap: $('edSnap').checked } }); $('thMsg').textContent = 'Saved.'; } catch (e) { $('thMsg').textContent = e.message; }
+};
+
+// Settings > Weather: the user types a city, picks one; nothing is looked up or stored before that.
+function renderWeather() {
+  const w = (S.app && S.app.weather) || { place: null, unit: 'C' };
+  const box = $('wxPlace');
+  box.textContent = '';
+  if (w.place) box.append(el('span', { text: w.place.name }), ' ', el('button', { type: 'button', class: 'linkbtn', text: 'Clear', onclick: () => setPlace(null) }));
+  else box.textContent = 'No city set.';
+  $('wxUnit').value = w.unit || 'C';
+  $('wxResults').textContent = '';
+  $('wxMsg').textContent = '';
+}
+async function setPlace(p) {
+  try {
+    S.app = await call('weather_set_place', { place: p });
+    renderWeather();
+    if (typeof themes !== 'undefined') themes.appChanged();
+  } catch (e) { $('wxMsg').textContent = e.message; }
+}
+async function searchPlace() {
+  const q = $('wxQuery').value.trim();
+  const list = $('wxResults');
+  list.textContent = '';
+  if (q.length < 2) { $('wxMsg').textContent = 'Type a city.'; return; }
+  $('wxMsg').textContent = 'Searching…';
+  $('wxGo').disabled = true;
+  try {
+    const { results } = await call('weather_search', { query: q });
+    $('wxMsg').textContent = results.length ? '' : 'No match.';
+    for (const r of results) {
+      const text = [r.name, r.admin1, r.country].filter(Boolean).join(', ');
+      list.append(el('li', {}, el('button', { type: 'button', class: 'btn ghost wx-pick', text, title: text, onclick: () => setPlace({ name: r.name, lat: r.lat, lon: r.lon, tz: r.tz }) })));
+    }
+  } catch (e) { $('wxMsg').textContent = e.message; }
+  $('wxGo').disabled = false;
+}
+$('wxGo').onclick = searchPlace;
+$('wxQuery').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); searchPlace(); } };
+$('wxUnit').onchange = async () => {
+  try { S.app = await call('settings_update', { weather: { unit: $('wxUnit').value } }); if (typeof themes !== 'undefined') themes.appChanged(); } catch (e) { $('wxMsg').textContent = e.message; }
 };
 
 // Settings > Screen guides: where the screen curves and what hides part of it. While Live is on, the lines are drawn on the
@@ -2688,7 +2730,7 @@ async function applyTheme(oid, name) {
   else if (r === 'stopped') toast('Stopped. The previous theme is still on the screen.');
   return r;
 }
-const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openBase, applyTheme });
+const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openBase, applyTheme, openSettings: openDrawer });
 initApply({ call, backend, plainWait });
 
 // ---------- start ----------

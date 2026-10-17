@@ -617,3 +617,36 @@ summary h3 { display: inline; color: var(--text); }
 .bs-l { margin-left: -16px; } .bs-r { margin-left: 0; }
 .bs-vl { padding-right: 0; transform: translateX(-100%); } .bs-vr { padding-left: 0; }
 #setGuides .row { margin-top: var(--s4); }
+
+/* ---------- theme format v1.6: grouped palette, style pictures, thresholds, slideshow, weather settings ---------- */
+.palette { display: block; margin: 0 0 var(--s5); }
+.pal-head { margin: var(--s3) 0 var(--s1); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); }
+.palette > .pal-head:first-child { margin-top: 0; }
+.pal-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s1); }
+.pal-grid li { min-width: 0; }
+.pal-grid .pal { height: 32px; padding: 0 var(--s2); gap: var(--s2); font-size: var(--fs-small); }
+.pal-grid .pal .pi { width: 18px; height: 18px; }
+.pal-grid .pal-wide { grid-column: 1 / -1; }
+.metric-pick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; padding: var(--s2); border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--surface-1); }
+.metric-pick[hidden] { display: none; }
+.metric-pick .pal-head { grid-column: 1 / -1; margin: var(--s2) 0 0; }
+.metric-pick .pal-head:first-child { margin-top: 0; }
+.pick { height: 28px; padding: 0 var(--s2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); text-align: left; font-size: var(--fs-small); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick:hover { background: var(--accent-soft); }
+.styles { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s1); margin-bottom: var(--s3); }
+.sty { display: grid; justify-items: center; gap: 2px; padding: var(--s1) 0; border: 1px solid var(--border-strong); border-radius: var(--r-md); background: var(--surface-2); color: var(--text-muted); cursor: pointer; font-size: 11px; }
+.sty:hover { color: var(--text); border-color: var(--accent); }
+.sty[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.thr { margin-bottom: var(--s3); }
+.thr-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) 44px 28px; gap: var(--s2); align-items: center; margin-bottom: var(--s1); }
+.thr-row input[type="number"] { width: 100%; min-width: 0; }
+.thr-row input[type="color"] { width: 44px; padding: 0; }
+.slides { display: grid; gap: var(--s1); margin-bottom: var(--s2); }
+.slide-row { display: flex; align-items: center; gap: var(--s1); }
+.slide-row .lname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slide-row .iconbtn { width: 26px; height: 26px; font-size: 13px; flex: none; }
+.slide-row .iconbtn:disabled { opacity: .3; cursor: default; }
+.slide-thumb { width: 40px; height: 28px; object-fit: cover; border-radius: 4px; background: var(--surface-3); flex: none; }
+.ed .linkbtn, #setWeather .linkbtn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
+.wx-results { list-style: none; margin: var(--s2) 0; padding: 0; display: grid; gap: 2px; }
+.wx-pick { width: 100%; justify-content: flex-start; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

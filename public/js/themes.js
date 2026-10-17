@@ -7,6 +7,7 @@
 import { styleNotch, styleCorners, makeCornersOverlay } from './frame.js';
 import { openDialog } from './dialog.js';
 import * as Ly from './layers.js';
+import * as Wd from './widgets.js';
 
 const MIN_BOX = 0.02;
 const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
@@ -15,14 +16,6 @@ const r4 = v => Math.round(v * 10000) / 10000;
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* not remembered */ } };
 
-const KINDS = {
-  clock: { name: 'Clock', icon: '◔', w: 0.3, h: 0.34, props: () => ({ format: '24h', seconds: false, date: true, color: '#ffffff' }) },
-  music: { name: 'Music', icon: '♪', w: 0.34, h: 0.22, props: () => ({ cover: true, progress: true }) },
-  stats: { name: 'PC stats', icon: '▤', w: 0.26, h: 0.5, props: () => ({ items: ['cpu', 'ram', 'gpuLoad', 'gpuTemp', 'gpuClock'] }) },
-  text: { name: 'Text', icon: 'T', w: 0.34, h: 0.16, props: () => ({ text: 'Your text', size: 0.08, color: '#ffffff', opacity: 1, align: 'left', weight: 'regular' }), base: true },
-  image: { name: 'Picture', icon: '▣', w: 0.2, h: 0.3, props: () => ({ file: '', opacity: 1, fit: 'contain' }), base: true },
-  weather: { name: 'Weather', icon: '☁', w: 0.26, h: 0.3, props: () => ({}), soon: true },
-};
 const STAT_ITEMS = [['cpu', 'PC load'], ['ram', 'Memory'], ['gpuLoad', 'Graphics card load'], ['gpuTemp', 'Graphics card temperature'], ['gpuClock', 'Graphics card speed'], ['cpuTemp', 'Processor temperature']];
 const END_CHOICES = [
   ['loopStart', 'Fade out onto the stored loop', 'The live layer fades away and the screen carries on from the first frame of its stored loop. Nothing jumps.'],
@@ -128,7 +121,7 @@ export function createThemes(ctx) {
   /** The app settings changed (guides, default radius): redraw what depends on them. */
   function appChanged() {
     if (!E.ui) return;
-    E.snap = E.snap; paintStage(); if (!E.selIds.length) paintProps();
+    paintStage(); paintProps();
   }
 
   function renderEmpty(text) {
@@ -145,14 +138,22 @@ export function createThemes(ctx) {
   function buildEditor() {
     root.textContent = '';
     const u = (E.ui = {});
-    u.palette = el('ul', { class: 'palette', 'aria-label': 'Items you can add' });
-    for (const [type, k] of Object.entries(KINDS)) {
-      const b = el('button', { type: 'button', class: 'pal', draggable: !k.soon, disabled: !!k.soon, title: k.soon ? 'Coming later' : `Add ${k.name.toLowerCase()}: click, or drag it onto the preview`,
-        'data-type': type, onclick: () => addWidget(type) },
-        el('span', { class: 'pi', 'aria-hidden': 'true', text: k.icon }), el('span', { class: 'pn', text: k.name }), k.soon ? el('span', { class: 'soon', text: 'coming later' }) : null);
-      b.addEventListener('dragstart', ev => { ev.dataTransfer.setData('text/x-cs-widget', type); ev.dataTransfer.effectAllowed = 'copy'; });
-      u.palette.append(el('li', {}, b));
+    u.palette = el('div', { class: 'palette', 'aria-label': 'Items you can add' });
+    u.picker = el('div', { class: 'metric-pick', hidden: true });
+    for (const [group, keys] of Wd.PALETTE) {
+      const list = el('ul', { class: 'pal-grid' });
+      for (const key of keys) {
+        const k = Wd.ENTRIES[key];
+        const b = el('button', { type: 'button', class: 'pal', draggable: true, title: k.pick ? 'Click to choose what it shows, or drag it onto the preview' : `Add ${k.name.toLowerCase()}: click, or drag it onto the preview`,
+          'data-type': key, onclick: () => (k.pick ? togglePicker() : addWidget(key)) },
+          el('span', { class: 'pi', 'aria-hidden': 'true', text: k.icon }), el('span', { class: 'pn', text: k.name }));
+        b.addEventListener('dragstart', ev => { ev.dataTransfer.setData('text/x-cs-widget', key); ev.dataTransfer.effectAllowed = 'copy'; });
+        list.append(el('li', {}, b));
+        if (k.pick) list.append(el('li', { class: 'pal-wide' }, u.picker));
+      }
+      u.palette.append(el('h4', { class: 'pal-head', text: group }), list);
     }
+    buildPicker();
     u.layers = el('div', { class: 'layers', role: 'listbox', 'aria-multiselectable': 'true', 'aria-label': 'Layers, top of the picture first' });
     u.layersNone = el('p', { class: 'muted small', text: 'Nothing yet: this theme shows its base only.' });
     u.btnGroup = el('button', { class: 'iconbtn', title: 'Group the selected layers (Ctrl+G)', 'aria-label': 'Group the selected layers', text: '▣', onclick: () => doGroup() });
@@ -191,7 +192,7 @@ export function createThemes(ctx) {
     u.stage.addEventListener('drop', ev => {
       u.stage.classList.remove('drop-ok');
       const t = ev.dataTransfer.getData('text/x-cs-widget');
-      if (!KINDS[t]) return;
+      if (!Wd.ENTRIES[t]) return;
       ev.preventDefault(); ev.stopPropagation();
       const r = u.stage.getBoundingClientRect();
       addWidget(t, (ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height);
@@ -245,14 +246,7 @@ export function createThemes(ctx) {
   }
 
   // ------------------------------------------------------------------ the working theme
-  const nameOf = w => {
-    const k = KINDS[w.type];
-    if (w.props && w.props.name) return w.props.name;
-    if (!k) return w.type;
-    if (w.type === 'text') { const t = (w.props.text || '').replace(/\s+/g, ' ').trim(); return t ? `Text: “${t.slice(0, 22)}${t.length > 22 ? '…' : ''}”` : 'Text'; }
-    if (w.type === 'image') return w.props.file ? `Picture: ${w.props.file.split('/').pop()}` : 'Picture (none chosen)';
-    return k.name;
-  };
+  const nameOf = Wd.nameOf;
 
   function edited({ preview = true } = {}) {
     E.rev++;
@@ -484,15 +478,28 @@ export function createThemes(ctx) {
     const used = new Set(widgets().map(w => w.id));
     for (let i = 1; ; i++) if (!used.has('w' + i)) return 'w' + i;
   }
-  function addWidget(type, cx, cy) {
-    const k = KINDS[type];
-    if (!k || k.soon || !E.ui) return;
+  /** Sensor: the metric list opens under the palette item. */
+  function buildPicker() {
+    const u = E.ui;
+    u.picker.textContent = '';
+    let last = '';
+    for (const [id, group, name] of Wd.METRICS) {
+      if (group !== last) { u.picker.append(el('h5', { class: 'pal-head', text: group })); last = group; }
+      u.picker.append(el('button', { type: 'button', class: 'pick', text: name, onclick: () => { u.picker.hidden = true; addWidget('sensor', null, null, { metric: id, style: id === 'cpu.core' || id === 'disk.used' ? 'bar' : id.startsWith('net.') ? 'graph' : 'number' }); } }));
+    }
+  }
+  function togglePicker() { E.ui.picker.hidden = !E.ui.picker.hidden; }
+  function addWidget(type, cx, cy, extra) {
+    const k = Wd.ENTRIES[type];
+    if (!k || !E.ui) return;
+    Wd.setApp(S.app);
     if (widgets().length >= 40) { toast('A theme can hold at most 40 items.', true); return; }
     const n = widgets().length;
-    const w = k.w, h = k.h;
+    const props = { ...k.props(), ...(extra || {}) };
+    const [w, h] = Wd.defaultSize(k.type, props);
     let x, y;
     if (cx != null) { x = cx - w / 2; y = cy - h / 2; } else { x = 0.1 + 0.04 * (n % 8); y = 0.12 + 0.05 * (n % 8); }
-    const wd = { id: nextId(), type, x: r4(clamp(x, 0, 1 - w)), y: r4(clamp(y, 0, 1 - h)), w, h, onBase: false, hidden: false, group: null, props: k.props() };
+    const wd = { id: nextId(), type: k.type, x: r4(clamp(x, 0, 1 - w)), y: r4(clamp(y, 0, 1 - h)), w, h, onBase: false, hidden: false, group: null, props };
     widgets().push(wd);
     E.theme.liveLayer = true; // adding an item shows the live layer again
     E.selIds = [wd.id]; E.selGroup = null; E.anchor = wd.id;
@@ -596,7 +603,7 @@ export function createThemes(ctx) {
         const fold = el('span', { class: 'licon' }); fold.innerHTML = SVG_FOLDER;
         row.append(caret, eye, fold, el('span', { class: 'lname', text: name, title: name }), el('span', { class: 'lcount small muted', text: String(r.members.length) }));
       } else {
-        row.append(...[el('span', { class: 'lindent' }), eye, el('span', { class: 'licon', 'aria-hidden': 'true', text: (KINDS[r.w.type] || {}).icon || '?' }), el('span', { class: 'lname', text: name, title: name }),
+        row.append(...[el('span', { class: 'lindent' }), eye, el('span', { class: 'licon', 'aria-hidden': 'true', text: Wd.typeIcon(r.w.type) }), el('span', { class: 'lname', text: name, title: name }),
           hit && E.guides ? el('span', { class: 'lwarn', title: `Overlaps ${hit}`, text: '⚠' }) : null].filter(Boolean));
       }
       eye.onclick = e => {
@@ -720,21 +727,22 @@ export function createThemes(ctx) {
 
   function paintWidgetProps(w) {
     const u = E.ui;
-    const k = KINDS[w.type] || { name: w.type };
+    Wd.setApp(S.app);
     const set = (key, v) => { w.props[key] = v; edited(); refreshBoxLabel(w); const l = u.layers.querySelector(`.lrow[data-id="${CSS.escape(w.id)}"] .lname`); if (l) l.textContent = nameOf(w); };
     const nameIn = el('input', { type: 'text', id: 'pName', maxLength: 60, spellcheck: false, placeholder: nameOf({ ...w, props: { ...w.props, name: '' } }), oninput: e => {
       if (e.target.value.trim()) w.props.name = e.target.value; else delete w.props.name;
       refreshBoxLabel(w); const l = u.layers.querySelector(`.lrow[data-id="${CSS.escape(w.id)}"] .lname`); if (l) l.textContent = nameOf(w); edited({ preview: false });
     } });
     nameIn.value = w.props.name || '';
-    u.props.append(el('h3', { text: k.name }), field('Layer name', nameIn, 'pName'));
+    u.props.append(el('h3', { text: Wd.typeTitle(w) }), field('Layer name', nameIn, 'pName'));
     const p = w.props;
-    if (w.type === 'clock') {
-      u.props.append(
-        field('Style', select2('pFmt', p.format || '24h', [['24h', '24-hour'], ['12h', '12-hour']], v => set('format', v)), 'pFmt'),
-        swRow('Show seconds', p.seconds, v => set('seconds', v)),
-        swRow('Show the date', p.date !== false, v => set('date', v)),
-        field('Colour', el('input', { type: 'color', id: 'pCol', value: p.color || '#ffffff', oninput: e => set('color', e.target.value) }), 'pCol'));
+    if (['clock', 'sensor', 'date', 'weather', 'visualizer', 'slideshow', 'info'].includes(w.type)) {
+      Wd.paintTypeProps(w, u.props, {
+        el, h: { field, select2, range, numInput, swRow }, set, edited, S, backend, toast, oid: E.oid,
+        repaint: () => paintProps(), moved: m => { const b = boxEl(m.id); if (b) placeBox(b, m); syncPosFields(m); refreshWarnings(); },
+        relabel: () => { refreshBoxLabel(w); const l = u.layers.querySelector(`.lrow[data-id="${CSS.escape(w.id)}"] .lname`); if (l) l.textContent = nameOf(w); },
+        openSettings: sec => ctx.openSettings && ctx.openSettings(sec),
+      });
     } else if (w.type === 'music') {
       u.props.append(swRow('Show the cover', p.cover !== false, v => set('cover', v)), swRow('Show the progress bar', p.progress !== false, v => set('progress', v)),
         el('p', { class: 'muted small', text: 'Shows what is playing in Spotify, the browser or any other player. Hidden when nothing plays (change this in the theme settings).' }));
@@ -772,10 +780,8 @@ export function createThemes(ctx) {
           el('button', { class: 'btn secondary', text: p.file ? 'Choose another picture…' : 'Choose a picture…', onclick: () => file.click() }), file),
         field('Opacity', range('pOp', p.opacity ?? 1, 0, 1, 0.05, v => set('opacity', v), v => Math.round(v * 100) + '%'), 'pOp'),
         field('Fit', select2('pFit', p.fit || 'contain', [['contain', 'Whole picture'], ['cover', 'Fill the box']], v => set('fit', v)), 'pFit'));
-    } else if (w.type === 'weather') {
-      u.props.append(el('p', { class: 'muted small', text: 'Weather is coming in a later version.' }));
     }
-    if (k.base) {
+    if (Wd.canBeOnBase(w.type)) {
       u.props.append(el('hr', { class: 'sep' }), swRow('Also on the stored base', w.onBase, v => {
         w.onBase = v; paintStage(); E.baseSig = null; edited();
       }, 'Draws it into the picture stored on the screen, so it stays there when CoolerScreen is closed. Changing it later means storing the base again.'));
