@@ -20,5 +20,9 @@
 - 2026-10-18: Claude may close the user's running CoolerScreen whenever needed (e.g. to install a build) without
   asking: "as long as you can make sure it's not in the process of doing anything" — check first that no job
   (upload, conversion, apply) is running (device.log / activity); prefer a clean quit so live hands back properly.
+- 2026-10-18: No Save buttons. Every change is saved as it is made and applies to the live picture at once;
+  closing the window or quitting to the tray changes nothing ("I don't wanna have another save"). Only changes that
+  affect the stored clip (screen fit/shift, corner radius, notch, baked text/pictures, base clip/version) mark the
+  base as needing to be stored again; live-only changes never do ("otherwise ... it shouldn't do anything").
 
 Start-of-work reading: `docs/roadmap/2026-10-12-v2-release-and-v3.md` (2.0 state and the 3.0 brief).
