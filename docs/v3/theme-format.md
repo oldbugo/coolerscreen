@@ -135,3 +135,28 @@ and in their case the **right edge is partly hidden behind the RAM** (colours st
 - **Remove "Longest clip (seconds)"** (`maxSeconds`) from Settings: the maximum loop/trim length is derived
   automatically from what fits on the screen (the loop finder's existing "auto"). Keep reading the old value harmlessly.
 - Smoothness stays 30/60 fps (60 = default and max; the panel is very likely 60 Hz).
+
+## v1.4 changes (user, 2026-10-17, after trying v1.3) — supersedes the v1.2 `screenGuides` shape
+
+User's description: the screen's curvature runs **vertically through the middle** of the screen, not along an edge.
+Three guides only (guidance, never masks; never drawn on the screen except during calibration):
+
+```json
+"screenGuides": {
+  "left":  { "size": 160 },
+  "right": { "size": 180 },
+  "curve": { "offset": 0, "left": 60, "right": 60 }
+}
+```
+- `left.size` / `right.size`: band width in px from that edge (left = by the notch, right = hard to see e.g. RAM).
+- `curve`: a vertical band; `offset` = px from the canvas centre (negative = left), `left`/`right` = px from the
+  offset centre to the band's left/right edge. UI: a "Position" control for `offset`, plus ONE two-handle range
+  slider for the band's edges (the part between the handles shows the width). Calibration draws all of it live.
+- Old v1.2 values (curve edges, zones) are ignored/migrated harmlessly (a "right" zone → `right.size`).
+- Per theme `guidesOffset`: same keys as deltas: `{ "left": {"size":0}, "right": {"size":0}, "curve": {"offset":0,"left":0,"right":0} }`.
+- **Gap (per theme)**: theme.json `gap` px on the 2400x1080 canvas (default 24). Snap targets while moving/resizing
+  include points at `gap` distance: inside the canvas edges, outside each guide band, and between boxes (gutter).
+  Exact edge alignment stays a snap target too; Alt = free. It only adds snap points; nothing is enforced.
+- UI wording rule from the user: as few words as possible. Corner radius = one number field labelled
+  "Corner radius" showing the effective value, with a small reset icon button (↺) that clears the theme override;
+  no radio buttons, no "px" subtext. Apply the same brevity to the guides and theme settings.
