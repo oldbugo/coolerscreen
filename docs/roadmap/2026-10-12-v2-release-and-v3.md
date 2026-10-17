@@ -153,3 +153,17 @@ A with the GPU-decoded video background (Ocean Echo, 18 fps): 1.8–1.9 % of PC 
 core and ~108 MB. No send errors anywhere; the display stayed on afterwards.
 Conclusion: CPU is the same in every form; only the hidden-but-alive WebView costs memory (~200 MB). B with the
 window destroyed matches A, and keeps one program owning the screen (no device clash between two programs).
+
+## Direction change: themes with two faces (user, 2026-10-17)
+
+The user (dictation, paraphrased): the companion should be "a much more powerful engine that is driving the display",
+like Wallpaper Engine, not just an MP4 on loop. The current UI is still built around the MP4 as the source and "is
+not going to support the ambition in version three". Key flaw to avoid: a live view and an unrelated offline view. A
+**theme** defines both: a **live face** (companion running: rendered background, clock, music, stats, any layout) and a
+**screen-only face** (the stored loop clip, recorded from the same theme without live data). Both are "controlled via
+the one thing", so turning the PC or app on/off doesn't change the visual it's based on. Confirmed by the user.
+
+Technical basis: the live engine plays the same baked loop as its background, so on stop it can end exactly on the
+loop's first frame (seamless hand-over); on start it can only cross-fade (the device's loop position is unknown).
+Next step agreed: design exploration (clickable mock-ups) before any rebuild. Also: one version only — work on main,
+install every build, v2.0.0 is the fallback.

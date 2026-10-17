@@ -11,6 +11,11 @@
 - 2026-10-12: Live frame rate is a setting with both 30 and 60 fps; default 60 ("if the screen supports it, that will
   be what I prefer ... maybe have both. So that I can pick and choose"). Goal includes live-rendered backgrounds
   "similar to Wallpaper Engine where it's not the actual video itself".
-- 2026-10-12: 3.0 work happens on the `v3` branch; `main` stays the released 2.0 until the user approves.
+- 2026-10-17: One version only: "just that one version that we keep working on". Work on `main`; every build is
+  installed as the user's CoolerScreen (no side-by-side test builds). The v2.0.0 tag/release is the fallback.
+  (Supersedes 2026-10-12 "3.0 work on the v3 branch".)
+- 2026-10-17: 3.0 is organised around THEMES with two faces: a live face (companion running) and a screen-only face
+  (stored clip), both from the same theme, applied once from one place, with a seamless hand-over between them.
+  The current MP4-centred UI must be redesigned for this; explore the design with the user before building.
 
 Start-of-work reading: `docs/roadmap/2026-10-12-v2-release-and-v3.md` (2.0 state and the 3.0 brief).
