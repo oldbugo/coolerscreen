@@ -34,3 +34,16 @@ the Node backend; they are in the 1.2.0 release commit (`3eb5b69`).
 
 Findings behind these (orientation, 18 fps playback, DTR watchdog, WinUSB fix, H.264 freeze) are summarised in the main
 README under "For developers" and in `docs/roadmap/phase0-results.md`.
+
+## Live-mode developer commands (3.0)
+
+| Command | What it does |
+|---|---|
+| `.\cs2.exe wake` | Display on and play the loop clip (after a live session left the screen dark). |
+| `.\cs2.exe live-test …` / `trial` | Raw live-mode tests and the guided trials used to find the live protocol. |
+| `.\cs2.exe edge-tune` | Ruler picture to measure hidden edges (the app's Settings → Screen fit does this now). |
+| `.\cs2.exe core-apply <originalId> [--real]` | Runs the app's Apply job from the command line (refuses while the app runs). |
+| `.\cs2.exe core-repair-plan [--real]` | Read-only: what the startup library repair would do. |
+| `cs-companion.exe --help` | Prototype A / measuring tool for the live engine (`--measure`, `--dry-run`, `--theme-of`, `--dump-frames`). |
+
+The double-click launchers `test-live.cmd` and `tune-edges.cmd` were removed in 3.0 (the app covers both).
