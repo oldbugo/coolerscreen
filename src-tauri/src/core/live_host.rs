@@ -19,6 +19,8 @@ pub const USER: u32 = 1;
 pub const DEVICE: u32 = 2;
 pub const SLEEP: u32 = 4;
 pub const LOCK: u32 = 8;
+/// The current theme's "Live layer" switch is off: nothing is streamed, the screen plays its own base.
+pub const LAYER: u32 = 16;
 
 pub struct LiveHost {
     pipeline: Mutex<Option<Arc<Pipeline>>>,
@@ -79,10 +81,18 @@ impl LiveHost {
     }
 
     /// The theme live shows: kept for pipelines that start later, and given to the running one without ending the stream.
-    pub fn set_theme(&self, t: crate::live::theme::ThemeLive) {
+    /// A theme whose live layer is off holds live (like a device task does) until another theme, or the switch, brings it back.
+    pub fn set_theme(self: &Arc<Self>, t: crate::live::theme::ThemeLive) {
+        let layer_off = !t.theme.live_layer;
         *self.theme.lock().unwrap() = Some(t.clone());
         if let Some(p) = self.pipeline() {
             p.set_theme(t);
+        }
+        let held = self.holds.load(SeqCst) & LAYER != 0;
+        if layer_off && !held {
+            self.hold(LAYER, Duration::from_secs(6));
+        } else if !layer_off && held {
+            self.release(LAYER, Duration::from_millis(300));
         }
     }
 
@@ -266,6 +276,7 @@ impl LiveHost {
             "paused": h & USER != 0,
             "deviceHold": h & DEVICE != 0,
             "systemHold": h & (SLEEP | LOCK) != 0,
+            "layerOff": h & LAYER != 0,
             "noDevice": self.no_device.load(SeqCst),
         })
     }
@@ -312,5 +323,36 @@ mod tests {
         assert!(p.shared.paused.load(SeqCst));
         h.stop();
         assert!(!h.running());
+    }
+
+    #[test]
+    fn live_layer_off_stops_streaming_and_on_resumes() {
+        use crate::live::theme::{Theme, ThemeLive};
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.start();
+        let p = h.pipeline().expect("running");
+        let theme = |layer: bool| ThemeLive::new(Theme { live_layer: layer, ..Theme::default() }, std::path::PathBuf::new());
+        h.set_theme(theme(true));
+        assert!(!p.shared.paused.load(SeqCst));
+        h.set_theme(theme(false));
+        assert!(p.shared.paused.load(SeqCst), "no frames while the live layer is off");
+        assert_eq!(h.status()["layerOff"], json!(true));
+        // a device task coming and going does not bring it back
+        h.device_busy(true);
+        h.device_busy(false);
+        std::thread::sleep(Duration::from_millis(1600));
+        assert!(p.shared.paused.load(SeqCst));
+        h.set_theme(theme(true));
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(!p.shared.paused.load(SeqCst), "turning it on again resumes");
+        assert_eq!(h.status()["layerOff"], json!(false));
+        // live started while the layer is off stays quiet
+        h.stop();
+        h.set_theme(theme(false));
+        h.start();
+        assert!(h.pipeline().unwrap().shared.paused.load(SeqCst));
+        h.stop();
     }
 }

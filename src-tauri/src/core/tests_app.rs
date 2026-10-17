@@ -469,3 +469,108 @@ fn changing_baked_items_marks_the_base_as_stale() {
     // taking it off again clears the notice
     assert_eq!(app.theme_set(&oid, &live).unwrap()["baseStale"], json!(false));
 }
+
+// ---------- theme format v1.1 ----------
+
+fn two_originals(app: &App, gallery: &std::path::Path) -> (String, String) {
+    put(&gallery.join("Alpha.mp4"), b"alpha video");
+    put(&gallery.join("Beta.mp4"), b"beta video, a bit longer");
+    app.startup();
+    wait_until(|| app.originals_list()["originals"].as_array().unwrap().len() == 2);
+    let find = |n: &str| app.originals_list()["originals"].as_array().unwrap().iter().find(|o| o["name"] == n).unwrap()["id"].as_str().unwrap().to_string();
+    let (a, b) = (find("Alpha"), find("Beta"));
+    for id in [&a, &b] {
+        wait_until(|| app.original_get(id).unwrap()["assets"] == "ready");
+    }
+    (a, b)
+}
+
+#[test]
+fn layers_groups_hidden_and_live_layer_are_kept_and_validated() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "t.mp4");
+    let w = |id: &str, g: Option<&str>| json!({ "id": id, "type": "text", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "group": g, "props": { "text": id, "name": format!("Layer {id}") } });
+    let t = json!({
+        "liveLayer": false,
+        // g1's members are split by "b"; "e" names a group that does not exist; g3 has no members
+        "widgets": [w("a", Some("g1")), w("b", None), w("c", Some("g1")), w("d", Some("g2")), w("e", Some("nope"))],
+        "groups": [{ "id": "g1", "name": "  Title block  ", "hidden": true }, { "id": "g2", "name": "Two", "collapsed": true }, { "id": "g3", "name": "Empty" }]
+    });
+    let v = app.theme_set(&oid, &t).unwrap();
+    let th = &v["theme"];
+    assert_eq!(th["liveLayer"], json!(false), "the switch is saved");
+    let order: Vec<&str> = th["widgets"].as_array().unwrap().iter().map(|w| w["id"].as_str().unwrap()).collect();
+    assert_eq!(order, ["a", "c", "b", "d", "e"], "group members become contiguous, at the place of the first member");
+    assert_eq!(th["widgets"][4]["group"], Value::Null, "an unknown group is dropped");
+    let gids: Vec<&str> = th["groups"].as_array().unwrap().iter().map(|g| g["id"].as_str().unwrap()).collect();
+    assert_eq!(gids, ["g1", "g2"], "empty groups go");
+    assert_eq!(th["groups"][0]["name"], "Title block");
+    assert_eq!(th["groups"][0]["hidden"], json!(true));
+    assert_eq!(th["groups"][1]["collapsed"], json!(true));
+    assert_eq!(th["widgets"][0]["props"]["name"], "Layer a", "layer names survive");
+    // new themes: the live layer is on
+    assert_eq!(app.theme_get(&oid).unwrap()["theme"]["liveLayer"], json!(false));
+    let v = app.theme_set(&oid, &json!({})).unwrap();
+    assert_eq!(v["theme"]["liveLayer"], json!(true));
+    // hidden items are not baked
+    let baked = json!({ "widgets": [{ "id": "t", "type": "text", "onBase": true, "hidden": true }] });
+    assert_eq!(app.theme_set(&oid, &baked).unwrap()["hasBaseItems"], json!(false));
+}
+
+#[test]
+fn live_layer_off_of_the_current_theme_holds_live() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "t.mp4");
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    assert_eq!(app.live.status()["layerOff"], json!(false));
+    app.theme_set(&oid, &json!({ "liveLayer": false })).unwrap();
+    assert_eq!(app.live.status()["layerOff"], json!(true));
+    app.theme_set(&oid, &json!({ "liveLayer": true })).unwrap();
+    wait_until(|| app.live.status()["layerOff"] == json!(false));
+}
+
+#[test]
+fn a_theme_can_use_a_version_of_another_clip_as_its_base() {
+    let (_d, app, _rec, gallery) = setup();
+    let (a, b) = two_originals(&app, &gallery);
+    // a ready version of Beta
+    let v = app.lib.create_version(&b, &json!({ "start": 0, "length": 2, "force": true })).unwrap();
+    let vb = v["id"].as_str().unwrap().to_string();
+    app.version_handle(&b, &v).wait().unwrap();
+    // not ready / unknown versions are refused
+    assert!(app.theme_set_base(&a, "zzzzzzzz").is_err());
+    let slow = app.lib.create_version(&b, &json!({ "start": 1, "length": 2, "force": true })).unwrap();
+    assert!(app.theme_set_base(&a, slow["id"].as_str().unwrap()).is_err(), "a version still queued cannot be the base");
+    // Alpha takes Beta's version: nothing is sent, the editor is told to store it
+    app.settings.update(|_| {}).unwrap();
+    let view = app.theme_set_base(&a, &vb).unwrap();
+    assert_eq!(view["baseVersionId"], json!(vb));
+    assert_eq!(view["baseOwner"]["originalId"], json!(b));
+    assert_eq!(view["baseOwner"]["name"], "Beta");
+    assert!(app.settings.load().slot("standby").is_none(), "nothing was sent to the screen");
+    // live uses it at once: its file is the background and its clip the fallback
+    let tl = app.theme_live_of(&a, app.load_theme(&a));
+    assert_eq!(tl.base_video, app.lib.device_path(&vb));
+    assert_eq!(tl.fallback_video, app.lib.source_path(&app.lib.read_original(&b).unwrap()));
+    // apply Alpha: Beta's version is what gets stored, and Alpha (not Beta) is the current theme
+    let r = app.theme_apply(&a).unwrap();
+    let j = wait_job(&app, r["jobId"].as_str().unwrap());
+    assert_eq!(j["state"], "done", "{j}");
+    assert_eq!(j["result"]["versionId"], json!(vb), "no new version was made");
+    assert_eq!(app.settings.load().slot("standby").unwrap()["versionId"], json!(vb));
+    assert_eq!(app.current_theme_oid().as_deref(), Some(a.as_str()));
+    let view = app.theme_get(&a).unwrap();
+    assert_eq!(view["current"], json!(true));
+    assert_eq!(view["baseUnstored"], json!(false));
+    assert_eq!(app.theme_get(&b).unwrap()["current"], json!(false));
+    assert_eq!(app.lib.versions(&a).len(), 0, "Alpha itself has no versions");
+    // choosing yet another base later shows "base changed"
+    let v2 = app.lib.create_version(&b, &json!({ "start": 0, "length": 3, "force": true })).unwrap();
+    app.version_handle(&b, &v2).wait().unwrap();
+    let view = app.theme_set_base(&a, v2["id"].as_str().unwrap()).unwrap();
+    assert_eq!(view["baseUnstored"], json!(true));
+    assert_eq!(app.settings.load().slot("standby").unwrap()["versionId"], json!(vb), "the screen still has the old base");
+    // a restart keeps who is current (themeId lives in the slot record)
+    assert_eq!(app.current_theme_oid().as_deref(), Some(a.as_str()));
+}

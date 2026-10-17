@@ -670,7 +670,7 @@ impl App {
             record_splash(&sp);
         }
         self.settings.record_slot("standby", Some(record))?;
-        self.after_base_sent(&oid, vid); // 3.0: this version is its theme's base and the live layer follows
+        self.after_base_sent(vid); // 3.0: this version is the base of its theme and the live layer follows
         let secs = started.elapsed().as_secs_f64();
         if secs > 20.0 && r["transport"] != "fake" {
             let rate = (bytes_total as f64 / secs).round();

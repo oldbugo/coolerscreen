@@ -300,6 +300,12 @@ pub async fn theme_asset_add(core: State<'_, Core>, request: tauri::ipc::Request
     run(&core, move |app| app.theme_asset_add_path(&oid, &path)).await
 }
 
+/// Use a version of any clip as the theme's base (nothing is sent to the screen) -> the theme view.
+#[tauri::command]
+pub async fn theme_set_base(core: State<'_, Core>, original_id: String, version_id: String) -> Result<Value, CoreError> {
+    run(&core, move |a| a.theme_set_base(&original_id, &version_id)).await
+}
+
 /// Apply a theme: base picture, store it on the screen, switch the live layer -> `{ jobId }`.
 #[tauri::command]
 pub async fn theme_apply(core: State<'_, Core>, original_id: String) -> Result<Value, CoreError> {
@@ -366,5 +372,5 @@ pub const COMMANDS: &[&str] = &[
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
-    "theme_preview", "theme_asset_add", "theme_apply",
+    "theme_preview", "theme_asset_add", "theme_apply", "theme_set_base",
 ];

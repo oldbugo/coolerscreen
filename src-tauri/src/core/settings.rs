@@ -153,7 +153,7 @@ fn clean_slot(v: Option<&Value>) -> Value {
     r.insert("name".into(), json!(name));
     r.insert("size".into(), num(size));
     r.insert("at".into(), json!(at));
-    for k in ["originalId", "versionId", "label", "splash"] {
+    for k in ["originalId", "versionId", "label", "splash", "themeId"] {
         if let Some(s) = str80(v.get(k), 80) {
             r.insert(k.into(), json!(s));
         }

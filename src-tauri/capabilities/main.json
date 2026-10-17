@@ -58,6 +58,7 @@
     "allow-theme-standard",
     "allow-theme-preview",
     "allow-theme-asset-add",
-    "allow-theme-apply"
+    "allow-theme-apply",
+    "allow-theme-set-base"
   ]
 }

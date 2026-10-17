@@ -20,6 +20,39 @@ use std::time::Duration;
 
 /// theme.json is read-modified-written by the editor, the send hook and the apply job.
 static THEME_LOCK: Mutex<()> = Mutex::new(());
+/// (theme, version) of the Apply that is writing to the screen: the send hook stores the version for that theme.
+static APPLY_TARGET: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+fn target_set(theme: &str, vid: &str) {
+    let mut g = APPLY_TARGET.lock().unwrap_or_else(|p| p.into_inner());
+    g.retain(|(_, v)| v != vid);
+    g.push((theme.to_string(), vid.to_string()));
+}
+fn target_clear(vid: &str) {
+    APPLY_TARGET.lock().unwrap_or_else(|p| p.into_inner()).retain(|(_, v)| v != vid);
+}
+
+/// Members of a group sit next to each other in `widgets` (a group at the place of its lowest member); empty groups go.
+fn normalize_groups(t: &mut Theme) {
+    let mut out = Vec::with_capacity(t.widgets.len());
+    let mut done = std::collections::HashSet::new();
+    for w in &t.widgets {
+        match &w.group {
+            Some(g) => {
+                if done.insert(g.clone()) {
+                    out.extend(t.widgets.iter().filter(|x| x.group.as_ref() == Some(g)).cloned());
+                }
+            }
+            None => out.push(w.clone()),
+        }
+    }
+    t.widgets = out;
+    let used: std::collections::HashSet<String> = t.widgets.iter().filter_map(|w| w.group.clone()).collect();
+    t.groups.retain(|g| used.contains(&g.id));
+    for g in t.groups.iter_mut() {
+        g.name = g.name.trim().chars().take(60).collect();
+    }
+}
 
 const ASSET_EXT: [&str; 6] = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 const MAX_ASSET_BYTES: usize = 25 * 1024 * 1024;
@@ -84,22 +117,31 @@ impl App {
     }
 
     /// The original of the version in the loop slot, if that original still exists.
+    ///
+    /// A theme's base may be a version of another clip, so the slot record also names the theme it was stored for
+    /// (`themeId`); without it (a plain push, an older build) the owner of the version is the theme.
     pub fn current_theme_oid(&self) -> Option<String> {
         let s = self.settings.load();
-        let vid = s.slot("standby")?["versionId"].as_str()?.to_string();
-        let (oid, _) = self.lib.find_version(&vid)?;
-        self.lib.read_original(&oid).map(|_| oid)
+        let sb = s.slot("standby")?;
+        let vid = sb["versionId"].as_str()?.to_string();
+        let (owner, _) = self.lib.find_version(&vid)?;
+        if let Some(t) = sb["themeId"].as_str().filter(|t| self.lib.read_original(t).is_some()) {
+            return Some(t.to_string());
+        }
+        self.lib.read_original(&owner).map(|_| owner)
     }
 
     /// What the engine needs: the theme, its folder, the base file and the original clip as a fallback background.
     pub fn theme_live_of(&self, oid: &str, theme: Theme) -> ThemeLive {
-        let o = self.lib.read_original(oid);
         let mut tl = ThemeLive::new(theme.clone(), self.theme_dir(oid));
-        tl.base_video = theme
+        // The base may be a version of any clip: its file is the background, and that clip is the fallback.
+        let base = theme
             .base_version_id
             .as_deref()
-            .and_then(|v| self.lib.find_version(v).filter(|(_, r)| r["status"] == "ready").map(|_| v.to_string()))
-            .and_then(|v| self.lib.device_path(&v));
+            .and_then(|v| self.lib.find_version(v).filter(|(_, r)| r["status"] == "ready").map(|(o, _)| (o, v.to_string())));
+        tl.base_video = base.as_ref().and_then(|(_, v)| self.lib.device_path(v));
+        let owner = base.map(|(o, _)| o).unwrap_or_else(|| oid.to_string());
+        let o = self.lib.read_original(&owner);
         tl.fallback_video = o.as_ref().filter(|o| !truthy(o.get("isImage"))).and_then(|o| self.lib.source_path(o));
         tl
     }
@@ -138,12 +180,16 @@ impl App {
         let base = t.base_version_id.as_deref().and_then(|v| self.lib.find_version(v));
         let key = self.overlay_key(oid, &t);
         // The stored base was made without (or with other) baked items than the theme has now.
-        let stale = current && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key);
+        let standby = self.settings.load().slot("standby").and_then(|s| s["versionId"].as_str().map(String::from));
+        // A base was chosen (Base settings) that is not what the screen holds yet.
+        let unstored = current && base.is_some() && standby != t.base_version_id;
+        let stale = current && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key);
+        let owner = base.as_ref().and_then(|(boid, _)| self.lib.read_original(boid).map(|bo| json!({ "originalId": boid, "name": bo["name"] })));
         let kinds: Vec<&str> = t.widgets.iter().map(|w| w.kind.as_str()).collect();
         Ok(json!({
             "originalId": oid, "name": o["name"], "theme": theme_value(&t),
             "current": current, "baseVersionId": t.base_version_id, "baseExists": base.is_some(),
-            "baseStale": stale, "hasBaseItems": t.has_base_items(), "widgetKinds": kinds,
+            "baseStale": stale, "baseUnstored": unstored, "baseOwner": owner, "hasBaseItems": t.has_base_items(), "widgetKinds": kinds,
             "canPreview": self.lib.source_path(&o).is_some() || base.is_some(),
         }))
     }
@@ -174,7 +220,28 @@ impl App {
             }
         }
         t.base_version_id = self.load_theme(oid).base_version_id;
+        normalize_groups(&mut t);
         Ok(t)
+    }
+
+    /// Use a version of ANY clip as this theme's base. Nothing is sent to the screen: the editor then offers to store it.
+    pub fn theme_set_base(&self, oid: &str, vid: &str) -> CoreResult<Value> {
+        self.lib.read_original(oid).ok_or_else(gone)?;
+        let (_, v) = self.lib.find_version(vid).ok_or_else(|| CoreError::not_found("This version no longer exists."))?;
+        if v["status"] != "ready" {
+            return Err(CoreError::new("That version is not ready yet."));
+        }
+        {
+            let _g = THEME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut t = self.load_theme(oid);
+            t.base_version_id = Some(vid.to_string());
+            self.save_theme_locked(oid, &t)?;
+        }
+        if self.current_theme_oid().as_deref() == Some(oid) {
+            self.refresh_live_theme();
+        }
+        self.theme_card_soon(oid);
+        self.theme_view(oid)
     }
 
     /// Validate and save theme.json; when this is the current theme the live screen follows at once.
@@ -277,20 +344,24 @@ impl App {
 
     // ---------- after a base was stored ----------
 
-    /// A version of `oid` is now in the loop slot: it is this theme's base, and the live layer switches to the theme.
-    pub(crate) fn after_base_sent(&self, oid: &str, vid: &str) {
-        if self.lib.read_original(oid).is_some() {
+    /// A version is now in the loop slot: it is the base of the theme being applied (or, for a plain push, of the clip it
+    /// belongs to), the slot remembers that theme, and the live layer switches to it.
+    pub(crate) fn after_base_sent(&self, vid: &str) {
+        let target = APPLY_TARGET.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(_, v)| v == vid).map(|(t, _)| t.clone());
+        let Some(oid) = target.or_else(|| self.lib.find_version(vid).map(|(o, _)| o)) else { return };
+        if self.lib.read_original(&oid).is_some() {
             let _g = THEME_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            let mut t = self.load_theme(oid);
+            let mut t = self.load_theme(&oid);
             if t.base_version_id.as_deref() != Some(vid) {
                 t.base_version_id = Some(vid.to_string());
-                if let Err(e) = self.save_theme_locked(oid, &t) {
+                if let Err(e) = self.save_theme_locked(&oid, &t) {
                     eprintln!("Could not save the theme's base: {}", e.message);
                 }
             }
+            let _ = self.settings.patch_slot("standby", &json!({ "themeId": oid }));
         }
         self.refresh_live_theme();
-        self.theme_card_soon(oid);
+        self.theme_card_soon(&oid);
     }
 
     // ---------- apply ----------
@@ -382,14 +453,31 @@ impl App {
         ctx.progress(0.0, "Step 1 of 3: Preparing the picture");
         // 1. the base: the version with the clip's settings (and the baked items), reused when it already exists
         let overlay = self.make_overlay(oid, &t)?;
-        let mut body = self.apply_settings(&o);
+        let want_key = overlay.as_ref().and_then(|ov| ov["key"].as_str().map(String::from));
+        // A base was chosen already (maybe from another clip): keep its picture settings; it is re-made only when the baked
+        // items differ. Otherwise the base comes from this clip's own tuning.
+        let existing = t.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).filter(|(_, v)| v["status"] == "ready");
+        let (src_oid, mut body) = match &existing {
+            Some((boid, bv)) => {
+                let e = super::library::effective_settings(bv);
+                let mut b = json!({});
+                for k in ["start", "length", "quality", "frame", "corners", "detail", "blend"] {
+                    b[k] = e.get(k).cloned().unwrap_or(Value::Null);
+                }
+                (boid.clone(), b)
+            }
+            None => (oid.to_string(), self.apply_settings(&o)),
+        };
         if let Some(ov) = &overlay {
             body["overlay"] = ov.clone();
         }
-        let vid = match self.lib.create_version(oid, &body) {
+        let reuse = existing.as_ref().filter(|(_, bv)| bv["overlay"]["key"].as_str().map(String::from) == want_key).map(|(_, bv)| bv["id"].as_str().unwrap_or("").to_string());
+        let created = if reuse.is_some() { Err(CoreError::coded("duplicate", "reuse").with("versionId", json!(reuse))) } else { self.lib.create_version(&src_oid, &body) };
+        let oid_for_version = src_oid.as_str();
+        let vid = match created {
             Ok(v) => {
                 let vid = v["id"].as_str().unwrap_or("").to_string();
-                let h = self.version_handle(oid, &v);
+                let h = self.version_handle(oid_for_version, &v);
                 if let Err(e) = self.wait_sub(ctx, &h, (0.0, BASE_END), 1, "Preparing the picture") {
                     self.lib.delete_version(&vid); // stopped or failed half-way: no leftover half-made version
                     return Err(e);
@@ -406,11 +494,16 @@ impl App {
         ctx.check()?;
         // 2. send it to the loop slot (live pauses while the screen is written)
         ctx.progress(BASE_END, "Step 2 of 3: Sending to the screen");
-        let h = self.send_handle(&vid)?;
-        self.wait_sub(ctx, &h, (BASE_END, SEND_END), 2, "Sending to the screen")?;
+        target_set(oid, &vid);
+        let sent = self.send_handle(&vid).and_then(|h| self.wait_sub(ctx, &h, (BASE_END, SEND_END), 2, "Sending to the screen"));
+        if sent.is_err() {
+            target_clear(&vid);
+        }
+        sent?;
         // 3. switch the live layer
         ctx.progress(SEND_END, "Step 3 of 3: Switching the live layer");
-        self.after_base_sent(oid, &vid);
+        self.after_base_sent(&vid);
+        target_clear(&vid);
         ctx.progress(1.0, "Done");
         Ok(json!({ "originalId": oid, "versionId": vid }))
     }
