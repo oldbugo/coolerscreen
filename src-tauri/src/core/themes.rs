@@ -332,9 +332,13 @@ impl App {
     fn wait_sub(&self, ctx: &TaskCtx, h: &JobHandle, (from, to): (f64, f64), step: u32, what: &str) -> CoreResult<Value> {
         loop {
             if ctx.is_cancelled() {
+                // A queued or converting job stops at once. A screen upload that is already running is never cut off
+                // halfway (the screen would be left with a broken picture): it finishes, and then so does the apply.
                 self.sched.cancel(&h.id);
-                let _ = h.wait();
-                return Err(ctx.check().err().unwrap_or_else(CoreError::cancelled));
+                return match h.wait() {
+                    Ok(v) => Ok(v),
+                    Err(_) => Err(ctx.check().err().unwrap_or_else(CoreError::cancelled)),
+                };
             }
             if let Some(r) = h.wait_timeout(Duration::from_millis(100)) {
                 return r;
@@ -348,6 +352,7 @@ impl App {
 
     /// Wait until an existing version is ready (it was queued earlier by another action).
     fn wait_version(&self, ctx: &TaskCtx, vid: &str) -> CoreResult<()> {
+        let mut idle_since: Option<std::time::Instant> = None;
         loop {
             ctx.check()?;
             let (_, v) = self.lib.find_version(vid).ok_or_else(|| CoreError::new("The base picture was deleted."))?;
@@ -355,7 +360,15 @@ impl App {
                 Some("ready") => return Ok(()),
                 Some("error") => return Err(CoreError::new(v["error"].as_str().unwrap_or("The base picture could not be made.").to_string())),
                 _ => {
-                    let p = self.sched.activity(0).iter().find(|j| j.version_id.as_deref() == Some(vid) && j.kind == "version").map(|j| j.progress).unwrap_or(0.0);
+                    let job = self.sched.activity(0).into_iter().find(|j| j.version_id.as_deref() == Some(vid) && j.kind == "version" && !j.state.finished());
+                    // queued/converting with no job behind it: it was interrupted, never finish waiting for it
+                    if job.is_none() && idle_since.get_or_insert_with(std::time::Instant::now).elapsed() > Duration::from_secs(3) {
+                        return Err(CoreError::new("The base picture was interrupted. Apply the theme again."));
+                    }
+                    if job.is_some() {
+                        idle_since = None;
+                    }
+                    let p = job.map(|j| j.progress).unwrap_or(0.0);
                     ctx.progress(BASE_END * p, "Step 1 of 3: Preparing the picture");
                     ctx.sleep(Duration::from_millis(100))?;
                 }
@@ -377,7 +390,10 @@ impl App {
             Ok(v) => {
                 let vid = v["id"].as_str().unwrap_or("").to_string();
                 let h = self.version_handle(oid, &v);
-                self.wait_sub(ctx, &h, (0.0, BASE_END), 1, "Preparing the picture")?;
+                if let Err(e) = self.wait_sub(ctx, &h, (0.0, BASE_END), 1, "Preparing the picture") {
+                    self.lib.delete_version(&vid); // stopped or failed half-way: no leftover half-made version
+                    return Err(e);
+                }
                 vid
             }
             Err(e) if e.code_is("duplicate") => {

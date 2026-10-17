@@ -437,6 +437,7 @@ fn stopping_an_apply_keeps_the_previous_theme() {
     assert!(app.settings.load().slot("standby").is_none(), "nothing was stored on the screen");
     assert!(app.current_theme_oid().is_none());
     assert!(app.theme_get(&oid).unwrap()["theme"]["baseVersionId"].is_null());
+    assert!(app.lib.versions(&oid).is_empty(), "no half-made base is left behind");
 }
 
 #[test]

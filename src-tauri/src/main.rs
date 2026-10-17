@@ -30,8 +30,12 @@ fn main() {
     let relay = Arc::new(EventRelay::default());
     let core = App::new(cs_core::core::paths::base(), cs_core::backends(), relay.clone(), env!("CARGO_PKG_VERSION"));
     let mut measure = measure;
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| live_app::show_main(app)))
+    let mut builder = tauri::Builder::default();
+    // One CoolerScreen at a time, unless COOLERSCREEN_MULTI is set (UI tests next to the installed app, with a temp COOLERSCREEN_HOME).
+    if std::env::var_os("COOLERSCREEN_MULTI").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| live_app::show_main(app)));
+    }
+    let app = builder
         .manage(Core(core.clone()))
         .manage(Media(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
