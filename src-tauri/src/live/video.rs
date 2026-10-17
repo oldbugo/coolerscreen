@@ -191,7 +191,8 @@ impl Drop for VideoBg {
             let _ = c.kill();
         }
         if let Some(t) = self.thread.take() {
-            let _ = t.join();
+            // Bounded: a decoder thread stuck in a blocking read must never keep a stop (or a test) from finishing.
+            super::pipeline::join_bounded(vec![t], Duration::from_millis(2500));
         }
     }
 }
