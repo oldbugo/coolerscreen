@@ -38,6 +38,8 @@ pub struct LiveHost {
     off_stopped: AtomicBool,
     /// The theme live shows (3.0): given to every pipeline when it starts and whenever it changes.
     theme: Mutex<Option<crate::live::theme::ThemeLive>>,
+    /// Calibration guides drawn on the real screen while the Screen guides page is open (None = off).
+    calibration: Mutex<Option<crate::live::theme::Guides>>,
 }
 
 impl Default for LiveHost {
@@ -51,6 +53,7 @@ impl Default for LiveHost {
             last_cfg: Mutex::new(None),
             off_stopped: AtomicBool::new(false),
             theme: Mutex::new(None),
+            calibration: Mutex::new(None),
         }
     }
 }
@@ -81,6 +84,14 @@ impl LiveHost {
     }
 
     /// The theme live shows: kept for pipelines that start later, and given to the running one without ending the stream.
+    /// Draw the guide lines on the real screen (live must be on); None clears them. Temporary: never saved.
+    pub fn set_calibration(&self, g: Option<crate::live::theme::Guides>) {
+        *self.calibration.lock().unwrap() = g.clone();
+        if let Some(p) = self.pipeline() {
+            p.set_calibration(g);
+        }
+    }
+
     /// A theme whose live layer is off holds live (like a device task does) until another theme, or the switch, brings it back.
     pub fn set_theme(self: &Arc<Self>, t: crate::live::theme::ThemeLive) {
         let layer_off = !t.theme.live_layer;
@@ -133,6 +144,9 @@ impl LiveHost {
         let p = Arc::new(Pipeline::start(&cfg, sink));
         if let Some(t) = self.theme.lock().unwrap().clone() {
             p.set_theme(t);
+        }
+        if let Some(g) = self.calibration.lock().unwrap().clone() {
+            p.set_calibration(Some(g));
         }
         // Started while a hold is set (a device task is running): stay paused until it is done.
         p.shared.paused.store(self.holds.load(SeqCst) != 0, SeqCst);

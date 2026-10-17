@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-theme-set-base"
+description = "Enables the theme_set_base command without any pre-configured scope."
+commands.allow = ["theme_set_base"]
+
+[[permission]]
+identifier = "deny-theme-set-base"
+description = "Denies the theme_set_base command without any pre-configured scope."
+commands.deny = ["theme_set_base"]
