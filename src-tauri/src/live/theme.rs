@@ -21,12 +21,16 @@ pub struct Theme {
     /// The version stored on the screen as this theme's base; None until first applied.
     pub base_version_id: Option<String>,
     pub widgets: Vec<Widget>,
+    /// Editor groups (members are contiguous in `widgets`); the engine only uses their `hidden` flag.
+    pub groups: Vec<Group>,
+    /// The single "Live layer" switch: false = base only (the app stops streaming; previews show the base only).
+    pub live_layer: bool,
     pub handover: Handover,
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), handover: Handover::default() }
+        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), groups: Vec::new(), live_layer: true, handover: Handover::default() }
     }
 }
 
@@ -44,19 +48,23 @@ pub struct Widget {
     pub h: f32,
     /// Text and image only: also baked into the base recording.
     pub on_base: bool,
+    /// Not drawn live and not baked.
+    pub hidden: bool,
+    /// Id of the group this widget belongs to.
+    pub group: Option<String>,
     /// Per-type properties (see the typed structs below; unknown keys ignored, missing = default).
     pub props: Value,
 }
 
 impl Default for Widget {
     fn default() -> Self {
-        Widget { id: String::new(), kind: "text".into(), x: 0.0, y: 0.0, w: 0.2, h: 0.2, on_base: false, props: json!({}) }
+        Widget { id: String::new(), kind: "text".into(), x: 0.0, y: 0.0, w: 0.2, h: 0.2, on_base: false, hidden: false, group: None, props: json!({}) }
     }
 }
 
 impl Widget {
     pub fn new(id: &str, kind: &str, x: f32, y: f32, w: f32, h: f32, props: Value) -> Widget {
-        Widget { id: id.into(), kind: kind.into(), x, y, w, h, on_base: false, props }
+        Widget { id: id.into(), kind: kind.into(), x, y, w, h, on_base: false, hidden: false, group: None, props }
     }
     /// Typed view of `props`; a prop of the wrong type or a malformed object gives the defaults.
     pub fn clock(&self) -> ClockProps {
@@ -77,6 +85,21 @@ impl Widget {
     /// Only text and image can be baked into the base.
     pub fn can_be_on_base(&self) -> bool {
         self.kind == "text" || self.kind == "image"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub hidden: bool,
+    pub collapsed: bool,
+}
+
+impl Default for Group {
+    fn default() -> Self {
+        Group { id: String::new(), name: String::new(), hidden: false, collapsed: false }
     }
 }
 
@@ -261,6 +284,20 @@ impl Theme {
     pub fn clamp(&mut self) {
         self.v = THEME_VERSION;
         self.handover.fade_in = if self.handover.fade_in.is_finite() { self.handover.fade_in.clamp(0.0, 3.0) } else { 0.8 };
+        let mut gids = std::collections::HashSet::new();
+        for (i, g) in self.groups.iter_mut().enumerate() {
+            if g.id.trim().is_empty() {
+                g.id = format!("g{}", i + 1);
+            }
+            while !gids.insert(g.id.clone()) {
+                g.id.push('_');
+            }
+        }
+        for w in self.widgets.iter_mut() {
+            if w.group.as_ref().is_some_and(|g| !gids.contains(g)) {
+                w.group = None;
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         for (i, w) in self.widgets.iter_mut().enumerate() {
             for f in [&mut w.x, &mut w.y, &mut w.w, &mut w.h] {
@@ -328,13 +365,18 @@ impl Theme {
     }
 
     /// True when any widget is baked into the base (the app then offers "Base needs re-storing").
+    /// Drawn at all: the widget itself and its group are not hidden.
+    pub fn is_visible(&self, w: &Widget) -> bool {
+        !w.hidden && !w.group.as_ref().is_some_and(|g| self.groups.iter().any(|x| &x.id == g && x.hidden))
+    }
+
     pub fn has_base_items(&self) -> bool {
-        self.widgets.iter().any(|w| w.on_base && w.can_be_on_base())
+        self.widgets.iter().any(|w| w.on_base && w.can_be_on_base() && self.is_visible(w))
     }
 
     /// The part of the theme that shapes the stored base (for change detection: equal = the base needs no re-storing).
     pub fn base_signature(&self) -> String {
-        let items: Vec<&Widget> = self.widgets.iter().filter(|w| w.on_base && w.can_be_on_base()).collect();
+        let items: Vec<&Widget> = self.widgets.iter().filter(|w| w.on_base && w.can_be_on_base() && self.is_visible(w)).collect();
         serde_json::to_string(&items).unwrap_or_default()
     }
 }
@@ -436,5 +478,20 @@ mod tests {
         assert_eq!(w.stats(), StatsProps::default());
         let w = Widget { kind: "clock".into(), props: json!({ "seconds": true, "bogus": 1 }), ..Widget::default() };
         assert!(w.clock().seconds && w.clock().date);
+    }
+
+    #[test]
+    fn v1_1_layers_groups_and_live_layer() {
+        let t = Theme::from_json(r#"{"widgets":[{"id":"a","type":"text","group":"g1","onBase":true},{"id":"b","type":"text","hidden":true,"onBase":true},{"id":"c","type":"text","group":"nope"}],
+            "groups":[{"id":"g1","name":"One","hidden":true},{"name":"x"}]}"#).unwrap();
+        assert!(t.live_layer);
+        assert_eq!(t.groups[1].id, "g2");
+        assert!(!t.is_visible(&t.widgets[0]), "hidden group hides members");
+        assert!(!t.is_visible(&t.widgets[1]));
+        assert_eq!(t.widgets[2].group, None);
+        assert!(t.is_visible(&t.widgets[2]));
+        assert!(!t.has_base_items(), "hidden widgets are not baked");
+        let off = Theme::from_json(r#"{"liveLayer":false}"#).unwrap();
+        assert!(!off.live_layer && off.to_json().contains("\"liveLayer\": false"));
     }
 }
