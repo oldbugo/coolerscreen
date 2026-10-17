@@ -160,3 +160,23 @@ Three guides only (guidance, never masks; never drawn on the screen except durin
 - UI wording rule from the user: as few words as possible. Corner radius = one number field labelled
   "Corner radius" showing the effective value, with a small reset icon button (↺) that clears the theme override;
   no radio buttons, no "px" subtext. Apply the same brevity to the guides and theme settings.
+
+## v1.5 (user, 2026-10-17): screen fit (hidden edges) built into the app
+
+Found with the temporary `cs2 edge-tune` tool on the user's screen: **top 4 px and left 9 px are hidden** by the
+panel (right 0, bottom 0; screen px in 2400x1080 space; saved in `%APPDATA%\CoolerScreen\edge-offsets.json`). The
+user: "the screen quality is not fantastic ... build this straight into the app itself so that other users could
+also run it ... and fine tune".
+
+- Settings `screenFit`: `{ "top": 0, "right": 0, "bottom": 0, "left": 0 }` (px hidden at each edge, panel coords,
+  0–200). Default all 0 for new users; migrate the user's edge-offsets.json on first load if present.
+- Meaning: the **visible rectangle** = panel inset by these. Every picture sent to the screen (bases made by
+  conversion AND live frames) is the design canvas scaled to fit the visible rectangle (keep aspect, centre; the
+  sub-pixel aspect difference is negligible), with the hidden strips black. Panel-fixed masks (notch band, corner
+  radius) and the screen guides stay in PANEL coordinates and are applied after/independently (they describe the
+  physical screen). The notch band is measured from the physical left edge, so it already includes the hidden 9 px.
+- A change of `screenFit` makes every stored base stale (it is part of the base's cache key / "needs re-storing").
+- **Calibration page** in Settings ("Screen fit"): the edge-tune experience in the app — the screen shows the ruler
+  picture live (engine calibration mode, 1680x756, re-sent ~5x/s; a single live frame is NOT shown by the device),
+  four rows Top/Right/Bottom/Left with − / + buttons (one sent pixel ≈ 1.4 screen px) and the value, Save/Undo. Works
+  whether or not live is on (opens a temporary live session for the page, then hands back). Terse wording.
