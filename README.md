@@ -4,8 +4,12 @@ A free, unofficial replacement for the "LOVINGCOOL MONITOR" software for the **L
 Pick any video, GIF or image on your PC, and CoolerScreen converts it and stores it **inside the screen itself**, where it
 loops forever. You only need the app while you are changing the picture.
 
-**What it does NOT do:** it installs no service, no startup entry and no background program. When you close it, the screen
-keeps playing on its own, even after you restart or shut down the PC.
+**Optional since 3.0: a live screen.** Turn **Live** on and CoolerScreen also draws a clock, music, PC stats, weather and
+more on top of your picture while it runs. It is **off by default**.
+
+**What it does NOT do (by default):** it installs no service, no startup entry and no background program, and never needs
+administrator rights after the one-time setup. With Live off, closing it leaves the screen playing on its own, even after
+you restart or shut down the PC. With Live on it stays visible in the tray and **Quit** in its menu stops it.
 
 ## Quick start (Windows 10/11, no programming needed)
 
@@ -36,7 +40,17 @@ keeps playing on its own, even after you restart or shut down the PC.
 To change the picture later, just start the app again. To uninstall: Windows Settings > Apps > CoolerScreen (your clips and
 settings are kept).
 
-## What changed since 1.2
+## What's new in 3.0
+
+- **Themes:** a theme is a stored **base** loop plus an optional **live layer**. Without the app the screen plays the base;
+  with the app running you also see the live layer, and the hand-over between the two is seamless.
+- **On screen editor:** drag clocks, sensors, weather and more onto the preview, with layers, groups and snapping.
+- **Widgets:** clock, date, sensors (six styles), weather, audio visualizer, slideshow, info items, music, text, pictures.
+- **Live screen** at 60 or 30 fps, in the tray, with opt-in start with Windows and sleep / lock / shutdown choices.
+- **Screen fit, rounded corners and screen guides** so pictures fit what you can actually see.
+- No Save buttons: changes are kept as you make them. Details in [CHANGELOG.md](CHANGELOG.md).
+
+## What changed in 2.0
 
 CoolerScreen 2.0 is a new engine under the same library; your clips, versions and settings carry over with no migration.
 
@@ -49,7 +63,6 @@ CoolerScreen 2.0 is a new engine under the same library; your clips, versions an
 - **A proper window:** seamless frameless look with Windows 11 Snap Layouts on the maximise button, remembers its size and
   position, and asks inside the app before closing during an upload.
 - **Installer and portable zip**, a real app icon, and the recovery tools bundled as `cs2.exe`.
-- **On screen, My themes and Browse** pages (3.0): see "Using it".
 - **Smarter loops:** the loop finder scores every start and end as it will look on the screen, with a cross-fade where
   nothing repeats exactly (random particles, rain); loops are found in the background as soon as a clip arrives.
 - **Automatic Wallpaper Engine recording:** stops once it holds a seamless loop, otherwise records 2 minutes.
@@ -144,6 +157,9 @@ the gear opens **Settings**.
 - **Start-up logo:** the screen plays a short clip once at power-on before your clip loops. CoolerScreen puts a 1.5 s
   "CoolerScreen" logo (black, small centred wordmark) there the first time you send, and only re-sends it when it is not
   already there. It uses about 0.5 MB, so about 9 MB remain for your clip. There is nothing to set.
+- **Autosave:** there are no Save buttons. Edits in On screen and in Settings (notch, screen fit, guides, corners, folders)
+  are kept as you make them. Only changes that alter the stored clip (screen fit, corners, notch, text or pictures drawn
+  into the base) show **Base needs re-storing**; live-only changes never do.
 - **Screen status** is checked once when the app opens (the app talks to the screen for a moment); use Settings >
   Screen > **Check again** after plugging it in. The app never polls the screen.
 
@@ -166,6 +182,30 @@ turn it on. What is shown, and how it fades in and out, is set per theme in On s
   when the PC shuts down; and what the screen does when the PC sleeps or is locked (show its normal clip, keep live
   running, or turn off).
 - Startup from a shortcut or script: `CoolerScreen.exe --tray` starts hidden in the tray with live on.
+- Live uses about 0.7 to 1.2% of the PC's CPU with a plain background and about 2 to 4% with video and many widgets, and
+  about 45 to 90 MB of memory (more while the window is open).
+
+### Screen fit (3.0)
+
+The panel hides a few pixels at its edges. Settings > **Screen fit** has Top / Right / Bottom / Left (and a shift of the
+whole picture): the screen shows rulers while you adjust, and the real picture follows at once. Pictures and live frames
+are then fitted into what you can see, and rounded corners follow the same visible area. Changing it makes stored
+pictures need re-storing (a banner and **Store now** offer it). Nothing to do if you are happy with the edges.
+
+### Weather (3.0)
+
+Settings > **Weather**: type a city and pick it; choose °C or °F. Data comes from Open-Meteo (free, no key, only asked
+for the city you pick, never from your IP address). Without a city the Weather widget stays empty. Offline, the last
+value is shown greyed.
+
+### Data sources and no administrator (3.0)
+
+Everything below works without administrator rights: CPU load, RAM, disks, network (Windows counters), NVIDIA GPU
+readings (from the driver), the music that is playing (Windows media controls: Spotify, browsers, VLC, ...), and the
+sound spectrum (Windows audio loopback, no microphone). **CPU temperature is not available yet:** Windows gives no
+reliable reading without a special driver. A later version may read it from HWiNFO or LibreHardwareMonitor if you run
+one yourself; CoolerScreen will never install a driver or ask for administrator rights for it. A missing reading shows a
+grey dash.
 
 
 ## Undo / restore the original driver
@@ -183,6 +223,9 @@ program closes its port. That is how the vendor software works, which is why it 
 | "Screen not found" | Check the USB cable/header and that the cooler has power. Unplug and replug USB, then **Check again** (click the status pill at the top). |
 | Banner says the screen "needs setup" again | The driver was reset (moving the internal USB header to another port, or a big Windows update). Click "Set up screen" again. |
 | Screen goes dark about 30 s after sending | The one-time setup was not applied (or was undone). Run "Set up screen". |
+| "Screen busy" / "in use by ..." | Only one program can use the screen at a time. The message names who has it (another CoolerScreen, LOVINGCOOL MONITOR, a tool, or something else); close that program and CoolerScreen retries by itself every few seconds. If it says CoolerScreen itself, live is running: use the tray menu or the Live switch to pause it. `device.log` (in `%APPDATA%CoolerScreen`) records the reason. |
+| Live is on and the window is closed: how do I quit? | Right-click the CoolerScreen icon in the tray (near the clock, maybe under the ^ arrow) > **Quit**. The screen then plays its stored clip. |
+| A widget shows a grey dash | That reading is not available (CPU temperature, or no NVIDIA GPU). Pick another reading. |
 | "Could not open the screen" / port busy | Close LOVINGCOOL MONITOR (and anything else using the screen). If you ran setup, the vendor app will not work anymore. |
 | Clip is "too big for the screen" | Choose a shorter part or "Best that fits". The screen only has about 9 MB for your clip. Garbage on screen means an oversize file got through, so make a smaller version. |
 | Clip plays too fast or too slow | It was made by an older CoolerScreen at a different frame rate. Use **Re-make** on that version. |
@@ -207,8 +250,9 @@ Then send a clip with the app. More detail in [tools/README.md](tools/README.md)
 ### Screen stays on when the PC is off
 
 Many motherboards keep the USB ports powered while the PC is shut down, so the screen keeps showing its loop. The vendor
-app used to switch the screen off at shutdown, which needs a running program; CoolerScreen runs nothing in the
-background, so it cannot do that. The no-software fix is in the BIOS/UEFI: enable **ErP Ready** / **ErP** (Gigabyte "ErP",
+app used to switch the screen off at shutdown, which needs a running program. With Live off CoolerScreen runs nothing,
+so it cannot do that; with Live on you can choose "turn the screen off at shutdown" in Settings > Live screen (off by
+default). The no-software fix is in the BIOS/UEFI: enable **ErP Ready** / **ErP** (Gigabyte "ErP",
 ASUS "ErP Ready", MSI "EuP 2013") or disable **USB power in S4/S5** (names vary by board). Then the USB ports lose power
 when the PC is off and the screen turns off with it. Note: this also stops USB charging (phones etc.) while the PC is off.
 
@@ -329,7 +373,7 @@ device class -> USBDevice, install `C:\Windows\INF\winusb.inf` for `USB\VID_33C3
 ## Tested hardware
 
 Lovingcool SC70 AIO cooler screen, USB VID `33C3` PID `7791`, model string `D215-NOR-JD9365-6.67inch-hor`, firmware 3.6,
-Windows 11. Other firmware versions and other Lovingcool-style screens are untested.
+Windows 11. Start with Windows has not been tested over a real reboot. Other firmware versions and other Lovingcool-style screens are untested.
 
 ## Disclaimer
 

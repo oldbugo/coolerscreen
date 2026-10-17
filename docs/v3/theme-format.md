@@ -226,3 +226,10 @@ in panel coordinates, for the corners only:
 - The notch band itself stays physical, measured from the panel's own edge. Screen guides are unchanged.
 - Same geometry in the live engine (`live/mask.rs` `apply_fit`), the stored base (`media` `visible_rect` and the corner PNG,
   whose cache name holds the rectangle, so a changed fit makes a new file and the base stale) and the editor's preview overlay.
+
+## Autosave rule (user, 2026-10-18): no Save buttons
+
+Every edit (theme, notch, screen fit, screen guides, corner radius, Gallery folder, source folders) is stored as it is made
+and applies to the live picture at once; closing the window or quitting to the tray changes nothing. Reset replaces Save/Undo.
+Only changes that alter the stored clip (screen fit and shift, corner radius, notch, text/pictures drawn into the base, base
+clip or version) mark the base as needing to be stored again, using the full notch+fit key; live-only changes never do.

@@ -1,5 +1,69 @@
 # Changelog
 
+## 3.0.0 - 2026-10-18
+
+CoolerScreen now draws on the screen while it runs, if you want it to. The 2.0 behaviour is still the default: nothing
+runs in the background until you turn Live on, and the screen keeps playing its stored loop when the app is closed.
+Your clips, versions and settings are used as they are.
+
+- **Themes:** everything on the screen is a theme: a **base** (the loop stored on the screen) plus an optional **live
+  layer** drawn on top by the app. One theme, two faces: with the app running you see base + live layer; without it the
+  screen plays the same base. A plain clip or picture is just a theme with no live layer. Pages: **On screen** (the
+  theme editor), **My themes** (apply, base settings) and **Browse** (adding makes an independent copy).
+- **On screen editor:** drag items from a palette onto the preview or click them; move, resize, set details on the right.
+  Layers list like a paint program: reorder by dragging, multi-select, group / ungroup (Ctrl+G, Ctrl+Shift+G), forward /
+  back (Ctrl+] / Ctrl+[), hide with the eye, rename, delete. Boxes **snap** to each other, the middle and the guides,
+  with an optional equal-gap snap (hold Alt to move freely). A Live layer switch turns all items on or off. Preview as
+  **With live layer**, **Base only** or **Hand-over**. Any clip can be a theme's base.
+- **Widgets:** clock (digital, analog, minimal), date (line, calendar, big), sensor in six styles (number, bar, ring,
+  gauge, graph, sparkline) for CPU / GPU / RAM / network / disk readings, stats panel, weather (Open-Meteo, no key; you
+  pick the city; cached; greyed when offline), audio visualizer (bars, ring, wave), picture slideshow, info widgets
+  (uptime, CPU and GPU name, countdown, top processes), now-playing music (title, artist, cover, progress), text and
+  pictures. A missing reading shows a grey dash, never 0. Text and pictures can also be drawn into the stored base.
+- **Live engine:** 60 or 30 frames per second (60 by default), measured at about 0.7 to 1.2% of the PC's CPU with a plain
+  background and about 2 to 4% with video and many widgets on a busy PC, at roughly 45 to 90 MB. **Hand-over:** it fades
+  in over the screen and, when it stops, ends on the first frame of the stored loop so nothing jumps (fade in/out is a
+  per-theme option). **Pause** and **Resume** in the tray. Sending a clip, restarting or checking the screen pauses live
+  and brings it back.
+- **Tray app:** with Live on, closing the window leaves CoolerScreen in the tray (menu: Open, Pause, 30 / 60 fps, Quit).
+  "Free memory when the window is closed" removes the window completely (about 40 MB). `CoolerScreen.exe --tray` starts
+  hidden in the tray with live on.
+- **Opt-in system behaviour (all off or "normal clip" by default):** start with Windows (a visible start-up entry,
+  removed by uninstalling), and what the screen does at sleep, lock and shutdown (show the stored clip, keep live
+  running, or turn off).
+- **Screen fit:** Settings > Screen fit for the edges the bezel hides (top / right / bottom / left) plus a whole-picture
+  shift. The screen shows rulers while you tune, and your unsaved choice is applied to the real picture (live or base)
+  at once. Existing `edge-offsets.json` values are picked up. A base stored with another fit is re-fitted by the engine
+  and marked as needing to be stored again.
+- **Rounded corners** follow the visible rectangle (after the screen fit and the notch band), in the live picture, the
+  stored base and the editor preview; radius per theme with a default in Settings.
+- **Screen guides:** hatched areas in the editor for the left and right bands and the curve band in the middle, with a
+  warning on items inside one; calibrate them in Settings with lines drawn on the real screen; each theme can nudge them.
+- **Browse copies:** adding from Browse makes an independent copy in My themes; adding again makes "Name (2)".
+- **Safety:** nothing larger than the screen can hold is ever sent (the loop file is checked against the screen's free
+  space before the first byte; impossible capacity readings are ignored); duplicate library items of the same file are
+  merged at start-up (extras go to the Recycle Bin); a screen that is busy names who holds it (own live session, another
+  CoolerScreen, LOVINGCOOL MONITOR, cs2 or something else) and is retried quietly every 4 seconds; Quit and shutdown can
+  no longer hang (bounded waits and a 3-second exit watchdog); an upload is never cut off halfway, and Stop in the
+  Apply window leaves the previous theme.
+- **No Save buttons:** notch, screen fit, screen guides, corner radius and the Gallery folder are kept as you change them
+  (Reset instead of Save / Undo). Live changes apply at once; only changes that alter the stored clip (fit, shift,
+  corners, notch, text or pictures drawn into the base, base clip) mark the base as needing to be stored again.
+- **Build id:** the build's hash, date and time are shown at the bottom of Settings, in the window title and on the first
+  line of `device.log`. Every pause, resume and start of live is logged there with its reason.
+
+Known gaps in 3.0.0:
+- CPU temperature is not available yet (it needs a driver or a tool such as HWiNFO or LibreHardwareMonitor; see
+  `docs/roadmap/2026-10-12-v3-data-sources.md`). The widget shows a grey dash.
+- The audio visualizer has not been tried with real audio; GPU power showed a dash once; countdowns ignore daylight
+  saving changes; there is no frame-rate counter.
+- Start with Windows has not been tested over a real reboot, and the timing of the hand-over and of the screen-off endings
+  has not been measured on the screen.
+- Live backgrounds that are rendered rather than a recorded video (web / scene wallpapers) are not built yet.
+
+See `docs/roadmap/2026-10-18-v3-release-and-v4.md`.
+
+
 ## 2.0.0 - 2026-10-12
 
 A new engine under the same library: CoolerScreen is now a native Windows app (Rust + the system WebView2) instead of

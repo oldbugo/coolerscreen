@@ -1,3 +1,5 @@
+> Newer status: see `2026-10-18-v3-release-and-v4.md` (where 3.0 ended and the 4.0 brief).
+
 # CoolerScreen 2.0 release notes for the team, and the 3.0 brief
 
 Written 2026-10-12, when 2.0.0 was tagged. Read this first when picking the project up again.
