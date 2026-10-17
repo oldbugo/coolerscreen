@@ -144,7 +144,7 @@ impl App {
         let base = theme
             .base_version_id
             .as_deref()
-            .and_then(|v| self.lib.find_version(v).filter(|(_, r)| r["status"] == "ready").map(|(o, _)| (o, v.to_string())));
+            .and_then(|v| self.lib.find_version(v).filter(|(_, r)| r["status"] == "ready" && !self.over_budget(r)).map(|(o, _)| (o, v.to_string())));
         tl.base_video = base.as_ref().and_then(|(_, v)| self.lib.device_path(v));
         tl.base_fit = base.as_ref().map(|_| theme.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).map(|(_, r)| super::fit::Fit::from_value(&r["notch"]["fit"])).unwrap_or_default());
         let owner = base.map(|(o, _)| o).unwrap_or_else(|| oid.to_string());
@@ -164,6 +164,11 @@ impl App {
             None => ThemeLive::new(Theme::standard_preset(), PathBuf::new()),
         };
         self.live.set_theme(tl);
+    }
+
+    /// A version bigger than the screen can hold (the loop budget): never a base, never sent.
+    pub fn over_budget(&self, v: &Value) -> bool {
+        v["result"]["size"].as_f64().is_some_and(|x| x > self.lib.context().budget)
     }
 
     /// The corner radius in px that applies to a theme: its own, or the default from Settings (0 = none).
@@ -473,7 +478,7 @@ impl App {
         let want_key = overlay.as_ref().and_then(|ov| ov["key"].as_str().map(String::from));
         // A base was chosen already (maybe from another clip): keep its picture settings; it is re-made only when the baked
         // items differ. Otherwise the base comes from this clip's own tuning.
-        let existing = t.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).filter(|(_, v)| v["status"] == "ready");
+        let existing = t.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).filter(|(_, v)| v["status"] == "ready" && !self.over_budget(v));
         let (src_oid, mut body) = match &existing {
             Some((boid, bv)) => {
                 let e = super::library::effective_settings(bv);
@@ -488,6 +493,9 @@ impl App {
         if let Some(ov) = &overlay {
             body["overlay"] = ov.clone();
         }
+        // Always "best that fits": the base must fit the screen's measured room whatever quality an older version was made with
+        // (a fixed quality plus the screen fit once made a base larger than the flash).
+        body["quality"] = json!("auto");
         // rounded corners: the theme's radius, or the default from Settings (0 = none)
         let radius = self.corner_radius_of(&t);
         body["corners"] = json!({ "on": radius > 0.0, "r": radius });

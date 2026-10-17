@@ -8,6 +8,9 @@ pub fn base_dir() -> PathBuf {
     if let Some(h) = std::env::var_os("COOLERSCREEN_HOME") {
         return PathBuf::from(h);
     }
+    if cfg!(test) {
+        return std::env::temp_dir().join("cs-core-unit-tests");
+    }
     if let Some(a) = std::env::var_os("APPDATA") {
         return PathBuf::from(a).join("CoolerScreen");
     }

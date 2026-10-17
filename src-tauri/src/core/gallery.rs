@@ -493,7 +493,7 @@ impl App {
         if n > 0 {
             eprintln!("Library: migrated {n} item(s) to originals + versions.");
         }
-        self.repair_duplicates(true);
+        self.repair_library();
         self.adopt_cache_only();
         self.gallery_sync();
         self.gallery_watch();

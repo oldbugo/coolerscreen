@@ -457,6 +457,9 @@ pub const UNKNOWN_OTHER: f64 = 1.8e6;
 pub const SAFETY: f64 = 160_000.0;
 /// Splash size before it has been made once (measured: about 0.54 MB).
 pub const SPLASH_EST: f64 = 560_000.0;
+/// The most both clips together can occupy on the SC70 (hardware 2026-10-17: 24520 x 512 B flash, 11.6 MB measured in use).
+/// A measured capacity above this cannot be true (a failed upload once recorded 13.4 MB) and is not used.
+pub const MAX_CAPACITY: f64 = 11_700_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Budgets {
@@ -472,7 +475,7 @@ pub struct Budgets {
 pub fn budgets(s: &Settings, splash_size: Option<u64>) -> Budgets {
     let cap = s.capacity();
     let measured = cap.is_some();
-    let total = cap.as_ref().map(|c| c.0).unwrap_or(s.total_budget_mb() * 1e6);
+    let total = cap.as_ref().map(|c| c.0.min(MAX_CAPACITY)).unwrap_or(s.total_budget_mb() * 1e6);
     let intro = splash_size.map(|x| x as f64).unwrap_or(SPLASH_EST);
     Budgets {
         total,
@@ -495,7 +498,20 @@ pub fn capacity_from(info: &Value, s: &Settings) -> Option<f64> {
     if !free.is_finite() || super::js::truthy(sb.get("incomplete")) || super::js::truthy(su.get("incomplete")) {
         return None;
     }
-    Some(free * bs + su["size"].as_f64()? + sb["size"].as_f64()?)
+    // A full flash (nothing free) means the last upload ran out of room: the recorded sizes are not what is stored.
+    if free <= 0.0 {
+        return None;
+    }
+    let cap = free * bs + su["size"].as_f64()? + sb["size"].as_f64()?;
+    // Never more than the flash itself holds.
+    let blocks = super::js::to_num(info.get("i_blocks"));
+    if blocks.is_finite() && blocks > 0.0 && cap > blocks * bs {
+        return None;
+    }
+    if cap > MAX_CAPACITY {
+        return None;
+    }
+    Some(cap)
 }
 
 pub fn is_blank(slot: &Value) -> bool {

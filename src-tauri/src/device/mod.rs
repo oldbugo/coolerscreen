@@ -220,6 +220,10 @@ impl Screen {
         }
         let total = data.len() as u64;
         let ack = self.cmd(slot.key(), Some(&(data.len() as u32).to_le_bytes()), true, REPLY_TIMEOUT)?;
+        // Hardware 2026-10-17: the size command is answered {"key":19,"hex":"00"} when the file is accepted; anything else refuses it.
+        if ack_refused(&ack) {
+            return Err(DevErr::coded("noRoom", format!("The screen refused the file ({total} bytes): {ack}. Nothing was written.")));
+        }
         // Node registers a 30 s "done" waiter before streaming; keep the same deadline.
         let start = Instant::now();
         let mut off = 0u64;
@@ -272,6 +276,11 @@ impl Screen {
 }
 
 pub mod ops;
+
+/// A reply of the upload commands that says "no": a `hex` field other than "00".
+pub fn ack_refused(v: &Value) -> bool {
+    v.get("hex").and_then(Value::as_str).is_some_and(|h| h != "00")
+}
 
 /// Live-mode writes for the 3.0 companion (WinUSB or serial). Frames and the end-of-stream marker are not 55 AA frames,
 /// and live traffic is far too frequent for the per-MB log line `raw` writes, so this path skips it.

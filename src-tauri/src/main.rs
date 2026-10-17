@@ -122,6 +122,13 @@ fn main() {
                 live_app::ensure_tray(app.handle(), false);
                 live_measure::spawn(app.handle().clone(), o);
             } else if tray_only || c.settings.load().live_in_app() {
+                // Started in the tray without a window the library start-up work waits for the first window; the repairs do not.
+                if tray_only {
+                    let c2 = c.clone();
+                    std::thread::spawn(move || {
+                        c2.repair_library();
+                    });
+                }
                 live_app::apply(app.handle(), tray_only);
             }
             // Debug builds only: the tray's Quit path on a timer, for the fake-setup tests (a tray menu cannot be clicked from a script).

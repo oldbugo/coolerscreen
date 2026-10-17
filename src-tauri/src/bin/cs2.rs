@@ -89,7 +89,16 @@ fn main() {
             wait_job(app, r["jobId"].as_str().unwrap_or(""))
         }),
         Some("core-apply") if args.len() >= 2 => core_apply(&args[1]),
-        Some("core-repair-plan") => core_run(|app| Ok(serde_json::json!({ "duplicates": app.repair_duplicates(false) }))),
+        Some("core-repair-plan") => core_run(|app| Ok(app.repair_library_with(false, &|_| Ok(())))),
+        // Applies the repair in a SCRATCH app folder only (COOLERSCREEN_HOME); emptied records go to <folder>/trash, not the Recycle Bin.
+        Some("core-repair-scratch") if std::env::var_os("COOLERSCREEN_HOME").is_some() => core_run(|app| {
+            let trash = cs_core::core::paths::base().join("trash");
+            Ok(app.repair_library_with(true, &|p| {
+                std::fs::create_dir_all(&trash)?;
+                std::fs::rename(p, trash.join(p.file_name().unwrap_or_default()))?;
+                Ok(())
+            }))
+        }),
         Some("core-send") if args.len() >= 2 => core_send(std::path::Path::new(&args[1])),
         Some("live-test") => live::live_test(&args[1..]),
         Some("wake") => live::wake(),

@@ -220,3 +220,70 @@ impl App {
         });
     }
 }
+
+static REPAIR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+impl App {
+    /// Themes whose chosen base is a version bigger than the screen can hold (a failed upload once left one): the base is cleared,
+    /// or becomes the version in the loop slot when that one is within budget and belongs to the same item (or the same file).
+    pub fn repair_theme_bases(&self, apply: bool) -> Vec<Value> {
+        let budget = self.lib.context().budget;
+        let standby = self.settings.load().slot("standby").cloned().unwrap_or(Value::Null);
+        let slot_version = standby["versionId"].as_str().and_then(|v| self.lib.find_version(v));
+        let mut plans = vec![];
+        for o in self.lib.list_originals() {
+            let oid = o["id"].as_str().unwrap_or("").to_string();
+            let tpath = self.lib.o_dir(&oid).join("theme.json");
+            let Some(mut theme) = js::read_json(&tpath).filter(Value::is_object) else { continue };
+            let Some(bid) = theme["baseVersionId"].as_str().map(String::from) else { continue };
+            let Some((_, bv)) = self.lib.find_version(&bid) else { continue };
+            let size = bv["result"]["size"].as_f64().unwrap_or(0.0);
+            if size <= budget {
+                continue;
+            }
+            // the loop slot's version, when it is this item's own or another item for the same file
+            let fallback = slot_version.as_ref().filter(|(so, sv)| {
+                sv["status"] == "ready"
+                    && sv["result"]["size"].as_f64().is_some_and(|x| x <= budget)
+                    && (so == &oid
+                        || self.lib.read_original(so).is_some_and(|s| {
+                            matches!((s["file"].as_str(), o["file"].as_str()), (Some(a), Some(b)) if same_path(a, Path::new(b)))
+                        }))
+            });
+            let to = fallback.map(|(_, sv)| sv["id"].clone()).unwrap_or(Value::Null);
+            let step = format!(
+                "{oid} ({}): base {bid} is {:.2} MB, over the {:.2} MB the screen can hold; base becomes {}",
+                o["name"].as_str().unwrap_or(""),
+                size / 1e6,
+                budget / 1e6,
+                to.as_str().unwrap_or("none (made again when the theme is applied)")
+            );
+            if apply {
+                theme["baseVersionId"] = to.clone();
+                if js::write_json(&tpath, &theme).is_ok() {
+                    crate::device::log(&format!("Library repair: {step}"));
+                    eprintln!("Library repair: {step}");
+                    self.lib.bump();
+                }
+            }
+            plans.push(json!({ "originalId": oid, "name": o["name"], "from": bid, "sizeBytes": size, "budgetBytes": budget, "to": to, "step": step, "applied": apply }));
+        }
+        plans
+    }
+
+    /// Everything the startup repair does, in order: duplicate items first, then bad theme bases. Safe to call more than once.
+    pub fn repair_library(&self) -> Value {
+        self.repair_library_with(true, &super::recycle::recycle)
+    }
+
+    pub fn repair_library_with(&self, apply: bool, discard: &dyn Fn(&Path) -> CoreResult<()>) -> Value {
+        let _g = REPAIR_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let duplicates = self.repair_duplicates_with(apply, discard);
+        let bases = self.repair_theme_bases(apply);
+        if apply {
+            // always one line, so device.log shows that the check ran
+            crate::device::log(&format!("Library repair: checked the library ({} duplicate group(s), {} theme base(s) fixed)", duplicates.len(), bases.len()));
+        }
+        json!({ "duplicates": duplicates, "themeBases": bases })
+    }
+}

@@ -157,6 +157,15 @@ pub struct SendResult {
     pub uploads: Vec<UploadOutcome>,
 }
 
+/// The most the loop slot can hold according to the screen's own numbers (blocks of the data flash): about 92 % of it is usable
+/// (hardware 2026-10-17: 24520 blocks of 512 B, 11.6 MB measured), minus the intro file. None when the info has no block counts.
+pub fn loop_limit(info: &Value, intro_bytes: u64) -> Option<u64> {
+    let d = info.get("data").filter(|d| d.is_object()).unwrap_or(info);
+    let (blocks, bs) = (d.get("i_blocks")?.as_f64()?, d.get("i_block_size").and_then(Value::as_f64).unwrap_or(512.0));
+    let usable = blocks * bs * 0.92;
+    (usable > intro_bytes as f64).then(|| (usable - intro_bytes as f64) as u64)
+}
+
 /// items uploaded one after another; with play_loop the send ends with a restart (0x01) and a final check
 /// (hardware 2026-10-11: after 0x14 the screen later stopped answering; after a restart it stayed responsive).
 /// progress(0..1 overall, text, bytes sent of current file, file size)
@@ -185,6 +194,17 @@ pub fn send_files(
         progress(i as f64 / total, if i == 0 { "Connecting to screen" } else { "Waiting for screen to come back" }, 0, 0);
         let mut s = if i == 0 && !restarted { open_any()? } else { open_retry(25)? };
         transport = s.transport.to_string();
+        if slot == Slot::Standby {
+            if let Ok(info) = s.info() {
+                let other = items.iter().position(|(_, sl)| *sl == Slot::Startup).map(|k| datas[k].len() as u64).unwrap_or(560_000);
+                if let Some(max) = loop_limit(&info, other) {
+                    if datas[i].len() as u64 > max {
+                        s.close();
+                        return Err(DevErr::coded("noRoom", format!("This file is {:.2} MB but the screen can store at most about {:.2} MB for the loop clip. Nothing was written.", datas[i].len() as f64 / 1e6, max as f64 / 1e6)));
+                    }
+                }
+            }
+        }
         let mut streaming = false;
         let mut sent_all = false;
         let text = format!("Uploading {label} clip (the screen writes slowly: ~3 min for 9 MB)");
@@ -197,6 +217,10 @@ pub fn send_files(
         });
         s.close();
         match r {
+            Ok(o) if super::ack_refused(&o.done) => {
+                // The screen finished writing and said no ({"key":19,"hex":"01"} = it ran out of room): the stored file is cut short.
+                return Err(DevErr::coded("noRoom", format!("The screen ran out of room while storing the file and answered {}. The clip on the screen is incomplete: send a smaller one.", o.done)));
+            }
             Ok(o) => uploads.push(o),
             Err(e) if sent_all => warning = Some(e.message), // the screen may reset right after the last byte
             Err(e) => {
@@ -252,4 +276,25 @@ pub fn state() -> State {
         return State { transport: "serial", needs_setup: true, warning: Some(SERIAL_WARNING), failed_usb: false };
     }
     State { transport: "none", needs_setup: false, warning: None, failed_usb: failed_usb_present() }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    #[test]
+    fn the_loop_limit_follows_the_flash_and_refuses_what_broke_the_screen() {
+        let info = json!({ "cmd": "info", "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 792 } });
+        let max = loop_limit(&info, 537_054).unwrap();
+        assert!(10_662_507 <= max, "the known good version fits: {max}");
+        assert!(12_855_458 > max, "the version that filled the flash does not: {max}");
+        assert!(loop_limit(&json!({ "data": {} }), 537_054).is_none());
+    }
+
+    #[test]
+    fn a_no_from_the_screen_is_a_refusal() {
+        assert!(crate::device::ack_refused(&json!({ "key": 19, "hex": "01" })));
+        assert!(!crate::device::ack_refused(&json!({ "key": 19, "hex": "00" })));
+        assert!(!crate::device::ack_refused(&json!({ "error": "No reply from screen" })));
+    }
 }

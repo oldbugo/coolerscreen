@@ -6,6 +6,10 @@ pub fn base() -> PathBuf {
     if let Some(h) = std::env::var_os("COOLERSCREEN_HOME") {
         return PathBuf::from(h);
     }
+    // Unit tests never touch the real app folder (device.log, companion.json, settings.json).
+    if cfg!(test) {
+        return std::env::temp_dir().join("cs-core-unit-tests");
+    }
     let appdata = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config"));

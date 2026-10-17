@@ -874,3 +874,96 @@ fn merging_keeps_the_newer_theme_and_the_older_one_beside_it_and_repoints_the_sl
     assert!(app2.lib.o_dir(&a2).join("theme.prev.json").is_file());
     assert_eq!(app2.lib.find_version(&v2).unwrap().0, a2);
 }
+
+// ---------- a base that does not fit the screen is never used ----------
+
+fn sized_version(app: &App, oid: &str, n: u32, bytes: u64) -> String {
+    let vid = super::library::new_id();
+    app.lib
+        .write_version(oid, &json!({ "id": vid, "originalId": oid, "n": n, "status": "ready", "notchKey": "off", "settings": { "start": 0, "length": 10, "quality": "auto" },
+            "result": { "size": bytes, "fps": 18, "length": 10, "start": 0 } }))
+        .unwrap();
+    vid
+}
+
+#[test]
+fn an_oversize_base_is_replaced_by_the_slot_version_of_the_same_file_and_never_used() {
+    let (d, app, _rec, gallery) = setup();
+    let file = gallery.join("Asuka.mp4");
+    put(&file, b"the clip");
+    let a = dup_record(&app, "Asuka", &file, "2026-10-01T00:00:00Z", true); // the old item, its version is on the screen
+    let b = dup_record(&app, "Asuka", &file, "2026-10-12T12:00:00Z", false); // the item the theme was applied for
+    let good = sized_version(&app, &a, 1, 7_000_000);
+    let big = sized_version(&app, &b, 1, 12_855_458);
+    std::fs::write(app.lib.o_dir(&b).join("theme.json"), format!(r#"{{"v":1,"widgets":[],"baseVersionId":"{big}"}}"#)).unwrap();
+    app.settings.update(|s| s["slots"]["standby"] = json!({ "name": "x", "size": 7000000, "at": "t", "originalId": a, "versionId": good, "themeId": b })).unwrap();
+    // never used as a base, even before any repair
+    let tl = app.theme_live_of(&b, app.load_theme(&b));
+    assert!(tl.base_video.is_none(), "an oversize version is not the live background or base");
+    assert!(app.over_budget(&app.lib.find_version(&big).unwrap().1));
+    // the plan (read only) says what would happen
+    let plan = app.repair_library_with(false, &trash(d.path()));
+    assert_eq!(plan["themeBases"][0]["from"], json!(big));
+    assert_eq!(plan["themeBases"][0]["to"], json!(good));
+    assert!(std::fs::read_to_string(app.lib.o_dir(&b).join("theme.json")).unwrap().contains(&big), "planning changes nothing");
+    // repair: duplicates merge first, then the theme points to the version that is on the screen
+    let done = app.repair_library_with(true, &trash(d.path()));
+    assert_eq!(done["themeBases"].as_array().unwrap().len(), 1);
+    let kept = if app.lib.read_original(&a).is_some() { a.clone() } else { b.clone() };
+    let th: Value = serde_json::from_str(&std::fs::read_to_string(app.lib.o_dir(&kept).join("theme.json")).unwrap()).unwrap();
+    assert_eq!(th["baseVersionId"], json!(good));
+    assert!(app.repair_library_with(true, &trash(d.path()))["themeBases"].as_array().unwrap().is_empty(), "nothing left to repair");
+    // with no usable version of the same file the base is cleared
+    let (d2, app2, _r, g2) = setup();
+    let f2 = g2.join("Other.mp4");
+    put(&f2, b"x");
+    let o2 = dup_record(&app2, "Other", &f2, "2026-10-01T00:00:00Z", false);
+    let big2 = sized_version(&app2, &o2, 1, 13_000_000);
+    std::fs::write(app2.lib.o_dir(&o2).join("theme.json"), format!(r#"{{"v":1,"baseVersionId":"{big2}"}}"#)).unwrap();
+    app2.repair_library_with(true, &trash(d2.path()));
+    let th: Value = serde_json::from_str(&std::fs::read_to_string(app2.lib.o_dir(&o2).join("theme.json")).unwrap()).unwrap();
+    assert!(th["baseVersionId"].is_null());
+}
+
+#[test]
+fn apply_always_asks_for_the_best_that_fits() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Quality.mp4");
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    let first = app.theme_get(&oid).unwrap()["baseVersionId"].as_str().unwrap().to_string();
+    // an older base made with a fixed quality
+    app.lib.patch_version(&first, &json!({ "settings": { "quality": 95 } })).unwrap();
+    app.settings_update(&json!({ "screenFit": { "top": 4, "left": 9 } })).unwrap();
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    let second = app.theme_get(&oid).unwrap()["baseVersionId"].as_str().unwrap().to_string();
+    assert_ne!(first, second);
+    assert_eq!(app.lib.find_version(&second).unwrap().1["settings"]["quality"], json!("auto"));
+}
+
+#[test]
+fn an_inflated_capacity_is_not_trusted() {
+    use super::settings::{budgets, capacity_from, MAX_CAPACITY};
+    let (_d, app, _rec, _g) = setup();
+    app.settings.update(|s| {
+        s["slots"]["startup"] = json!({ "name": "(boot splash)", "size": 537054, "at": "t", "splash": "v1-x" });
+        s["slots"]["standby"] = json!({ "name": "x", "size": 12855458, "at": "t" });
+    })
+    .unwrap();
+    let st = app.settings.load();
+    // what the screen said right after the oversize upload: nothing free
+    let full = json!({ "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 0 } });
+    assert!(capacity_from(&full, &st).is_none(), "a full flash is not a measurement");
+    // more than the flash holds
+    let lie = json!({ "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 200 } });
+    assert!(capacity_from(&lie, &st).is_none());
+    // a record from before (13.39 MB) is capped when the budget is worked out
+    app.settings.update(|s| s["capacity"] = json!({ "bytes": 13_392_512, "at": "x" })).unwrap();
+    let b = budgets(&app.settings.load(), Some(537_054));
+    assert!(b.total <= MAX_CAPACITY && b.loop_bytes < 11_100_000.0, "budget {:?}", b);
+    // a true measurement still works (hardware: 792 free blocks, 10.66 MB loop + 0.54 MB intro = 11.6 MB)
+    app.settings.update(|s| s["slots"]["standby"] = json!({ "name": "x", "size": 10_662_507, "at": "t" })).unwrap();
+    let ok = json!({ "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 792 } });
+    assert_eq!(capacity_from(&ok, &app.settings.load()), Some(792.0 * 512.0 + 537_054.0 + 10_662_507.0));
+}
