@@ -94,6 +94,8 @@ OPTIONS
   --decode MODE       auto (GPU first, software fallback) or software
   --notch MODE        app (follow the CoolerScreen notch setting) or off
   --video-only        with --measure: skip the gradient runs
+  --dump-frames DIR   write the JPEGs as sent (first 20 after the session starts, then every 60th) to DIR/frame-N.jpg
+  --theme-of ID       the theme of this library item, built like the app does (real app folder; current loop-slot version as base)
   --no-device         do not touch the screen: frames are discarded (tray and --measure)
 
 Settings file: %APPDATA%\\CoolerScreen\\companion.json. Quit, Ctrl+C or logoff ends the stream and the screen
@@ -107,7 +109,7 @@ fn main() {
         return;
     }
     const FLAGS: [&str; 8] = ["--dry-run", "--no-device", "--help", "-h", "--video-only", "--fake-music", "--music", "--no-music"];
-    const WITH_VALUE: [&str; 9] = ["--video", "--fps", "--measure", "--decode", "--notch", "--frames", "--theme", "--preset", "--base"];
+    const WITH_VALUE: [&str; 11] = ["--video", "--fps", "--measure", "--decode", "--notch", "--frames", "--theme", "--preset", "--base", "--dump-frames", "--theme-of"];
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if WITH_VALUE.contains(&a.as_str()) {
@@ -118,6 +120,9 @@ fn main() {
 {HELP}");
             std::process::exit(2);
         }
+    }
+    if let Some(d) = arg_val(&args, "--dump-frames") {
+        std::env::set_var("COOLERSCREEN_DUMP_FRAMES", d);
     }
     let mut cfg = Config::load();
     if let Some(v) = arg_val(&args, "--video") {
@@ -152,8 +157,45 @@ fn work_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("work").join("companion-dry")
 }
 
+/// The theme of a library item exactly as the app hands it to the engine (`App::theme_live_of`): theme.json or the defaults, the base
+/// version file and the fit it was made with, the clip as fallback, the radius in effect. A theme without a chosen base uses the version
+/// in the loop slot. `current` means the theme on the screen now. Reads the real app folder; the screen fit comes from settings.
+fn theme_of(id: &str) -> ThemeLive {
+    let base = cs_core::core::paths::base();
+    let app = cs_core::core::App::new(base, cs_core::backends_with_work_dir(std::env::temp_dir().join("CoolerScreen-media-companion")), std::sync::Arc::new(cs_core::core::app::NoEvents), env!("CARGO_PKG_VERSION"));
+    let oid = if id == "current" {
+        app.current_theme_oid().unwrap_or_else(|| {
+            eprintln!("no theme is on the screen yet");
+            std::process::exit(2);
+        })
+    } else {
+        id.to_string()
+    };
+    if app.lib.read_original(&oid).is_none() {
+        eprintln!("unknown library item: {oid}");
+        std::process::exit(2);
+    }
+    let mut theme = app.load_theme(&oid);
+    if theme.base_version_id.is_none() {
+        theme.base_version_id = app.settings.load().slot("standby").and_then(|s| s["versionId"].as_str().map(String::from));
+    }
+    let t = app.theme_live_of(&oid, theme);
+    eprintln!(
+        "theme of {oid}: {} widget(s), base {:?}, base fit {:?}, screen fit {:?}, fallback clip {:?}",
+        t.theme.widgets.len(),
+        t.base_video,
+        t.base_fit,
+        app.settings.load().screen_fit(),
+        t.fallback_video
+    );
+    t
+}
+
 /// The theme from --theme / --preset / --base / --video (None: the classic companion, Standard layout over companion.json).
 fn build_theme(args: &[String], cfg: &Config) -> Option<ThemeLive> {
+    if let Some(id) = arg_val(args, "--theme-of") {
+        return Some(theme_of(id));
+    }
     let mut t = if let Some(p) = arg_val(args, "--theme") {
         let path = std::path::Path::new(p);
         let text = match std::fs::read_to_string(path) {

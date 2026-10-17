@@ -135,6 +135,9 @@ impl App {
         let ev = events.clone();
         let app_deb = Debounce::new(Duration::from_millis(100), move || ev.app_changed());
         settings.set_on_change(move || app_deb.poke());
+        // The live host tells the page (and the tray) when its idle state or the live items of the theme change.
+        let ev = events.clone();
+        app.live.set_on_change(move || ev.app_changed());
         app
     }
 

@@ -237,6 +237,12 @@ fn build_tray(app: &AppHandle) {
     }
     *TRAY.lock().unwrap() = Some(tray);
     TRAY_ON.store(true, Ordering::SeqCst);
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let a = app.clone();
+        h.set_on_change(move || refresh_tray(&a)); // the tooltip follows the theme's live items
+    });
+    refresh_tray(app);
 }
 
 /// A tray menu item was chosen (`id`: open, pause, f30, f60, quit). The tray's menu handler calls this; the debug test hook
@@ -277,9 +283,10 @@ pub fn tray_state() -> String {
 /// Bring the menu labels in line with the host (after a change from the tray or from the page).
 pub fn refresh_tray(_app: &AppHandle) {
     let h = host(_app);
+    let st = h.status();
     let (paused, fps) = (h.user_paused(), h.fps());
     if let Some(t) = _app.tray_by_id(TRAY_ID) {
-        let _ = t.set_tooltip(Some(if paused { "CoolerScreen live: paused (the screen plays its own loop)".to_string() } else { format!("CoolerScreen live: {fps} fps") }));
+        let _ = t.set_tooltip(Some(if paused { "CoolerScreen live: paused (the screen plays its own loop)".to_string() } else { if st["liveItems"] == false { "CoolerScreen live: no live items (the screen plays its own loop)".to_string() } else { format!("CoolerScreen live: {fps} fps") } }));
     }
     if let Some(t) = TRAY.lock().unwrap().as_ref() {
         let _ = t.pause.set_text(if paused { "Resume live" } else { PAUSE_TEXT });

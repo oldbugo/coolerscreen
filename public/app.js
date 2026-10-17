@@ -110,7 +110,12 @@ function renderLiveSwitch() {
     : stt.deviceHold ? 'Live is paused while the screen is being updated.' : stt.systemHold ? 'Live is paused while the PC sleeps or is locked.' : stt.paused ? 'Live is paused from the tray.'
     : stt.connected ? 'Live is on the screen.' : 'Live is on; connecting to the screen…';
   sw.setAttribute('aria-label', 'Live on the screen: ' + (c.inApp ? 'on' : 'off'));
+  // Live is on but the theme draws nothing live: say so, and where to fix it
+  const none = !!c.inApp && stt.liveItems === false;
+  $('liveHint').hidden = !none;
+  if (none) { $('liveHintText').textContent = stt.layerOff ? 'Live layer is off.' : 'No live items.'; $('liveHintGo').textContent = stt.layerOff ? 'Turn on' : 'Add some'; }
 }
+$('liveHintGo').onclick = () => goHome('screen');
 $('liveSwitch').onchange = () => liveSet({ inApp: $('liveSwitch').checked });
 $('pill').onclick = () => openDrawer('setScreen');
 $('gear').onclick = () => openDrawer();

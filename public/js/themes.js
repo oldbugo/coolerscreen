@@ -173,6 +173,7 @@ export function createThemes(ctx) {
     u.guidesSw = el('input', { type: 'checkbox', id: 'guidesSw', onchange: e => { E.guides = e.target.checked; lsSet('cs.guides', E.guides ? '1' : '0'); paintStage(); } });
     u.bar = el('div', { class: 'ed-bar' },
       el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the clock, music and other items are drawn on the screen. Off: the screen shows only its base.' }, u.layerSw, el('span', { class: 'switch-track', 'aria-hidden': 'true' }, el('span', { class: 'switch-knob' })), el('span', { text: 'Live layer' })),
+      u.layerHint = el('span', { class: 'muted small', hidden: true, text: 'No live items yet. Add one from the left.' }),
       el('label', { class: 'check', title: 'Items snap gently to each other, the middle and the guides. Hold Alt to move freely.' }, u.snapSw, 'Snap'),
       el('label', { class: 'check', title: 'Show where the screen curves and the hard-to-see areas (calibrate them in Settings > Screen guides)' }, u.guidesSw, 'Guides'));
     u.stage = el('div', { class: 'stage', role: 'application', 'aria-label': 'Preview of the screen. Drag items to move them; use the handles to resize.' });
@@ -212,7 +213,7 @@ export function createThemes(ctx) {
   function paintTitle() {
     const u = E.ui;
     u.title.textContent = E.info.name;
-    u.sub.textContent = 'is on the screen' + (S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? ' · live layer is off' : ' · live is on') : '');
+    u.sub.textContent = 'is on the screen' + (S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? ' · live layer is off' : widgets().some(w => !hiddenNow(w) && !w.onBase) ? ' · live is on' : ' · no live items') : '');
   }
   function paintSave() {
     const u = E.ui;
@@ -223,6 +224,7 @@ export function createThemes(ctx) {
   function paintBar() {
     const u = E.ui;
     u.layerSw.checked = E.theme.liveLayer !== false;
+    u.layerHint.hidden = !(E.theme.liveLayer !== false && !widgets().some(w => !hiddenNow(w) && !w.onBase));
     u.snapSw.checked = E.snap;
     u.guidesSw.checked = E.guides;
   }

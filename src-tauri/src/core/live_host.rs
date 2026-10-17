@@ -46,6 +46,8 @@ pub struct LiveHost {
     fit: Mutex<crate::core::fit::Fit>,
     /// The temporary Screen fit calibration session (ruler picture), while the page is open.
     fit_cal: Mutex<Option<crate::live::fitcal::FitCalibration>>,
+    /// Called when something the UI and the tray show changes (theme, idle state).
+    on_change: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl Default for LiveHost {
@@ -62,6 +64,7 @@ impl Default for LiveHost {
             calibration: Mutex::new(None),
             fit: Mutex::new(crate::core::fit::Fit::default()),
             fit_cal: Mutex::new(None),
+            on_change: Mutex::new(Vec::new()),
         }
     }
 }
@@ -69,6 +72,18 @@ impl Default for LiveHost {
 impl LiveHost {
     pub fn new() -> Arc<LiveHost> {
         Arc::new(LiveHost::default())
+    }
+
+    /// Something the tray tooltip or the page shows has changed (live items, idle).
+    pub fn set_on_change(&self, f: impl Fn() + Send + Sync + 'static) {
+        self.on_change.lock().unwrap().push(Arc::new(f));
+    }
+
+    fn changed(&self) {
+        let fs = self.on_change.lock().unwrap().clone();
+        for f in fs {
+            f();
+        }
     }
 
     pub fn set_no_device(&self, v: bool) {
@@ -92,11 +107,12 @@ impl LiveHost {
     }
 
     /// The screen fit for live frames; a running pipeline switches on its next frame.
-    pub fn set_fit(&self, f: crate::core::fit::Fit) {
+    pub fn set_fit(self: &Arc<Self>, f: crate::core::fit::Fit) {
         *self.fit.lock().unwrap() = f;
         if let Some(p) = self.pipeline() {
             p.set_fit(f);
         }
+        self.evaluate_idle();
     }
 
     /// Start the Screen fit calibration: the ruler picture for `fit` goes on the screen, whether live is on or not. Live (when on)
@@ -163,17 +179,26 @@ impl LiveHost {
 
     /// A theme whose live layer is off holds live (like a device task does) until another theme, or the switch, brings it back.
     pub fn set_theme(self: &Arc<Self>, t: crate::live::theme::ThemeLive) {
-        let layer_off = !t.theme.live_layer;
         *self.theme.lock().unwrap() = Some(t.clone());
         if let Some(p) = self.pipeline() {
             p.set_theme(t);
         }
+        self.evaluate_idle();
+    }
+
+    /// Hold live (no stream, the screen plays its own base) while the theme has nothing to add: its live layer is off, or it has
+    /// no live items and its base already has the current screen fit. Looked at again whenever the theme or the fit changes.
+    fn evaluate_idle(self: &Arc<Self>) {
+        let fit = *self.fit.lock().unwrap();
+        let idle = self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer || t.nothing_to_stream(fit));
+        let layer_off = idle;
         let held = self.holds.load(SeqCst) & LAYER != 0;
         if layer_off && !held {
             self.hold(LAYER, Duration::from_secs(6));
         } else if !layer_off && held {
             self.release(LAYER, Duration::from_millis(300));
         }
+        self.changed();
     }
 
     pub fn running(&self) -> bool {
@@ -367,7 +392,9 @@ impl LiveHost {
             "paused": h & USER != 0,
             "deviceHold": h & DEVICE != 0,
             "systemHold": h & (SLEEP | LOCK) != 0,
-            "layerOff": h & LAYER != 0,
+            "layerOff": self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer),
+            "idle": h & LAYER != 0,
+            "liveItems": self.theme.lock().unwrap().as_ref().is_none_or(|t| t.has_live_items()),
             "calibrating": self.calibrating(),
             "noDevice": self.no_device.load(SeqCst),
         })
@@ -563,6 +590,45 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1000));
         assert!(p.shared.stats.snap().sent > n, "Resume starts the frames again");
         assert!(!p.shared.hand_done.load(SeqCst), "and the render loop is not stuck in the old hand-over");
+        h.stop();
+    }
+
+    #[test]
+    fn a_theme_with_nothing_live_does_not_stream_unless_the_base_needs_the_fit() {
+        use crate::core::fit::Fit;
+        use crate::live::theme::{Theme, ThemeLive, Widget};
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("device.mp4");
+        std::fs::write(&base, b"x").unwrap();
+        let mut t = ThemeLive::new(Theme::default(), std::path::PathBuf::new());
+        t.base_video = Some(base);
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.start();
+        let p = h.pipeline().unwrap();
+        h.set_theme(t.clone());
+        assert_eq!(h.status()["liveItems"], json!(false));
+        assert!(p.shared.paused.load(SeqCst) && h.status()["idle"] == json!(true), "no live items on a fitted base: the screen plays its own loop");
+        // a fit the base was not made with: streaming is what applies it
+        h.set_fit(Fit::new(4, 0, 0, 9));
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(!p.shared.paused.load(SeqCst), "an unfitted base keeps streaming");
+        // the base made with that fit: quiet again
+        t.base_fit = Some(Fit::new(4, 0, 0, 9));
+        h.set_theme(t.clone());
+        assert!(p.shared.paused.load(SeqCst));
+        // an item brings it back
+        t.theme.widgets.push(Widget { id: "t".into(), kind: "text".into(), props: json!({ "text": "Hi" }), ..Widget::default() });
+        h.set_theme(t.clone());
+        assert_eq!(h.status()["liveItems"], json!(true));
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(!p.shared.paused.load(SeqCst));
+        // an item that is only part of the stored base is not a live item
+        t.theme.widgets[0].on_base = true;
+        h.set_theme(t);
+        assert_eq!(h.status()["liveItems"], json!(false));
+        assert!(p.shared.paused.load(SeqCst));
         h.stop();
     }
 }

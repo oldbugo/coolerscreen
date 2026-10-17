@@ -208,6 +208,7 @@ impl Pipeline {
         let video_child = Arc::new(Mutex::new(None));
         let video_decode = Arc::new(Mutex::new(String::new()));
         let mut threads = Vec::new();
+        let dump_dir: Option<PathBuf> = std::env::var_os("COOLERSCREEN_DUMP_FRAMES").filter(|d| !d.is_empty()).map(PathBuf::from);
 
         // render
         {
@@ -464,8 +465,14 @@ impl Pipeline {
         // send
         {
             let (sh, jin, jpool) = (shared.clone(), jpeg_slot.clone(), jpeg_pool.clone());
+            let dump_dir = dump_dir.clone();
             threads.push(std::thread::spawn(move || {
                 let mut session: Option<LiveSession> = None;
+                // Debug aid: COOLERSCREEN_DUMP_FRAMES=<dir> writes the JPEGs exactly as sent (the first 20 after a session starts, then every 60th).
+                if let Some(d) = &dump_dir {
+                    let _ = std::fs::create_dir_all(d);
+                }
+                let mut dump_n = 0u64;
                 let (mut backoff, mut next_try) = (1u64, Instant::now());
                 loop {
                     if sh.quit.load(Relaxed) {
@@ -478,6 +485,7 @@ impl Pipeline {
                             sh.session_active.store(false, Relaxed);
                             sh.connected.store(false, Relaxed);
                         }
+                        dump_n = 0;
                         jin.clear();
                         std::thread::sleep(Duration::from_millis(100));
                         continue;
@@ -490,6 +498,7 @@ impl Pipeline {
                         match LiveSession::connect() {
                             Ok(s) => {
                                 log("connected, live stream started");
+                                dump_n = 0;
                                 session = Some(s);
                                 sh.connected.store(true, Relaxed);
                                 sh.session_active.store(true, Relaxed);
@@ -508,6 +517,12 @@ impl Pipeline {
                     match jin.take(Duration::from_millis(wait)) {
                         Some(jpeg) => {
                             let t = Instant::now();
+                            if let Some(d) = &dump_dir {
+                                if dump_n < 20 || dump_n % 60 == 0 {
+                                    let _ = std::fs::write(d.join(format!("frame-{dump_n}.jpg")), &jpeg);
+                                }
+                                dump_n += 1;
+                            }
                             let r = match session.as_mut() {
                                 Some(s) => s.send_frame(&jpeg),
                                 None => Ok(()), // Null sink
@@ -817,6 +832,27 @@ mod tests {
         p.stop_fast(Ending::ScreenOff);
         assert!(t.elapsed() < Duration::from_millis(800), "fast stop took {:?}", t.elapsed());
         assert_eq!(p.shared.ending.load(Relaxed), 1);
+    }
+
+    #[test]
+    fn frames_are_dumped_as_sent_when_asked() {
+        let dir = std::env::temp_dir().join(format!("cs-dump-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::set_var("COOLERSCREEN_DUMP_FRAMES", &dir);
+        let p = Pipeline::start(&quiet_cfg(), Sink::Null);
+        std::env::remove_var("COOLERSCREEN_DUMP_FRAMES"); // read once at start
+        std::thread::sleep(Duration::from_millis(1500));
+        p.stop_fast(Ending::LoopClip);
+        let first = std::fs::read(dir.join("frame-0.jpg")).expect("the first frame is dumped");
+        assert_eq!(&first[..2], &[0xff, 0xd8]);
+        assert_eq!(&first[first.len() - 2..], &[0xff, 0xd9]);
+        // portrait, as sent: 756 wide, 1680 high (SOF0/SOF2 holds height then width)
+        let sof = first.windows(2).position(|w| w == [0xff, 0xc0] || w == [0xff, 0xc2]).expect("SOF");
+        let (h, w) = (u16::from_be_bytes([first[sof + 5], first[sof + 6]]), u16::from_be_bytes([first[sof + 7], first[sof + 8]]));
+        assert_eq!((w as usize, h as usize), (PW, PH));
+        let n = std::fs::read_dir(&dir).unwrap().count();
+        assert!(n >= 2 && n <= 21 + 2, "about the first 20 frames: {n}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

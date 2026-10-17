@@ -88,6 +88,7 @@ fn main() {
             let r = app.device_restart();
             wait_job(app, r["jobId"].as_str().unwrap_or(""))
         }),
+        Some("core-apply") if args.len() >= 2 => core_apply(&args[1]),
         Some("core-send") if args.len() >= 2 => core_send(std::path::Path::new(&args[1])),
         Some("live-test") => live::live_test(&args[1..]),
         Some("wake") => live::wake(),
@@ -100,7 +101,7 @@ fn main() {
             eprintln!("usage: cs2 info | state | restart | upload <file.mp4> [--intro] | poll <count> <seconds> | live-test [--frames N | --seconds S --fps F] [--orient landscape|portrait] [--scale 0.7] [--quality 100] [--set-sleep-delay] [--set-brightness] [--dry-run]");
             eprintln!("       cs2 trial [--dry-run] [--no-poll] | wake   (guided live-mode trials; see test-live.cmd)");
             eprintln!("       cs2 unstick | recover-race-delete | delete-ota   (recovery tools, see tools/README.md)");
-            eprintln!("       cs2 core-check | core-state | core-restart [--real] | core-send <library>/<oid>/versions/<vid>  (COOLERSCREEN_HOME = scratch folder, or --real)");
+            eprintln!("       cs2 core-check | core-state | core-restart [--real] | core-send <library>/<oid>/versions/<vid> | core-apply <originalId> [--real]  (COOLERSCREEN_HOME = scratch folder, or --real)");
             2
         }
     };
@@ -174,6 +175,41 @@ fn core_send(vdir: &std::path::Path) -> i32 {
         let r = app.version_send(&vid)?;
         let j = wait_job(app, r["jobId"].as_str().unwrap_or(""))?;
         Ok(serde_json::json!({ "job": j, "slots": app.settings.load().0["slots"], "onScreen": app.app_state()["onScreen"] }))
+    })
+}
+
+/// True when a CoolerScreen app is running (it would hold the screen and the library).
+fn app_running() -> bool {
+    let mut c = std::process::Command::new("tasklist");
+    c.args(["/FI", "IMAGENAME eq coolerscreen.exe", "/FO", "CSV", "/NH"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000);
+    }
+    c.output().map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase().contains("coolerscreen.exe")).unwrap_or(false)
+}
+
+/// The app's own Apply job for a theme (make or reuse the fitted base, store it in the loop slot, make it the current theme).
+/// Prints each step and the resulting version and device file.
+fn core_apply(oid: &str) -> i32 {
+    let fake = std::env::var_os("COOLERSCREEN_FAKE_DEVICE").is_some();
+    if !fake && app_running() {
+        eprintln!("CoolerScreen is running and holds the screen. Quit it from its tray icon first, then run this again.");
+        return 3;
+    }
+    core_run(|app| {
+        let r = app.theme_apply(oid)?;
+        let j = wait_job(app, r["jobId"].as_str().unwrap_or(""))?;
+        let vid = j["result"]["versionId"].as_str().unwrap_or("").to_string();
+        Ok(serde_json::json!({
+            "versionId": vid,
+            "deviceFile": app.lib.device_path(&vid).map(|p| p.display().to_string()),
+            "screenFit": app.settings.load().screen_fit().to_value(),
+            "notchKey": app.app_state()["notchKey"],
+            "slots": app.settings.load().0["slots"],
+            "job": j,
+        }))
     })
 }
 

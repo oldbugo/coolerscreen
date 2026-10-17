@@ -521,6 +521,12 @@ impl Theme {
         !w.hidden && !w.group.as_ref().is_some_and(|g| self.groups.iter().any(|x| &x.id == g && x.hidden))
     }
 
+    /// The theme draws something live: the live layer is on and at least one visible item is not just part of the stored base
+    /// (`base_stored`: the background is the stored base, which already contains its `onBase` items).
+    pub fn has_live_items(&self, base_stored: bool) -> bool {
+        self.live_layer && self.widgets.iter().any(|w| self.is_visible(w) && !(base_stored && w.on_base && w.can_be_on_base()))
+    }
+
     pub fn has_base_items(&self) -> bool {
         self.widgets.iter().any(|w| w.on_base && w.can_be_on_base() && self.is_visible(w))
     }
@@ -548,6 +554,16 @@ pub struct ThemeLive {
 }
 
 impl ThemeLive {
+    /// Live has nothing to add to the screen's own loop: no live items, and the stored base is fitted the way the screen fit is
+    /// now (otherwise streaming is what applies the fit). The engine then need not stream at all.
+    pub fn nothing_to_stream(&self, fit: crate::core::fit::Fit) -> bool {
+        self.theme.live_layer && self.base_video.is_some() && !self.theme.has_live_items(true) && self.base_fit.unwrap_or_default() == fit
+    }
+
+    pub fn has_live_items(&self) -> bool {
+        self.theme.has_live_items(self.base_video.is_some())
+    }
+
     pub fn new(theme: Theme, theme_dir: PathBuf) -> ThemeLive {
         ThemeLive { theme, theme_dir, base_video: None, fallback_video: None, base_fit: None }
     }
