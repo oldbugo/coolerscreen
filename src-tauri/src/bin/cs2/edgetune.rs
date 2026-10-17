@@ -453,6 +453,8 @@ pub fn edge_tune(args: &[String]) -> i32 {
     }
     println!("Connected. {}", describe(&st));
     let mut dirty = true;
+    let mut last: Option<Vec<u8>> = None;
+    let mut last_sent: Option<std::time::Instant> = None;
     let mut code = 0;
     loop {
         if ABORT.load(Ordering::SeqCst) {
@@ -485,16 +487,32 @@ pub fn edge_tune(args: &[String]) -> i32 {
         if quit {
             break;
         }
+        // The screen only shows live pictures while they keep coming (the vendor re-sends the latest one every tick):
+        // re-send the current frame about 5 times a second, re-encoding only when something changed.
         if dirty {
             let (pw, ph, rgb) = draw(&st).pixels(true);
-            let r = encode_fit(pw, ph, &rgb, 95, max_bytes(st.k)).and_then(|(j, _)| session.send_frame(&j));
-            if let Err(e) = r {
-                eprintln!("Error: {e}");
-                code = 1;
-                break;
+            match encode_fit(pw, ph, &rgb, 95, max_bytes(st.k)) {
+                Ok((j, _)) => last = Some(j),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    code = 1;
+                    break;
+                }
             }
             dirty = false;
-        } else if let Err(e) = session.keepalive_if_due() {
+            last_sent = None;
+        }
+        if last_sent.map_or(true, |t: std::time::Instant| t.elapsed() >= std::time::Duration::from_millis(200)) {
+            if let Some(j) = &last {
+                if let Err(e) = session.send_frame(j) {
+                    eprintln!("Error: {e}");
+                    code = 1;
+                    break;
+                }
+                last_sent = Some(std::time::Instant::now());
+            }
+        }
+        if let Err(e) = session.keepalive_if_due() {
             eprintln!("Lost the screen: {e}");
             code = 1;
             break;
