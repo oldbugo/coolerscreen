@@ -69,6 +69,9 @@ impl From<std::io::Error> for CoreError {
 
 impl From<crate::device::DevErr> for CoreError {
     fn from(e: crate::device::DevErr) -> Self {
+        if e.code.as_deref() == Some("busy") {
+            return super::holder::busy_error(&e.message); // names who is using the screen, and logs it
+        }
         CoreError { message: e.message, code: e.code, status: 502, failed_usb: e.failed_usb, extra: Default::default() }
     }
 }

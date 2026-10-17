@@ -32,7 +32,8 @@ fn main() {
     let mut measure = measure;
     let mut builder = tauri::Builder::default();
     // One CoolerScreen at a time, unless COOLERSCREEN_MULTI is set (UI tests next to the installed app, with a temp COOLERSCREEN_HOME).
-    if std::env::var_os("COOLERSCREEN_MULTI").is_none() {
+    // (The override only works in debug builds: an installed build always focuses the running one.)
+    if !(cfg!(debug_assertions) && std::env::var_os("COOLERSCREEN_MULTI").is_some()) {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| live_app::show_main(app)));
     }
     let app = builder
@@ -96,6 +97,7 @@ fn main() {
             cc::weather_set_place
         ])
         .setup(move |app| {
+            cs_core::device::log(&cs_core::core::buildinfo::startup_line(env!("CARGO_PKG_VERSION")));
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));
             // One-time driver scripts are bundled as resources (installed build); development keeps the repo's.
             if let Ok(res) = app.path().resource_dir() {

@@ -83,6 +83,19 @@ enum Link {
     Serial(serial::SerialLink),
 }
 
+/// Connections this process holds right now (the live session, a check, a send): when opening fails with "busy" and this is
+/// above zero, the holder is CoolerScreen itself.
+static OPEN_HERE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub fn in_process_open() -> usize {
+    OPEN_HERE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+impl Drop for Screen {
+    fn drop(&mut self) {
+        OPEN_HERE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// An open connection to the screen. Opened only for the duration of one operation.
 pub struct Screen {
     link: Link,
@@ -132,6 +145,7 @@ impl Screen {
         let (tx, rx) = channel();
         let link = usb::UsbLink::open(tx).map_err(DevErr::new)?;
         log("opened over WinUSB");
+        OPEN_HERE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let s = Screen { link: Link::Usb(link), rx, transport: "winusb", sent: 0 };
         std::thread::sleep(Duration::from_millis(200));
         while s.rx.try_recv().is_ok() {}
@@ -141,6 +155,7 @@ impl Screen {
     pub fn open_serial(path: &str) -> Result<Screen, DevErr> {
         let (tx, rx) = channel();
         let link = serial::SerialLink::open(path, tx).map_err(DevErr::new)?;
+        OPEN_HERE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let s = Screen { link: Link::Serial(link), rx, transport: "serial", sent: 0 };
         std::thread::sleep(Duration::from_millis(300));
         while s.rx.try_recv().is_ok() {}

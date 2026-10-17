@@ -81,6 +81,8 @@ pub struct App {
     /// COOLERSCREEN_GALLERY, read once by `App::new` (tests build the App with `with_device` and never see it).
     pub gallery_env: Mutex<Option<PathBuf>>,
     pub(crate) me: Mutex<Weak<App>>,
+    /// The last screen info a check answered (shown while live holds the screen, instead of opening it a second time).
+    pub(crate) last_info: Mutex<Option<serde_json::Value>>,
 }
 
 impl App {
@@ -122,6 +124,7 @@ impl App {
             cards_pending: Mutex::new(Default::default()),
             gallery_env: Mutex::new(None),
             me: Mutex::new(Weak::new()),
+            last_info: Mutex::new(None),
         });
         *app.me.lock().unwrap() = Arc::downgrade(&app);
         let ev = events.clone();

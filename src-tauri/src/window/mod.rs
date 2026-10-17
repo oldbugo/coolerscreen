@@ -41,7 +41,7 @@ pub fn clear_force_close() {
 pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let saved = load_saved(app);
     let win = WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-        .title("CoolerScreen")
+        .title(cs_core::core::buildinfo::title(env!("CARGO_PKG_VERSION")))
         .inner_size(1280.0, 860.0)
         .min_inner_size(900.0, 640.0)
         .decorations(false)

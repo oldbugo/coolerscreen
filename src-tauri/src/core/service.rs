@@ -102,7 +102,7 @@ impl App {
         let b = budgets(&s, self.lib.splash_size());
         let key = format!("{}{}", notch_key(s.mask()), s.screen_fit().key());
         json!({
-            "appVersion": self.app_version, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
+            "appVersion": self.app_version, "build": { "hash": super::buildinfo::HASH, "commitDate": super::buildinfo::COMMIT_DATE, "builtAt": super::buildinfo::built_at() }, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
             "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(), "weather": s.weather_value(),
@@ -806,9 +806,18 @@ impl App {
         Ok(self.device_handle("send", &label, |s| s.original(&oid).version(vid), move |app, ctx| app.send_version(ctx, &vid2)))
     }
 
+    /// Our own live session has the screen open right now (so opening it a second time would fail as "busy").
+    fn live_holds_screen(&self) -> bool {
+        let st = self.live.status();
+        st["running"] == true && st["connected"] == true && st["paused"] == false && st["deviceHold"] == false && st["systemHold"] == false && self.device.fake_mode().is_none()
+    }
+
     pub fn device_state(&self) -> CoreResult<Value> {
         if self.sched.device_active() {
             return Err(updating());
+        }
+        if self.live_holds_screen() {
+            return Ok(json!({ "transport": "winusb", "needsSetup": false, "failedUsb": false, "live": true }));
         }
         let app = self.arc();
         self.run_task(TaskSpec::new("state", "Screen state", Resources::one(Res::Device)), move |_| Ok(app.device.state()))
@@ -819,10 +828,19 @@ impl App {
         if self.sched.device_active() {
             return Err(updating());
         }
+        // Live on the screen: it is connected, so the last answer stands (no second open, no pause of the picture).
+        if self.live_holds_screen() {
+            if let Some(mut info) = self.last_info.lock().unwrap().clone() {
+                info["_live"] = json!(true);
+                info.as_object_mut().map(|o| o.remove("_capacity"));
+                return Ok(info);
+            }
+        }
         let app = self.arc();
         let mut info = self.run_task(TaskSpec::new("check", "Checking the screen", Resources::one(Res::Device)), move |ctx| {
             app.device.check(&mut |p, m| ctx.progress(p, m))
         })?;
+        *self.last_info.lock().unwrap() = Some(info.clone());
         let cap = self.save_capacity(&info);
         info["_capacity"] = cap.map(num).unwrap_or(Value::Null);
         Ok(info)

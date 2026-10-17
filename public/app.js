@@ -134,8 +134,8 @@ function renderBanners() {
     el('button', { class: 'btn secondary', text: 'Check again', onclick: checkScreen }));
   if (st === 'noReply') add('danger', 'Screen not responding: it keeps playing but doesn\'t answer. Restarting it brings it back (about 10 seconds).',
     el('button', { class: 'btn primary', text: 'Restart screen', onclick: runRestart }));
-  if (st === 'busy') add('warn', 'Another program is using the screen. Close LOVINGCOOL MONITOR and try again.',
-    el('button', { class: 'btn secondary', text: 'Check again', onclick: checkScreen }));
+  if (st === 'busy') add('warn', S.screen.error || 'Something else is using the screen.',
+    el('button', { class: 'btn secondary', text: 'Try again', onclick: () => checkScreen() }));
   const os = S.app && S.app.onScreen;
   if (os && os.incomplete && !S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'))) {
     add('danger', `The last upload of "${os.originalName} · ${os.label}" didn't finish, so the screen may show a broken picture.`,
@@ -166,11 +166,13 @@ async function reviewMissing() {
 
 // ---------- screen check (once at launch, after setup/reconnect, or on request; never polled) ----------
 let checking = false;
-async function checkScreen() {
+let busyTimer = 0;
+async function checkScreen(opts) {
   if (checking) return;
+  clearTimeout(busyTimer);
+  const quiet = !!(opts && opts.quiet); // a retry while busy: the banner stays until the screen is free
   checking = true;
-  S.screen = { ...S.screen, state: 'checking' };
-  renderTop(); renderBanners(); renderScreenSettings();
+  if (!quiet) { S.screen = { ...S.screen, state: 'checking' }; renderTop(); renderBanners(); renderScreenSettings(); }
   try {
     const info = await call('device_check');
     S.screen = { state: info._needsSetup ? 'setup' : 'ready', info, error: null };
@@ -181,12 +183,14 @@ async function checkScreen() {
     else S.screen = { state: e.failedUsb ? 'failedUsb' : e.code === 'notFound' ? 'notFound' : e.code === 'busy' ? 'busy' : e.code === 'noReply' ? 'noReply' : 'error', info: null, error: e.message };
   }
   checking = false;
+  if (S.screen.state === 'busy') busyTimer = setTimeout(() => checkScreen({ quiet: true }), 4000); // clears itself when it frees
   renderTop(); renderBanners(); renderScreenSettings();
 }
 
 // ---------- data loading ----------
 async function loadApp() {
   S.app = await call('app_state');
+  if (S.app.build) document.title = `CoolerScreen ${S.app.appVersion} (${S.app.build.hash})`;
   backend.setMediaBase(S.app.mediaBase);
   renderTop(); renderBanners();
   if (typeof themes !== 'undefined') themes.appChanged();
@@ -2261,7 +2265,7 @@ function activityRow(j) {
 
 function plainSendError(j) {
   if (j.failedUsb || j.code === 'failedUsb') return 'Windows lost the screen\'s USB connection.';
-  if (j.code === 'busy') return 'Another program is using the screen. Close LOVINGCOOL MONITOR.';
+  if (j.code === 'busy') return j.error || 'Something else is using the screen.';
   if (j.code === 'notFound') return 'Lost contact with the screen during the upload.';
   if (j.code === 'stalled') return 'The screen stopped responding. Unplugging isn\'t needed: press Reconnect, then send again.';
   if (j.code === 'noReply') return 'The screen is not responding, even after a restart. Restart it again, then send again.';
@@ -2412,7 +2416,7 @@ function renderScreenSettings() {
   const text = {
     checking: 'Checking…', ready: 'Connected · set up (no background program needed)', setup: 'Connected, but the one-time setup is needed: the screen switches off 30 seconds after this app closes.',
     failedUsb: 'Not connected: Windows couldn\'t connect to the screen when the PC started.', notFound: 'Screen not found. Check the cooler\'s USB cable and power.',
-    busy: 'Another program is using the screen. Close LOVINGCOOL MONITOR.', updating: 'Busy updating the screen.', error: st.error || 'Problem talking to the screen.',
+    busy: st.error || 'Something else is using the screen.', updating: 'Busy updating the screen.', error: st.error || 'Problem talking to the screen.',
     noReply: 'Screen not responding: it keeps playing but doesn\'t answer commands. Restart the screen.',
   }[pillState()];
   $('scrStatus').textContent = text;
@@ -2463,6 +2467,11 @@ function fillSettings() {
   const a = S.app;
   if (!a) return;
   $('appVer').textContent = a.appVersion;
+  if (a.build) {
+    const t = a.build.builtAt ? new Date(a.build.builtAt * 1000) : null;
+    const when = t ? t.toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'unknown';
+    $('buildLine').textContent = `CoolerScreen ${a.appVersion} · build ${a.build.hash} · ${when}`;
+  }
   maskToForm(a.mask);
   $('gDir').value = a.galleryDir; $('gMsg').textContent = '';
   $('cornerR').value = a.cornerRadius || 0; $('edSnap').checked = a.editorSnap !== false; $('thMsg').textContent = '';

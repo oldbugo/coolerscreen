@@ -1042,3 +1042,25 @@ fn theme_pictures_are_served_only_from_the_assets_folder() {
     assert!(app.resolve_media(&format!("/media/o/{oid}/assets/.."), "").is_none());
     assert!(app.resolve_media("/media/o/nosuchid1/assets/pic.png", "").is_none());
 }
+
+#[test]
+fn a_busy_screen_names_who_holds_it_and_the_check_reports_it() {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let app = App::with_device(
+        home,
+        Backends { media: Arc::new(FakeMedia { delay: Duration::from_millis(20) }), sources: Arc::new(NoSources) },
+        Arc::new(Rec::default()),
+        "2.0.0-test",
+        DeviceService::fake("busy", 0.01, false),
+    );
+    let e = app.device_check().unwrap_err();
+    assert!(e.code_is("busy"), "{e}");
+    assert!(e.message.contains("using the screen") || e.message.contains("using it"), "{}", e.message);
+    assert!(!e.message.contains("LOVINGCOOL") || e.message.starts_with("LOVINGCOOL MONITOR is using"), "only named when it is the holder: {}", e.message);
+    // the build is shown: hash, commit date, build time
+    let st = app.app_state();
+    assert!(st["build"]["hash"].as_str().is_some_and(|h| !h.is_empty()) && st["build"]["builtAt"].as_u64().unwrap_or(0) > 1_700_000_000, "{}", st["build"]);
+    assert!(super::buildinfo::startup_line("2.9.0").contains(&format!("pid {}", std::process::id())));
+}

@@ -36,6 +36,9 @@ pub struct DeviceService {
 }
 
 fn friendly_fake(code: &str) -> CoreError {
+    if code == "busy" {
+        return super::holder::busy_error("fake");
+    }
     let m = match code {
         "notFound" => "Screen not found. Check the USB cable and that the cooler is powered.",
         "failedUsb" => "Windows could not connect to the screen at startup (a known quirk). Click Reconnect (needs one administrator approval).",
