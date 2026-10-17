@@ -130,7 +130,8 @@ pub fn parse_mask(v: &Value) -> Mask {
         Some("circle") => MaskMode::Circle,
         _ => MaskMode::Off,
     };
-    Mask { mode, band, circle }
+    let fit = crate::core::fit::Fit::from_value(v.get("fit").unwrap_or(&Value::Null)).as_array();
+    Mask { mode, band, circle, fit }
 }
 fn parse_frame(v: &Value) -> Frame {
     Frame { zoom: num(v, "zoom").unwrap_or(1.0), x: num(v, "x").unwrap_or(0.5), y: num(v, "y").unwrap_or(0.5) }.norm()

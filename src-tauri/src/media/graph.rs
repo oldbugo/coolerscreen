@@ -81,10 +81,14 @@ pub struct Mask {
     pub band: Option<Band>,
     #[serde(default)]
     pub circle: Option<Circle>,
+    /// Screen fit: screen px (2400x1080 space) the panel hides at the top, right, bottom and left edge; 0 = none.
+    /// The picture is scaled into the visible rectangle before the notch and the corners are applied.
+    #[serde(default)]
+    pub fit: [u32; 4],
 }
 impl Mask {
     pub fn band(edge: Edge, px: f64) -> Mask {
-        Mask { mode: MaskMode::Band, band: Some(Band { edge, px }), circle: None }
+        Mask { mode: MaskMode::Band, band: Some(Band { edge, px }), circle: None, fit: [0; 4] }
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -159,6 +163,21 @@ pub fn mask_graph(mask: &Mask) -> String {
         }
         _ => "[base]null[m]".into(),
     }
+}
+
+/// [base] -> [basef]: the screen fit. The picture is scaled into the visible rectangle (the panel minus the hidden edge
+/// strips) and padded with black to the full canvas. The padding is done in RGB so the strips are exact to the pixel
+/// (4:2:0 video can only pad on even coordinates). None when nothing is hidden.
+pub fn fit_graph(fit: [u32; 4], flags: &str) -> Option<String> {
+    if fit == [0; 4] {
+        return None;
+    }
+    let (x0, y0, x1, y1) = crate::core::fit::Fit::new(fit[0], fit[1], fit[2], fit[3]).rect(W as usize, H as usize);
+    Some(format!(
+        "[base]scale={}:{}:flags={flags},format=gbrp,pad={W}:{H}:{x0}:{y0}:color=black,format=yuv420p,setsar=1[basef]",
+        x1 - x0,
+        y1 - y0
+    ))
 }
 
 /// The visible picture: the canvas minus the notch band (convert.js / frame.js visibleRect).
@@ -343,7 +362,17 @@ pub fn device_graph(base: &Base, mask: &Mask, has_corner_file: bool) -> String {
 
 /// As `device_graph`, with the theme overlay PNG as the last input.
 pub fn device_graph_ov(base: &Base, mask: &Mask, has_corner_file: bool, has_overlay: bool) -> String {
-    format!("{};{};{};[mc]transpose=1,format=yuvj420p[out]", base_graph(base), mask_graph(mask), finish_graph(has_corner_file, has_overlay))
+    match fit_graph(mask.fit, &base.flags) {
+        // The notch and the corners belong to the panel: they come after the fit (the mask reads the fitted picture).
+        Some(f) => format!(
+            "{};{};{};{};[mc]transpose=1,format=yuvj420p[out]",
+            base_graph(base),
+            f,
+            mask_graph(mask).replacen("[base]", "[basef]", 1),
+            finish_graph(has_corner_file, has_overlay)
+        ),
+        None => format!("{};{};{};[mc]transpose=1,format=yuvj420p[out]", base_graph(base), mask_graph(mask), finish_graph(has_corner_file, has_overlay)),
+    }
 }
 
 /// Input args: `-ss/-t` around the selection (with a blend, from B seconds before the start); images loop.
@@ -426,7 +455,7 @@ mod tests {
             frame_graph(&Frame { zoom: 1.25, x: 0.2, y: 0.7 }, W, H, "lanczos"),
             "scale=w='2*trunc(iw*1.25*max(2400/iw\\,1080/ih)/2)':h='2*trunc(ih*1.25*max(2400/iw\\,1080/ih)/2)':flags=lanczos,pad=w='max(iw\\,2400)':h='max(ih\\,1080)':x='2*trunc((ow-iw)*0.2/2)':y='2*trunc((oh-ih)*0.7/2)':color=black,crop=w=2400:h=1080:x='2*trunc((iw-2400)*0.2/2)':y='2*trunc((ih-1080)*0.7/2)'"
         );
-        let circle = Mask { mode: MaskMode::Circle, band: None, circle: Some(Circle { cx: 100.5, cy: 540.0, r: 40.0, feather: 3.0 }) };
+        let circle = Mask { mode: MaskMode::Circle, band: None, circle: Some(Circle { cx: 100.5, cy: 540.0, r: 40.0, feather: 3.0 }), fit: [0; 4] };
         assert_eq!(
             mask_graph(&circle),
             "[base]split[a][b];[b]crop=92:90:54:494,format=gbrp,geq=r='r(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)':g='g(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)':b='b(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)',format=yuv420p[c];[a][c]overlay=54:494,format=yuv420p[m]"
@@ -473,5 +502,52 @@ mod overlay_tests {
         assert_eq!(input_args_ov("f.mp4", &b, None, Some("o.png")).last().map(String::as_str), Some("o.png"));
         assert_eq!(device_graph(&b, &Mask::band(Edge::Left, 96.0), false), device_graph_ov(&b, &Mask::band(Edge::Left, 96.0), false, false));
         assert!(device_graph_ov(&b, &Mask::band(Edge::Left, 96.0), false, true).contains("[m][1:v]overlay=0:0:format=auto,format=yuv420p[mc]"));
+    }
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+    fn base() -> Base {
+        Base { start: 0.0, length: 2.0, blend: 0.0, fps: 18, src_fps: None, is_image: false, frame: Frame::default(), detail: 0.0, canvas: (W, H), flags: "lanczos".into(), head: String::new() }
+    }
+
+    #[test]
+    fn no_fit_leaves_the_graph_as_it_was() {
+        let m = Mask::band(Edge::Left, 96.0);
+        assert_eq!(fit_graph([0; 4], "lanczos"), None);
+        assert!(!device_graph(&base(), &m, true).contains("basef"));
+    }
+
+    #[test]
+    fn fit_scales_into_the_visible_rectangle_before_the_notch_and_corners() {
+        // top 4, right 0, bottom 0, left 9: the visible rectangle is x 9..2400, y 4..1080 = 2391 x 1076
+        let mut m = Mask::band(Edge::Left, 96.0);
+        m.fit = [4, 0, 0, 9];
+        assert_eq!(
+            fit_graph(m.fit, "lanczos").unwrap(),
+            "[base]scale=2391:1076:flags=lanczos,format=gbrp,pad=2400:1080:9:4:color=black,format=yuv420p,setsar=1[basef]"
+        );
+        let g = device_graph(&base(), &m, true);
+        let fit_at = g.find("[basef];").unwrap();
+        let mask_at = g.find("[basef]drawbox").unwrap();
+        let corners_at = g.find("[m][1:v]overlay").unwrap();
+        assert!(fit_at < mask_at && mask_at < corners_at, "{g}");
+        assert!(g.contains("[basef]drawbox=x=0:y=0:w=96:h=1080:color=black:t=fill[m]"), "the notch band stays where the panel is: {g}");
+        assert!(g.ends_with("[mc]transpose=1,format=yuvj420p[out]"));
+        // the circle mask reads the fitted picture too
+        let c = Mask { mode: MaskMode::Circle, band: None, circle: Some(Circle { cx: 100.0, cy: 540.0, r: 40.0, feather: 0.0 }), fit: [4, 0, 0, 9] };
+        assert!(device_graph(&base(), &c, false).contains("[basef]split[a][b]"));
+    }
+
+    #[test]
+    fn fit_is_part_of_the_request_key_through_the_mask() {
+        let a = Mask::band(Edge::Left, 96.0);
+        let mut b = a;
+        b.fit = [4, 0, 0, 9];
+        assert_ne!(format!("{a:?}"), format!("{b:?}"));
+        let j = serde_json::json!({ "mode": "band", "band": { "edge": "left", "px": 96 }, "fit": { "top": 4, "right": 0, "bottom": 0, "left": 9 } });
+        assert_eq!(super::super::core_engine::parse_mask(&j).fit, [4, 0, 0, 9]);
+        assert_eq!(super::super::core_engine::parse_mask(&serde_json::json!({ "mode": "off" })).fit, [0; 4]);
     }
 }

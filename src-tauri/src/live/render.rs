@@ -249,6 +249,13 @@ pub struct Renderer {
     /// Calibration overlay (screen guides) drawn over every frame while Some; `cal_gen` changes with it.
     calib: Option<Guides>,
     cal_gen: u64,
+    /// Screen fit (screen px hidden at each edge). Not zero: the design canvas is scaled into the visible rectangle.
+    fit: crate::core::fit::Fit,
+    /// Scratch pictures for the fit (made on first use): the fitted frame and the fitted widget layer.
+    fit_pm: Option<Pixmap>,
+    fit_layer: Option<Pixmap>,
+    /// The widget boxes on the fitted frame (merged like `rects`).
+    fit_rects: Vec<(usize, usize, usize, usize)>,
     /// Accumulated microseconds per stage (background, widgets, composite + mask), for profiling.
     pub timing_us: [u64; 3],
 }
@@ -293,6 +300,10 @@ impl Renderer {
             sample: false,
             calib: None,
             cal_gen: 0,
+            fit: crate::core::fit::Fit::default(),
+            fit_pm: None,
+            fit_layer: None,
+            fit_rects: Vec::new(),
             timing_us: [0; 3],
         };
         r.update_bbox();
@@ -419,25 +430,45 @@ impl Renderer {
             let (x1, y1) = (((r.x + r.w + m) as usize).min(self.cw), ((r.y + r.h + m) as usize).min(self.ch));
             rects.push((x0, y0, x1, y1));
         }
-        // Merge overlapping boxes: the layer is composited once per region (twice would apply it twice).
-        loop {
-            let mut merged = false;
-            'outer: for i in 0..rects.len() {
-                for j in i + 1..rects.len() {
-                    let (a, b) = (rects[i], rects[j]);
-                    if a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3 {
-                        rects[i] = (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
-                        rects.remove(j);
-                        merged = true;
-                        break 'outer;
-                    }
-                }
-            }
-            if !merged {
-                break;
-            }
+        self.rects = merge_rects(rects);
+        self.update_fit_rects();
+    }
+
+    /// The screen fit (None hidden = the design canvas as it is).
+    pub fn set_fit(&mut self, f: crate::core::fit::Fit) {
+        if self.fit != f {
+            self.fit = f.clamped();
+            self.update_fit_rects();
+            self.last_key = None;
         }
-        self.rects = rects;
+    }
+
+    /// The visible rectangle on this canvas.
+    fn visible(&self) -> (usize, usize, usize, usize) {
+        self.fit.rect(self.cw, self.ch)
+    }
+
+    /// Where the widget boxes land on the fitted frame (a pixel wider on each side for the interpolation).
+    fn update_fit_rects(&mut self) {
+        if self.fit.is_zero() {
+            self.fit_rects.clear();
+            return;
+        }
+        let (vx0, vy0, vx1, vy1) = self.visible();
+        let (sx, sy) = ((vx1 - vx0) as f32 / self.cw as f32, (vy1 - vy0) as f32 / self.ch as f32);
+        let rects = self
+            .rects
+            .iter()
+            .map(|&(x0, y0, x1, y1)| {
+                (
+                    ((vx0 as f32 + x0 as f32 * sx).floor() as usize).saturating_sub(1).max(vx0),
+                    ((vy0 as f32 + y0 as f32 * sy).floor() as usize).saturating_sub(1).max(vy0),
+                    (((vx0 as f32 + x1 as f32 * sx).ceil() as usize) + 1).min(vx1),
+                    (((vy0 as f32 + y1 as f32 * sy).ceil() as usize) + 1).min(vy1),
+                )
+            })
+            .collect();
+        self.fit_rects = merge_rects(rects);
     }
 }
 
@@ -483,12 +514,20 @@ impl Renderer {
         let s = self.sensors.lock().unwrap().clone();
         let t0 = Instant::now();
         self.background(t, vframe);
+        if !self.fit.is_zero() && !self.bg_is_base {
+            self.fit_background(); // the stored base is already fitted (made that way); anything else is scaled here
+        }
         self.apply_handover();
         let t1 = Instant::now();
         if self.live_alpha > 0.004 && !self.rects.is_empty() {
             let np_ref = if show_music { np.as_ref() } else { None };
             self.draw_widgets(&now, &s, np_ref, false);
-            self.composite(self.live_alpha);
+            if self.fit.is_zero() {
+                self.composite(self.live_alpha);
+            } else {
+                self.fit_widget_layer();
+                self.composite_fitted(self.live_alpha);
+            }
         }
         let t2 = Instant::now();
         if !self.mask.is_none() {
@@ -536,25 +575,43 @@ impl Renderer {
 
     /// Source-over of the widget layer (premultiplied) onto the opaque frame, scaled by `alpha`, inside the widget regions.
     fn composite(&mut self, alpha: f32) {
-        let g = (alpha.clamp(0.0, 1.0) * 256.0) as u32;
         let cw = self.cw;
-        let src = self.layer.data();
-        let dst = self.pm.data_mut();
-        for &(x0, y0, x1, y1) in &self.rects {
-            let w = x1 - x0;
-            for y in y0..y1 {
-                let s = &src[(y * cw + x0) * 4..][..w * 4];
-                let d = &mut dst[(y * cw + x0) * 4..][..w * 4];
-                for (dp, sp) in d.chunks_exact_mut(4).zip(s.chunks_exact(4)) {
-                    let sa = (sp[3] as u32 * g) >> 8;
-                    let inv = 255 - sa;
-                    for c in 0..3 {
-                        let sc = (sp[c] as u32 * g) >> 8;
-                        // x / 255 for x < 65536
-                        dp[c] = (sc + ((dp[c] as u32 * inv * 32897) >> 23)).min(255) as u8;
-                    }
-                }
+        composite_rects(self.pm.data_mut(), self.layer.data(), cw, &self.rects, alpha);
+    }
+
+    /// Scale the opaque frame in `pm` into the visible rectangle (hidden strips black).
+    fn fit_background(&mut self) {
+        let (cw, ch) = (self.cw, self.ch);
+        let vis = self.visible();
+        let mut out = self.fit_pm.take().unwrap_or_else(|| Pixmap::new(cw as u32, ch as u32).unwrap());
+        out.data_mut().fill(0);
+        for p in out.data_mut().chunks_exact_mut(4) {
+            p[3] = 255;
+        }
+        resample_into(self.pm.data(), out.data_mut(), cw, ch, vis, vis);
+        std::mem::swap(&mut self.pm, &mut out);
+        self.fit_pm = Some(out);
+    }
+
+    /// Scale the widget regions of the layer into the fitted layer (premultiplied RGBA, transparent elsewhere).
+    fn fit_widget_layer(&mut self) {
+        let (cw, ch) = (self.cw, self.ch);
+        let vis = self.visible();
+        let mut out = self.fit_layer.take().unwrap_or_else(|| Pixmap::new(cw as u32, ch as u32).unwrap());
+        for &reg in &self.fit_rects {
+            for y in reg.1..reg.3 {
+                out.data_mut()[(y * cw + reg.0) * 4..(y * cw + reg.2) * 4].fill(0);
             }
+            resample_into(self.layer.data(), out.data_mut(), cw, ch, vis, reg);
+        }
+        self.fit_layer = Some(out);
+    }
+
+    /// `composite` for the fitted layer and boxes.
+    fn composite_fitted(&mut self, alpha: f32) {
+        let cw = self.cw;
+        if let Some(src) = &self.fit_layer {
+            composite_rects(self.pm.data_mut(), src.data(), cw, &self.fit_rects, alpha);
         }
     }
 
@@ -668,6 +725,78 @@ impl Renderer {
 }
 
 // ---------------------------------------------------------------- drawing helpers (shared with widgets.rs)
+
+/// Source-over of a premultiplied layer onto an opaque frame, inside the given boxes, scaled by `alpha`.
+fn composite_rects(dst: &mut [u8], src: &[u8], cw: usize, rects: &[(usize, usize, usize, usize)], alpha: f32) {
+    let g = (alpha.clamp(0.0, 1.0) * 256.0) as u32;
+    for &(x0, y0, x1, y1) in rects {
+        let w = x1 - x0;
+        for y in y0..y1 {
+            let s = &src[(y * cw + x0) * 4..][..w * 4];
+            let d = &mut dst[(y * cw + x0) * 4..][..w * 4];
+            for (dp, sp) in d.chunks_exact_mut(4).zip(s.chunks_exact(4)) {
+                let sa = (sp[3] as u32 * g) >> 8;
+                let inv = 255 - sa;
+                for c in 0..3 {
+                    let sc = (sp[c] as u32 * g) >> 8;
+                    // x / 255 for x < 65536
+                    dp[c] = (sc + ((dp[c] as u32 * inv * 32897) >> 23)).min(255) as u8;
+                }
+            }
+        }
+    }
+}
+
+/// Merge overlapping boxes: the layer is composited once per region (twice would apply it twice).
+fn merge_rects(mut rects: Vec<(usize, usize, usize, usize)>) -> Vec<(usize, usize, usize, usize)> {
+    loop {
+        let mut merged = false;
+        'outer: for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                let (a, b) = (rects[i], rects[j]);
+                if a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3 {
+                    rects[i] = (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
+                    rects.remove(j);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !merged {
+            return rects;
+        }
+    }
+}
+
+/// Bilinear resample of a `cw` x `ch` picture so that it fills the rectangle `vis` of `dst` (same size); only the pixels
+/// of `region` (inside `vis`) are written. Pixel centres map to pixel centres, the source edges are clamped.
+fn resample_into(src: &[u8], dst: &mut [u8], cw: usize, ch: usize, vis: (usize, usize, usize, usize), region: (usize, usize, usize, usize)) {
+    let (vx0, vy0, vx1, vy1) = vis;
+    let (kx, ky) = (cw as f32 / (vx1 - vx0) as f32, ch as f32 / (vy1 - vy0) as f32);
+    let (rx0, ry0, rx1, ry1) = (region.0.max(vx0), region.1.max(vy0), region.2.min(vx1), region.3.min(vy1));
+    // per-column source index and weight (computed once)
+    let cols: Vec<(usize, usize, u32)> = (rx0..rx1)
+        .map(|x| {
+            let u = ((x as f32 + 0.5 - vx0 as f32) * kx - 0.5).clamp(0.0, (cw - 1) as f32);
+            let i = u.floor() as usize;
+            (i, (i + 1).min(cw - 1), ((u - i as f32) * 256.0) as u32)
+        })
+        .collect();
+    for y in ry0..ry1 {
+        let v = ((y as f32 + 0.5 - vy0 as f32) * ky - 0.5).clamp(0.0, (ch - 1) as f32);
+        let j = v.floor() as usize;
+        let (j1, wy) = ((j + 1).min(ch - 1), ((v - j as f32) * 256.0) as u32);
+        let (r0, r1) = (&src[j * cw * 4..(j + 1) * cw * 4], &src[j1 * cw * 4..(j1 + 1) * cw * 4]);
+        let row = &mut dst[(y * cw + rx0) * 4..(y * cw + rx1) * 4];
+        for (o, &(i0, i1, wx)) in row.chunks_exact_mut(4).zip(&cols) {
+            for c in 0..4 {
+                let a = r0[i0 * 4 + c] as u32 * (256 - wx) + r0[i1 * 4 + c] as u32 * wx;
+                let b = r1[i0 * 4 + c] as u32 * (256 - wx) + r1[i1 * 4 + c] as u32 * wx;
+                o[c] = ((a * (256 - wy) + b * wy + 32768) >> 16) as u8;
+            }
+        }
+    }
+}
 
 /// Fill a rounded rectangle on a premultiplied pixmap with plain RGBA source-over, with anti-aliased edges. Done by hand: a
 /// tiny-skia path fill of a 900x400 card took ~4 ms here, this takes well under 1 ms (solid spans are written directly).
@@ -909,5 +1038,105 @@ mod tests {
         let back = r.render().0.to_vec();
         assert_eq!(back.len(), plain.len());
         assert!(back.chunks_exact(4).zip(plain.chunks_exact(4)).all(|(a, b)| a[..3].iter().zip(&b[..3]).all(|(x, y)| x.abs_diff(*y) < 8)), "normal frame again");
+    }
+
+    fn px(f: &[u8], w: usize, x: usize, y: usize) -> [u8; 3] {
+        let i = (y * w + x) * 4;
+        [f[i], f[i + 1], f[i + 2]]
+    }
+
+    /// A renderer on a `w` x `h` canvas with a plain white picture as background and no widgets.
+    fn white_renderer(w: usize, h: usize) -> Renderer {
+        let mut r = Renderer::new_sized(w, h, Arc::new(Mutex::new(Sensors::default())), None);
+        r.set_theme(ThemeLive::new(Theme::default(), PathBuf::new()));
+        r.set_still_background(Some(Arc::new(vec![255u8; w * h * 4])));
+        r
+    }
+
+    /// The screen fit puts the design canvas exactly into the visible rectangle: 4 px hidden at the top and 9 at the left, in
+    /// screen px, are 3 and 6 on the 1680x756 live picture and 4 and 9 on the 2400x1080 base picture.
+    #[test]
+    fn fit_content_rectangle_is_exact_at_both_sizes() {
+        for (w, h, x0, y0) in [(1680usize, 756usize, 6usize, 3usize), (2400, 1080, 9, 4)] {
+            let mut r = white_renderer(w, h);
+            r.set_fit(crate::core::fit::Fit::new(4, 0, 0, 9));
+            let f = r.render().0.to_vec();
+            let (black, white) = ([0u8; 3], [255u8; 3]);
+            assert_eq!(px(&f, w, x0 - 1, h / 2), black, "{w}: last hidden column");
+            assert_eq!(px(&f, w, x0, h / 2), white, "{w}: first visible column");
+            assert_eq!(px(&f, w, w / 2, y0 - 1), black, "{w}: last hidden row");
+            assert_eq!(px(&f, w, w / 2, y0), white, "{w}: first visible row");
+            assert_eq!(px(&f, w, w - 1, h - 1), white, "{w}: right and bottom are not hidden");
+            assert_eq!(px(&f, w, x0, y0), white);
+            assert_eq!(px(&f, w, x0 - 1, y0 - 1), black);
+            let hidden = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| x < x0 || y < y0).all(|(x, y)| px(&f, w, x, y) == black);
+            assert!(hidden, "{w}: every hidden pixel is black");
+            let seen = (y0..h).flat_map(|y| (x0..w).map(move |x| (x, y))).all(|(x, y)| px(&f, w, x, y) == white);
+            assert!(seen, "{w}: every visible pixel is white");
+            // no fit again: the whole canvas
+            r.set_fit(crate::core::fit::Fit::default());
+            let g = r.render().0.to_vec();
+            assert_eq!(px(&g, w, 0, 0), white);
+        }
+    }
+
+    #[test]
+    fn fit_scales_the_picture_instead_of_cutting_it() {
+        let (w, h) = (1680usize, 756usize);
+        let mut ramp = vec![255u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let v = (x * 255 / (w - 1)) as u8;
+                ramp[(y * w + x) * 4..][..3].copy_from_slice(&[v, v, v]);
+            }
+        }
+        let mut r = white_renderer(w, h);
+        r.set_still_background(Some(Arc::new(ramp)));
+        r.set_fit(crate::core::fit::Fit::new(0, 20, 0, 40)); // left 28, right 14 sent px
+        let f = r.render().0.to_vec();
+        assert!(px(&f, w, 28, 300)[0] <= 2, "the left end of the picture is at the first visible column: {:?}", px(&f, w, 28, 300));
+        assert!(px(&f, w, w - 15, 300)[0] >= 253, "the right end is at the last visible column: {:?}", px(&f, w, w - 15, 300));
+        assert_eq!(px(&f, w, w - 14, 300), [0, 0, 0]);
+        assert_eq!(px(&f, w, 27, 300), [0, 0, 0]);
+    }
+
+    #[test]
+    fn fit_leaves_the_notch_band_and_the_corners_on_the_panel() {
+        use serde_json::json;
+        let mask = Mask::from_value(&json!({ "mode": "band", "band": { "edge": "left", "px": 92 }, "corners": { "on": true, "r": 80 } }));
+        let mut a = white_renderer(LW, LH);
+        a.set_mask(mask.clone());
+        let plain = a.render().0.to_vec();
+        let mut b = white_renderer(LW, LH);
+        b.set_mask(mask);
+        b.set_fit(crate::core::fit::Fit::new(4, 0, 0, 9));
+        let fitted = b.render().0.to_vec();
+        // the band (67 px on the live picture) is black in both, and starts at the same column
+        for x in [0usize, 30, 66] {
+            assert_eq!(px(&plain, LW, x, 400), [0, 0, 0]);
+            assert_eq!(px(&fitted, LW, x, 400), [0, 0, 0]);
+        }
+        assert_eq!(px(&plain, LW, 67, 400), [255, 255, 255]);
+        assert_eq!(px(&fitted, LW, 67, 400), [255, 255, 255], "the band is not moved or widened by the fit");
+        // the rounded corners sit at the panel corners of the visible area (right side shows it)
+        assert_eq!(px(&plain, LW, LW - 1, LH - 1), [0, 0, 0]);
+        assert_eq!(px(&fitted, LW, LW - 1, LH - 1), [0, 0, 0]);
+        assert_eq!(px(&fitted, LW, LW - 1, 300), [255, 255, 255]);
+    }
+
+    #[test]
+    fn fit_keeps_widgets_inside_the_visible_rectangle() {
+        let mut r = Renderer::new(Arc::new(Mutex::new(Sensors::default())), None);
+        r.set_theme(ThemeLive::new(Theme::standard_preset(), PathBuf::new()));
+        r.set_sample_mode(true);
+        r.set_still_background(Some(Arc::new(vec![40u8; LW * LH * 4])));
+        r.set_fit(crate::core::fit::Fit::new(40, 30, 20, 60));
+        let f = r.render().0.to_vec();
+        let (x0, y0, x1, y1) = crate::core::fit::Fit::new(40, 30, 20, 60).rect(LW, LH);
+        let outside_is_black = (0..LH).flat_map(|y| (0..LW).map(move |x| (x, y))).filter(|&(x, y)| x < x0 || x >= x1 || y < y0 || y >= y1).all(|(x, y)| px(&f, LW, x, y) == [0, 0, 0]);
+        assert!(outside_is_black);
+        assert_ne!(px(&f, LW, x0 + 5, y0 + 5), [0, 0, 0], "the picture is inside");
+        let widgets_drawn = f.chunks_exact(4).any(|p| p[0] > 120 || p[1] > 120);
+        assert!(widgets_drawn, "the clock and the stats still draw (bright text on the dark picture)");
     }
 }

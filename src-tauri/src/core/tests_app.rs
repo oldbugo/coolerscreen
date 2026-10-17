@@ -387,8 +387,10 @@ fn apply_stores_the_base_and_switches_the_theme() {
     let r = app.theme_apply(&oid).unwrap();
     let jid = r["jobId"].as_str().unwrap().to_string();
     let mut seen = std::collections::BTreeSet::new();
+    let end = Instant::now() + Duration::from_secs(20);
     let j = loop {
         let j = app.job_get(&jid).unwrap();
+        assert!(Instant::now() < end, "apply job did not finish: {j}");
         seen.insert(j["message"].as_str().unwrap_or("").to_string());
         if ["done", "failed", "cancelled"].contains(&j["state"].as_str().unwrap()) {
             break j;
@@ -654,4 +656,70 @@ fn a_themes_own_corner_radius_is_applied_to_the_base_and_marks_it_stale_when_cha
     let v = app.theme_set(&oid, &json!({ "gap": 99999 })).unwrap();
     assert_eq!(v["theme"]["gap"], json!(200.0));
     assert_eq!(app.theme_get(&oid).unwrap()["theme"]["gap"], json!(200.0));
+}
+
+// ---------- theme format v1.5: screen fit ----------
+
+#[test]
+fn screen_fit_is_validated_saved_and_reported() {
+    let (_d, app, _rec, _gallery) = setup();
+    assert_eq!(app.app_state()["screenFit"], json!({ "top": 0, "right": 0, "bottom": 0, "left": 0 }), "default: nothing hidden");
+    let st = app.settings_update(&json!({ "screenFit": { "top": 4, "left": 9 } })).unwrap();
+    assert_eq!(st["screenFit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9 }));
+    // out of range / not a number: clamped to 0..200, garbage counts as 0; keys left out keep their value
+    let st = app.settings_update(&json!({ "screenFit": { "top": 999, "right": -5, "bottom": "x", "left": 9.4 } })).unwrap();
+    assert_eq!(st["screenFit"], json!({ "top": 200, "right": 0, "bottom": 0, "left": 9 }));
+    let st = app.settings_update(&json!({ "screenFit": { "right": 3 } })).unwrap();
+    assert_eq!(st["screenFit"], json!({ "top": 200, "right": 3, "bottom": 0, "left": 9 }));
+    // on disk it is written only when something is hidden
+    let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(app.settings.file()).unwrap()).unwrap();
+    assert_eq!(on_disk["screenFit"]["left"], json!(9));
+    app.settings_update(&json!({ "screenFit": { "top": 0, "right": 0, "bottom": 0, "left": 0 } })).unwrap();
+    let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(app.settings.file()).unwrap()).unwrap();
+    assert!(on_disk.get("screenFit").is_none());
+}
+
+#[test]
+fn edge_offsets_from_the_tuning_tool_are_taken_over_once() {
+    let (d, app, _rec, _gallery) = setup();
+    let old = d.path().join("home").join("edge-offsets.json");
+    std::fs::write(&old, r#"{ "top": 4, "right": 0, "bottom": 0, "left": 9, "note": "from cs2 edge-tune" }"#).unwrap();
+    app.startup();
+    assert_eq!(app.app_state()["screenFit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9 }));
+    assert!(!old.exists(), "the file is set aside after the migration");
+    assert!(d.path().join("home").join("edge-offsets.migrated.json").exists());
+    // a later change is never overwritten by the old file
+    std::fs::write(&old, r#"{ "top": 50, "right": 0, "bottom": 0, "left": 50 }"#).unwrap();
+    app.settings_update(&json!({ "screenFit": { "top": 5 } })).unwrap();
+    app.startup();
+    assert_eq!(app.app_state()["screenFit"]["top"], json!(5));
+    assert_eq!(app.app_state()["screenFit"]["left"], json!(9));
+}
+
+#[test]
+fn changing_the_screen_fit_makes_the_stored_base_stale() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Fit.mp4");
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    let first = app.theme_get(&oid).unwrap()["baseVersionId"].as_str().unwrap().to_string();
+    assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(false));
+    let key0 = app.app_state()["notchKey"].as_str().unwrap().to_string();
+    app.settings_update(&json!({ "screenFit": { "top": 4, "left": 9 } })).unwrap();
+    assert_ne!(app.app_state()["notchKey"].as_str().unwrap(), key0, "the fit is part of the cache key");
+    assert!(app.app_state()["notchKey"].as_str().unwrap().starts_with(&key0));
+    assert_eq!(app.app_state()["oldNotchCount"], json!(1), "the stored version is counted as made with another setting");
+    let v = app.theme_get(&oid).unwrap();
+    assert_eq!(v["baseStale"], json!(true), "Base needs re-storing");
+    // applying again makes a new version with the fit (the old one is not reused), and clears the notice
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    let v = app.theme_get(&oid).unwrap();
+    assert_ne!(v["baseVersionId"].as_str().unwrap(), first);
+    assert_eq!(v["baseStale"], json!(false));
+    let made = app.lib.find_version(v["baseVersionId"].as_str().unwrap()).unwrap().1;
+    assert_eq!(made["notch"]["fit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9 }), "the version records the fit it was made with");
+    // back to no fit: stale again, and the first version (made without a fit) is the one that matches
+    app.settings_update(&json!({ "screenFit": { "top": 0, "left": 0 } })).unwrap();
+    assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(true));
 }

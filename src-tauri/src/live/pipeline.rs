@@ -152,6 +152,9 @@ pub struct Shared {
     /// Calibration guides drawn over every live frame while Some (see `set_calibration`).
     pub calibration: Mutex<Option<Guides>>,
     pub calibration_gen: AtomicU64,
+    /// Screen fit (hidden edge pixels): every frame is the design canvas scaled into the visible rectangle.
+    pub fit: Mutex<crate::core::fit::Fit>,
+    pub fit_gen: AtomicU64,
     /// Hand-over at stop: 0 = none, 1 = fade onto the loop's first frame, 2 = fade to black. Set by `stop()` while the stream runs.
     pub stop_mode: AtomicU8,
     /// The render thread has put the final hand-over frame in the slot; `hand_sent_mark` is the sent-frame count at that moment.
@@ -191,6 +194,8 @@ impl Pipeline {
             theme_gen: AtomicU64::new(0),
             calibration: Mutex::new(None),
             calibration_gen: AtomicU64::new(0),
+            fit: Mutex::new(crate::core::fit::Fit::default()),
+            fit_gen: AtomicU64::new(0),
             stop_mode: AtomicU8::new(0),
             hand_done: AtomicBool::new(false),
             hand_sent_mark: AtomicU64::new(0),
@@ -218,6 +223,7 @@ impl Pipeline {
                 let mut seen_gen = sh.cfg_gen.load(Relaxed);
                 let mut seen_theme_gen = u64::MAX;
                 let mut seen_cal_gen = u64::MAX;
+                let mut seen_fit_gen = u64::MAX;
                 let mut music: Option<MusicWatcher> = None;
                 let mut video_on = false;
                 // What the background decodes: (file, is the stored portrait base, decode mode).
@@ -249,6 +255,11 @@ impl Pipeline {
                     if cg != seen_cal_gen {
                         seen_cal_gen = cg;
                         r.set_calibration(sh.calibration.lock().unwrap().clone());
+                    }
+                    let fg = sh.fit_gen.load(Relaxed);
+                    if fg != seen_fit_gen {
+                        seen_fit_gen = fg;
+                        r.set_fit(*sh.fit.lock().unwrap());
                     }
                     let active = !sh.paused.load(Relaxed) && sh.connected.load(Relaxed);
                     if active && !was_active {
@@ -574,6 +585,12 @@ impl Pipeline {
     pub fn set_calibration(&self, g: Option<Guides>) {
         *self.shared.calibration.lock().unwrap() = g;
         self.shared.calibration_gen.fetch_add(1, Relaxed);
+    }
+
+    /// The screen fit (see core::fit); takes effect on the next frame.
+    pub fn set_fit(&self, f: crate::core::fit::Fit) {
+        *self.shared.fit.lock().unwrap() = f;
+        self.shared.fit_gen.fetch_add(1, Relaxed);
     }
 
     /// Change the background clip while running (None: the animated gradient). The decoder is restarted by the render thread.

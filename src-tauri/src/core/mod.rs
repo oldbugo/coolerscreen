@@ -6,6 +6,7 @@ pub mod autostart;
 pub mod commands;
 pub mod device_service;
 pub mod error;
+pub mod fit;
 pub mod fake_media;
 pub mod gallery;
 pub mod jobobject;

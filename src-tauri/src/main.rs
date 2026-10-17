@@ -90,7 +90,8 @@ fn main() {
             cc::theme_asset_add,
             cc::theme_apply,
             cc::theme_set_base,
-            cc::calibration_set
+            cc::calibration_set,
+            cc::fit_cal
         ])
         .setup(move |app| {
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));

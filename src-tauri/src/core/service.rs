@@ -100,12 +100,12 @@ impl App {
     pub fn app_state(&self) -> Value {
         let s = self.settings.load();
         let b = budgets(&s, self.lib.splash_size());
-        let key = notch_key(s.mask());
+        let key = format!("{}{}", notch_key(s.mask()), s.screen_fit().key());
         json!({
             "appVersion": self.app_version, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
-            "screenGuides": s.screen_guides(), "editorSnap": s.editor_snap(),
+            "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(),
             "budget": num(b.loop_bytes), "total": num(b.total), "budgetMeasured": b.measured, "capacityAt": b.capacity_at,
             "uploadRate": s.upload_rate().map(num).unwrap_or(json!(50000)),
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
@@ -123,6 +123,7 @@ impl App {
         let radius = body.get("cornerRadius").and_then(Value::as_f64).filter(|r| r.is_finite()).map(|r| r.clamp(0.0, 300.0).round());
         let guides = body.get("screenGuides").filter(|g| g.is_object()).map(|g| super::settings::guides_value(&crate::live::theme::Guides::from_value(g)));
         let snap = body.get("editor").and_then(|e| e["snap"].as_bool());
+        let fit_patch = body.get("screenFit").filter(|f| f.is_object()).cloned();
         self.settings.update(|s| {
             if let Some(r) = radius {
                 s["mask"]["corners"] = json!({ "on": r > 0.0, "r": r });
@@ -133,6 +134,10 @@ impl App {
             if let Some(b) = snap {
                 s["editor"] = json!({ "snap": b });
             }
+            if let Some(p) = &fit_patch {
+                let now = super::fit::Fit::from_value(s.get("screenFit").unwrap_or(&Value::Null));
+                s["screenFit"] = super::fit::Fit::patched(now, p).to_value();
+            }
             if let Some(mut m) = mask {
                 m["corners"] = s["mask"]["corners"].clone();
                 s["mask"] = m;
@@ -141,6 +146,9 @@ impl App {
                 s["maxSeconds"] = x;
             }
         })?;
+        if fit_patch.is_some() {
+            self.live.set_fit(self.settings.load().screen_fit());
+        }
         self.lib.bump();
         Ok(self.app_state())
     }
@@ -252,6 +260,24 @@ impl App {
         }
         let _ = f;
         Ok(json!({ "ok": true }))
+    }
+
+    /// The Screen fit page's calibration: `{ action: "start" | "set" | "end", fit, sel }` (see commands::fit_cal). Nothing is saved
+    /// here; Save goes through `settings_update { screenFit }`.
+    pub fn fit_cal(&self, a: &Value) -> CoreResult<Value> {
+        let fit = super::fit::Fit::from_value(a.get("fit").unwrap_or(&Value::Null));
+        let sel = a.get("sel").and_then(Value::as_u64).unwrap_or(0).min(3) as usize;
+        let live = self.live.clone();
+        match a.get("action").and_then(Value::as_str).unwrap_or("") {
+            "start" => live.calibrate_start(fit, sel),
+            "set" => {
+                live.calibrate_set(fit, sel);
+            }
+            "end" => live.calibrate_end(),
+            other => return Err(CoreError::new(format!("Unknown screen fit action: {other}"))),
+        }
+        let st = live.status();
+        Ok(json!({ "calibrating": st["calibrating"], "connected": live.calibration_connected() }))
     }
 
     // ---------- tuning: estimate, loops ----------
@@ -978,6 +1004,8 @@ impl App {
     /// What 1.2's server did at start: mark interrupted versions, scan the gallery (+ assets), watch it.
     pub fn startup(&self) {
         self.lib.reset_interrupted();
+        self.settings.migrate_edge_offsets();
+        self.live.set_fit(self.settings.load().screen_fit());
         self.gallery_init(true);
         self.refresh_live_theme();
     }

@@ -384,8 +384,13 @@ impl Library {
         let s = self.settings.load();
         let mut notch = s.mask().clone();
         let corners = notch.as_object_mut().and_then(|m| m.remove("corners")).unwrap_or(Value::Null);
+        let fit = s.screen_fit();
+        // The screen fit travels with the notch (the picture is fitted before the notch is applied) and is part of its key.
+        if !fit.is_zero() {
+            notch["fit"] = fit.to_value();
+        }
         Ctx {
-            notch_key: notch_key(s.mask()),
+            notch_key: format!("{}{}", notch_key(s.mask()), fit.key()),
             budget: budgets(&s, self.splash_size()).loop_bytes,
             standby: s.slot("standby").cloned(),
             max_seconds: s.max_seconds(),

@@ -60,6 +60,7 @@
     "allow-theme-asset-add",
     "allow-theme-apply",
     "allow-theme-set-base",
-    "allow-calibration-set"
+    "allow-calibration-set",
+    "allow-fit-cal"
   ]
 }

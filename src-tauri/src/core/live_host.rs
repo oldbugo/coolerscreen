@@ -21,6 +21,8 @@ pub const SLEEP: u32 = 4;
 pub const LOCK: u32 = 8;
 /// The current theme's "Live layer" switch is off: nothing is streamed, the screen plays its own base.
 pub const LAYER: u32 = 16;
+/// The Screen fit page has the ruler picture on the screen.
+pub const FITCAL: u32 = 32;
 
 pub struct LiveHost {
     pipeline: Mutex<Option<Arc<Pipeline>>>,
@@ -40,6 +42,10 @@ pub struct LiveHost {
     theme: Mutex<Option<crate::live::theme::ThemeLive>>,
     /// Calibration guides drawn on the real screen while the Screen guides page is open (None = off).
     calibration: Mutex<Option<crate::live::theme::Guides>>,
+    /// The screen fit live frames are drawn with (given to every pipeline when it starts and whenever it changes).
+    fit: Mutex<crate::core::fit::Fit>,
+    /// The temporary Screen fit calibration session (ruler picture), while the page is open.
+    fit_cal: Mutex<Option<crate::live::fitcal::FitCalibration>>,
 }
 
 impl Default for LiveHost {
@@ -54,6 +60,8 @@ impl Default for LiveHost {
             off_stopped: AtomicBool::new(false),
             theme: Mutex::new(None),
             calibration: Mutex::new(None),
+            fit: Mutex::new(crate::core::fit::Fit::default()),
+            fit_cal: Mutex::new(None),
         }
     }
 }
@@ -81,6 +89,67 @@ impl LiveHost {
             return c.fps;
         }
         std::fs::read_to_string(Config::path()).ok().and_then(|s| serde_json::from_str::<Config>(&s).ok()).map(|c| c.fps).unwrap_or(60)
+    }
+
+    /// The screen fit for live frames; a running pipeline switches on its next frame.
+    pub fn set_fit(&self, f: crate::core::fit::Fit) {
+        *self.fit.lock().unwrap() = f;
+        if let Some(p) = self.pipeline() {
+            p.set_fit(f);
+        }
+    }
+
+    /// Start the Screen fit calibration: the ruler picture for `fit` goes on the screen, whether live is on or not. Live (when on)
+    /// steps aside first and comes back after `calibrate_end`. Already running: just updates the picture.
+    pub fn calibrate_start(self: &Arc<Self>, fit: crate::core::fit::Fit, sel: usize) {
+        if let Some(c) = self.fit_cal.lock().unwrap().as_ref() {
+            c.set(fit, sel);
+            return;
+        }
+        self.hold(FITCAL, Duration::from_secs(6));
+        let sink = if self.no_device.load(SeqCst) { Sink::Null } else { Sink::Device };
+        let mut g = self.fit_cal.lock().unwrap();
+        if g.is_none() {
+            *g = Some(crate::live::fitcal::FitCalibration::start(fit, sel, sink));
+        }
+    }
+
+    /// New offsets (screen px) and selected edge for the running calibration; false when none is running.
+    pub fn calibrate_set(&self, fit: crate::core::fit::Fit, sel: usize) -> bool {
+        match self.fit_cal.lock().unwrap().as_ref() {
+            Some(c) => {
+                c.set(fit, sel);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// End the calibration: the screen plays its loop clip again and live (when it was on) resumes.
+    pub fn calibrate_end(self: &Arc<Self>) {
+        let c = self.fit_cal.lock().unwrap().take();
+        if let Some(c) = c {
+            c.end();
+        }
+        if self.holds.load(SeqCst) & FITCAL != 0 {
+            self.release(FITCAL, Duration::from_millis(800));
+        }
+    }
+
+    fn end_calibration_now(&self) {
+        let c = self.fit_cal.lock().unwrap().take();
+        if let Some(c) = c {
+            c.end();
+        }
+    }
+
+    /// The ruler picture is on the screen.
+    pub fn calibration_connected(&self) -> bool {
+        self.fit_cal.lock().unwrap().as_ref().is_some_and(|c| c.connected())
+    }
+
+    pub fn calibrating(&self) -> bool {
+        self.fit_cal.lock().unwrap().is_some()
     }
 
     /// The theme live shows: kept for pipelines that start later, and given to the running one without ending the stream.
@@ -148,6 +217,7 @@ impl LiveHost {
         if let Some(g) = self.calibration.lock().unwrap().clone() {
             p.set_calibration(Some(g));
         }
+        p.set_fit(*self.fit.lock().unwrap());
         // Started while a hold is set (a device task is running): stay paused until it is done.
         p.shared.paused.store(self.holds.load(SeqCst) != 0, SeqCst);
         *g = Some(p);
@@ -165,6 +235,7 @@ impl LiveHost {
     /// Shutdown or logoff: the fast ending (at most 800 ms), loop clip or screen off.
     pub fn stop_fast(&self, screen_off: bool) {
         self.off_stopped.store(false, SeqCst);
+        self.end_calibration_now();
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
             p.stop_fast(if screen_off { Ending::ScreenOff } else { Ending::LoopClip });
@@ -270,6 +341,7 @@ impl LiveHost {
     /// `true` blocks until the stream has ended (so the task finds the screen free); `false` resumes after a short delay.
     pub fn device_busy(self: &Arc<Self>, busy: bool) {
         if busy {
+            self.calibrate_end(); // the screen is needed by the task
             self.hold(DEVICE, Duration::from_secs(6));
         } else {
             self.release(DEVICE, Duration::from_millis(1200));
@@ -291,6 +363,7 @@ impl LiveHost {
             "deviceHold": h & DEVICE != 0,
             "systemHold": h & (SLEEP | LOCK) != 0,
             "layerOff": h & LAYER != 0,
+            "calibrating": self.calibrating(),
             "noDevice": self.no_device.load(SeqCst),
         })
     }
@@ -367,6 +440,54 @@ mod tests {
         h.set_theme(theme(false));
         h.start();
         assert!(h.pipeline().unwrap().shared.paused.load(SeqCst));
+        h.stop();
+    }
+
+    #[test]
+    fn fit_calibration_pauses_live_and_hands_back_and_works_with_live_off() {
+        use crate::core::fit::Fit;
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        // live off: a temporary session for the page
+        assert!(!h.calibrating());
+        h.calibrate_start(Fit::new(4, 0, 0, 9), 0);
+        assert!(h.calibrating() && h.calibration_connected());
+        assert_eq!(h.status()["calibrating"], json!(true));
+        assert!(h.calibrate_set(Fit::new(5, 0, 0, 9), 3));
+        h.calibrate_end();
+        assert!(!h.calibrating());
+        assert!(!h.calibrate_set(Fit::default(), 0), "nothing to update once it ended");
+        // live on: it steps aside, then resumes
+        h.start();
+        let p = h.pipeline().expect("running");
+        h.calibrate_start(Fit::new(4, 0, 0, 9), 1);
+        assert!(p.shared.paused.load(SeqCst), "live is paused while the ruler is on the screen");
+        h.calibrate_start(Fit::new(6, 0, 0, 9), 1); // a second start only updates the picture
+        h.calibrate_end();
+        std::thread::sleep(Duration::from_millis(1300));
+        assert!(!p.shared.paused.load(SeqCst), "live is back after the page is left");
+        // a device task ends the calibration (the screen is needed)
+        h.calibrate_start(Fit::default(), 0);
+        h.device_busy(true);
+        assert!(!h.calibrating());
+        h.device_busy(false);
+        h.stop();
+    }
+
+    #[test]
+    fn the_fit_reaches_a_running_and_a_later_pipeline() {
+        use crate::core::fit::Fit;
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_fit(Fit::new(4, 0, 0, 9));
+        h.start();
+        let p = h.pipeline().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(4, 0, 0, 9));
+        h.set_fit(Fit::new(1, 2, 3, 4));
+        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(1, 2, 3, 4));
         h.stop();
     }
 }

@@ -318,6 +318,14 @@ pub async fn calibration_set(core: State<'_, Core>, request: tauri::ipc::Request
     .await
 }
 
+/// Screen fit calibration: `{ action: "start" | "set" | "end", fit: { top, right, bottom, left }, sel: 0..3 }`. `start` puts the ruler
+/// picture on the screen (live steps aside), `set` changes it, `end` gives the screen back. -> `{ calibrating, connected }`.
+#[tauri::command]
+pub async fn fit_cal(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let a = json_args(&request);
+    run(&core, move |app| app.fit_cal(&a)).await
+}
+
 /// Apply a theme: base picture, store it on the screen, switch the live layer -> `{ jobId }`.
 #[tauri::command]
 pub async fn theme_apply(core: State<'_, Core>, original_id: String) -> Result<Value, CoreError> {
@@ -384,5 +392,5 @@ pub const COMMANDS: &[&str] = &[
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
-    "theme_preview", "theme_asset_add", "theme_apply", "theme_set_base", "calibration_set",
+    "theme_preview", "theme_asset_add", "theme_apply", "theme_set_base", "calibration_set", "fit_cal",
 ];

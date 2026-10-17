@@ -367,6 +367,7 @@ fn measure(base: &Config, theme: Option<ThemeLive>, secs: u64, use_device: bool)
             cfg.background = None;
         }
         let p = Pipeline::start(&cfg, if use_device { Sink::Device } else { Sink::Null });
+        p.set_fit(cs_core::core::settings::SettingsStore::new(cs_core::core::paths::settings()).load().screen_fit());
         if let Some(t) = &theme {
             let mut t = t.clone();
             if !video {
@@ -491,6 +492,7 @@ fn run_tray(mut cfg: Config, theme: Option<ThemeLive>, use_device: bool) -> i32 
     make_session_window();
 
     let pipeline = Arc::new(Pipeline::start(&cfg, if use_device { Sink::Device } else { Sink::Null }));
+    pipeline.set_fit(cs_core::core::settings::SettingsStore::new(cs_core::core::paths::settings()).load().screen_fit());
     if let Some(t) = theme {
         pipeline.set_theme(t);
     }

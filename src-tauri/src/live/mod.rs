@@ -9,6 +9,7 @@
 //!   preview   one-frame renders without a device (editor preview, onBase overlay)
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
 pub mod encode;
+pub mod fitcal;
 pub mod mask;
 pub mod nowplaying;
 pub mod pipeline;

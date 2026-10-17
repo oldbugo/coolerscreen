@@ -22,6 +22,10 @@ impl Settings {
     pub fn screen_guides(&self) -> Value {
         guides_value(&crate::live::theme::Guides::from_value(self.0.get("screenGuides").unwrap_or(&Value::Null)))
     }
+    /// How many screen pixels the panel hides at each edge (default none).
+    pub fn screen_fit(&self) -> super::fit::Fit {
+        super::fit::Fit::from_value(self.0.get("screenFit").unwrap_or(&Value::Null))
+    }
     /// Gentle snapping in the theme editor (default on).
     pub fn editor_snap(&self) -> bool {
         self.0["editor"]["snap"] != false
@@ -302,6 +306,11 @@ pub fn sanitize(s: &Value) -> Settings {
     if guides != crate::live::theme::Guides::default() {
         out["screenGuides"] = guides_value(&guides);
     }
+    // 3.0 screen fit (pixels the panel hides at each edge): written only when something is hidden.
+    let fit = super::fit::Fit::from_value(s.get("screenFit").unwrap_or(&Value::Null));
+    if !fit.is_zero() {
+        out["screenFit"] = fit.to_value();
+    }
     if s.get("editor").and_then(|e| e.get("snap")) == Some(&Value::Bool(false)) {
         out["editor"] = json!({ "snap": false });
     }
@@ -393,6 +402,28 @@ impl SettingsStore {
         let mut v = self.load().0;
         f(&mut v);
         self.save_locked(&v)
+    }
+
+    /// The temporary `cs2 edge-tune` tool saved `edge-offsets.json` next to settings.json. When settings.json has no
+    /// `screenFit` yet, take those values over (once: the file is renamed afterwards). Returns true when it did.
+    pub fn migrate_edge_offsets(&self) -> bool {
+        let Some(dir) = self.file.parent() else { return false };
+        let src = dir.join("edge-offsets.json");
+        let Ok(text) = super::js::read_text(&src) else { return false };
+        let Ok(old) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else { return false };
+        let has_fit = super::js::read_text(&self.file)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(t.trim_start_matches('\u{feff}')).ok())
+            .is_some_and(|v| v.get("screenFit").is_some());
+        if has_fit {
+            return false;
+        }
+        let fit = super::fit::Fit::from_value(&old);
+        if self.update(|s| s["screenFit"] = fit.to_value()).is_err() {
+            return false;
+        }
+        let _ = std::fs::rename(&src, dir.join("edge-offsets.migrated.json"));
+        true
     }
 
     /// 1.2 `recordSlot`: what this app last wrote to a slot (null clears).
