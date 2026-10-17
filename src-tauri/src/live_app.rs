@@ -8,19 +8,18 @@ use cs_core::core::error::CoreError;
 use cs_core::core::live_host::{LiveHost, LOCK, SLEEP};
 use cs_core::core::settings::LiveSettings;
 use serde_json::Value;
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle, Manager, WebviewWindow, WindowEvent};
-use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tauri::image::Image;
+use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager, Wry, WebviewWindow, WindowEvent};
 
 const PAUSE_TEXT: &str = "Pause live (screen shows its normal clip)";
 
 /// True while the tray icon exists (closing the window then hides it, and the app does not exit with its last window).
 static TRAY_ON: AtomicBool = AtomicBool::new(false);
 static HOST: OnceLock<Arc<LiveHost>> = OnceLock::new();
-static IDS: Mutex<Option<Ids>> = Mutex::new(None);
 /// The live settings as last applied (the session window's procedure has no other way to reach them).
 static CFG: Mutex<Option<LiveSettings>> = Mutex::new(None);
 
@@ -28,26 +27,16 @@ fn cfg() -> LiveSettings {
     CFG.lock().unwrap().clone().unwrap_or_default()
 }
 
-#[derive(Clone)]
-struct Ids {
-    open: MenuId,
-    pause: MenuId,
-    f30: MenuId,
-    f60: MenuId,
-    quit: MenuId,
-}
+const TRAY_ID: &str = "live";
 
+/// The menu items whose labels follow the host (Tauri menu items can be changed from any thread).
 struct Tray {
-    _icon: TrayIcon,
-    pause: MenuItem,
-    f30: CheckMenuItem,
-    f60: CheckMenuItem,
+    pause: MenuItem<Wry>,
+    f30: CheckMenuItem<Wry>,
+    f60: CheckMenuItem<Wry>,
 }
 
-thread_local! {
-    /// Menu objects are not Send: they live on the main thread.
-    static TRAY: RefCell<Option<Tray>> = const { RefCell::new(None) };
-}
+static TRAY: Mutex<Option<Tray>> = Mutex::new(None);
 
 pub fn tray_on() -> bool {
     TRAY_ON.load(Ordering::SeqCst)
@@ -128,11 +117,9 @@ pub fn keep_running() -> bool {
 
 // ---------------------------------------------------------------- tray
 
-fn icon(app: &AppHandle) -> tray_icon::Icon {
+fn icon(app: &AppHandle) -> Image<'static> {
     if let Some(i) = app.default_window_icon() {
-        if let Ok(t) = tray_icon::Icon::from_rgba(i.rgba().to_vec(), i.width(), i.height()) {
-            return t;
-        }
+        return Image::new_owned(i.rgba().to_vec(), i.width(), i.height());
     }
     let n = 32usize;
     let mut px = vec![0u8; n * n * 4];
@@ -143,7 +130,7 @@ fn icon(app: &AppHandle) -> tray_icon::Icon {
             px[(y * n + x) * 4..(y * n + x) * 4 + 4].copy_from_slice(&c);
         }
     }
-    tray_icon::Icon::from_rgba(px, n as u32, n as u32).expect("icon")
+    Image::new_owned(px, n as u32, n as u32)
 }
 
 unsafe extern "system" fn session_proc(hwnd: *mut core::ffi::c_void, msg: u32, wp: usize, lp: isize) -> isize {
@@ -215,65 +202,85 @@ fn make_session_window() {
 fn build_tray(app: &AppHandle) {
     let h = host(app);
     let fps = h.fps();
-    let menu = Menu::new();
-    let open = MenuItem::new("Open CoolerScreen", true, None);
-    let pause = MenuItem::new(if h.user_paused() { "Resume live" } else { PAUSE_TEXT }, true, None);
-    let f30 = CheckMenuItem::new("30 frames per second", true, fps < 45, None);
-    let f60 = CheckMenuItem::new("60 frames per second", true, fps >= 45, None);
-    let quit = MenuItem::new("Quit", true, None);
-    let _ = menu.append_items(&[&open, &PredefinedMenuItem::separator(), &pause, &f30, &f60, &PredefinedMenuItem::separator(), &quit]);
-    let built = TrayIconBuilder::new().with_menu(Box::new(menu)).with_menu_on_left_click(false).with_tooltip("CoolerScreen live").with_icon(icon(app)).build();
-    let Ok(ic) = built else {
-        eprintln!("could not create the tray icon");
+    let items = (|| -> tauri::Result<(Menu<Wry>, Tray)> {
+        let open = MenuItem::with_id(app, "open", "Open CoolerScreen", true, None::<&str>)?;
+        let pause = MenuItem::with_id(app, "pause", if h.user_paused() { "Resume live" } else { PAUSE_TEXT }, true, None::<&str>)?;
+        let f30 = CheckMenuItem::with_id(app, "f30", "30 frames per second", true, fps < 45, None::<&str>)?;
+        let f60 = CheckMenuItem::with_id(app, "f60", "60 frames per second", true, fps >= 45, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+        let sep = PredefinedMenuItem::separator(app)?;
+        let sep2 = PredefinedMenuItem::separator(app)?;
+        let menu = Menu::with_items(app, &[&open, &sep, &pause, &f30, &f60, &sep2, &quit])?;
+        Ok((menu, Tray { pause, f30, f60 }))
+    })();
+    let Ok((menu, tray)) = items else {
+        eprintln!("could not create the tray menu");
         return;
     };
-    *IDS.lock().unwrap() = Some(Ids { open: open.id().clone(), pause: pause.id().clone(), f30: f30.id().clone(), f60: f60.id().clone(), quit: quit.id().clone() });
-    TRAY.with(|t| *t.borrow_mut() = Some(Tray { _icon: ic, pause, f30, f60 }));
+    // Tauri's own tray: its menu and click events are routed by Tauri to these two closures (the `tray-icon` crate's global
+    // handlers are a set-once slot that Tauri fills first, so a handler set here never receives anything).
+    let built = TrayIconBuilder::with_id(TRAY_ID)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("CoolerScreen live")
+        .icon(icon(app))
+        .on_menu_event(|a: &AppHandle, ev: MenuEvent| tray_menu_click(a, ev.id().as_ref()))
+        .on_tray_icon_event(|t, ev| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
+                show_main(t.app_handle());
+            }
+        })
+        .build(app);
+    if built.is_err() {
+        eprintln!("could not create the tray icon");
+        return;
+    }
+    *TRAY.lock().unwrap() = Some(tray);
     TRAY_ON.store(true, Ordering::SeqCst);
+}
 
-    let a = app.clone();
-    MenuEvent::set_event_handler(Some(move |ev: MenuEvent| {
-        let Some(ids) = IDS.lock().unwrap().clone() else { return };
-        let h = host(&a);
-        if ev.id == ids.open {
-            show_main(&a);
-        } else if ev.id == ids.pause {
+/// A tray menu item was chosen (`id`: open, pause, f30, f60, quit). The tray's menu handler calls this; the debug test hook
+/// (`COOLERSCREEN_TEST_TRAY`) calls it too.
+pub fn tray_menu_click(a: &AppHandle, id: &str) {
+    let h = host(a);
+    match id {
+        "open" => show_main(a),
+        "pause" => {
             h.set_user_paused(!h.user_paused());
-            refresh_tray(&a);
-        } else if ev.id == ids.f30 || ev.id == ids.f60 {
-            h.set_fps(if ev.id == ids.f30 { 30 } else { 60 });
-            refresh_tray(&a);
-        } else if ev.id == ids.quit {
-            quit_app(&a);
+            refresh_tray(a);
         }
-    }));
-    let a = app.clone();
-    TrayIconEvent::set_event_handler(Some(move |ev: TrayIconEvent| {
-        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
-            show_main(&a);
+        "f30" | "f60" => {
+            h.set_fps(if id == "f30" { 30 } else { 60 });
+            refresh_tray(a);
         }
-    }));
+        "quit" => quit_app(a),
+        _ => {}
+    }
+}
+
+/// The menu labels as they stand (debug test hook).
+#[cfg(debug_assertions)]
+pub fn tray_state() -> String {
+    match TRAY.lock().unwrap().as_ref() {
+        Some(t) => format!("pause_text={:?} f30={:?} f60={:?}", t.pause.text().unwrap_or_default(), t.f30.is_checked().ok(), t.f60.is_checked().ok()),
+        None => "no tray".into(),
+    }
 }
 
 /// Bring the menu labels in line with the host (after a change from the tray or from the page).
-pub fn refresh_tray(app: &AppHandle) {
-    let h = host(app);
+pub fn refresh_tray(_app: &AppHandle) {
+    let h = host(_app);
     let (paused, fps) = (h.user_paused(), h.fps());
-    let _ = app.run_on_main_thread(move || {
-        TRAY.with(|t| {
-            if let Some(t) = t.borrow().as_ref() {
-                t.pause.set_text(if paused { "Resume live" } else { PAUSE_TEXT });
-                t.f30.set_checked(fps < 45);
-                t.f60.set_checked(fps >= 45);
-            }
-        })
-    });
+    if let Some(t) = TRAY.lock().unwrap().as_ref() {
+        let _ = t.pause.set_text(if paused { "Resume live" } else { PAUSE_TEXT });
+        let _ = t.f30.set_checked(fps < 45);
+        let _ = t.f60.set_checked(fps >= 45);
+    }
 }
 
-fn remove_tray() {
-    TRAY.with(|t| *t.borrow_mut() = None);
-    MenuEvent::set_event_handler(None::<fn(MenuEvent)>);
-    TrayIconEvent::set_event_handler(None::<fn(TrayIconEvent)>);
+fn remove_tray(app: &AppHandle) {
+    let _ = app.remove_tray_by_id(TRAY_ID);
+    *TRAY.lock().unwrap() = None;
     TRAY_ON.store(false, Ordering::SeqCst);
 }
 
@@ -285,7 +292,7 @@ pub fn quit_app(app: &AppHandle) {
         host(&a).stop();
         let b = a.clone();
         let _ = a.run_on_main_thread(move || {
-            remove_tray();
+            remove_tray(&b);
             b.exit(0);
         });
     });
@@ -322,7 +329,7 @@ pub fn apply(app: &AppHandle, force: bool) {
             host(&a).stop();
             let b = a.clone();
             let _ = a.run_on_main_thread(move || {
-                remove_tray();
+                remove_tray(&b);
                 show_main(&b);
             });
         });

@@ -134,6 +134,27 @@ fn main() {
                     live_app::quit_app(&h);
                 });
             }
+            // Debug builds only: "name@ms,..." (open, pause, f30, f60, quit; plus hide and close of the window) calls the tray menu handler on a timer, and prints the state after it.
+            #[cfg(debug_assertions)]
+            if let Ok(plan) = std::env::var("COOLERSCREEN_TEST_TRAY") {
+                let h = app.handle().clone();
+                std::thread::spawn(move || {
+                    let t0 = std::time::Instant::now();
+                    for step in plan.split(',') {
+                        let Some((name, ms)) = step.split_once('@') else { continue };
+                        let at = std::time::Duration::from_millis(ms.parse().unwrap_or(0));
+                        std::thread::sleep(at.saturating_sub(t0.elapsed()));
+                        match name {
+                            "hide" => { if let Some(w) = h.get_webview_window("main") { let _ = w.hide(); } }
+                            "close" => { if let Some(w) = h.get_webview_window("main") { let _ = w.close(); } }
+                            _ => live_app::tray_menu_click(&h, name),
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        let st = h.state::<cs_core::core::commands::Core>().0.live.status();
+                        eprintln!("CS_TEST after {name}: tray_on={} paused={} fps={} window_visible={:?} menu: {}", live_app::tray_on(), st["paused"], st["fps"], h.get_webview_window("main").map(|w| w.is_visible().unwrap_or(false)), live_app::tray_state());
+                    }
+                });
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

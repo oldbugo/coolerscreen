@@ -21,7 +21,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.152", features = ["preserve_order"] }
 serialport = "4.10.1"
 sha1 = "0.11.0"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 dirs = "6"
 notify = "8"
