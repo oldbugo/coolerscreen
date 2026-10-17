@@ -20,7 +20,7 @@ fn sample_sensors() -> Sensors {
         cpu_load_pct: 34.0,
         ram_used_gb: 18.4,
         ram_total_gb: 31.9,
-        gpu: Some(Gpu { name: "GPU".into(), temp_c: 61, load_pct: 52, clock_mhz: 1950, mem_used_mb: 6200, mem_total_mb: 16000 }),
+        gpu: Some(Gpu { name: "GPU".into(), temp_c: 61, load_pct: 52, clock_mhz: 1950, mem_used_mb: 6200, mem_total_mb: 16000, power_w: Some(182.0), fan_pct: Some(46) }),
         cpu_temp_c: Some(48.0),
     }
 }

@@ -16,6 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const FALLBACKS: [&str; 4] = ["msyh.ttc", "YuGothM.ttc", "malgun.ttf", "seguisym.ttf"];
+mod extras;
+mod sensors;
 mod widgets;
 pub(crate) use widgets::resize_exact;
 use tiny_skia::{Color, Pixmap};
@@ -199,6 +201,17 @@ pub enum HandTarget {
     Black,
 }
 
+/// A group of widgets whose boxes overlap (so they are drawn together, in order), redrawn when its own time slot,
+/// the clock second or the music state changed.
+struct Cluster {
+    rect: (usize, usize, usize, usize),
+    fit: Option<(usize, usize, usize, usize)>,
+    widgets: Vec<usize>,
+    hz: u32,
+    key: Option<(u64, u16, u64)>,
+    last_tick: u64,
+}
+
 struct ImgEntry {
     mtime: Option<std::time::SystemTime>,
     src: Option<Arc<Pixmap>>,
@@ -224,7 +237,6 @@ pub struct Renderer {
     /// Animation ticks (10 per second): everything that moves on its own is stepped per tick, so a frame is only redrawn when
     /// the tick, the clock second or the background video frame changed.
     tick: u64,
-    bars_tick: u64,
     last_key: Option<(u64, usize, u16, u64, u64)>,
     mask: Mask,
     /// Now-playing source (shared with the watcher thread), the fade of its card, and the per-track cover scaled for the card.
@@ -249,6 +261,12 @@ pub struct Renderer {
     /// Calibration overlay (screen guides) drawn over every frame while Some; `cal_gen` changes with it.
     calib: Option<Guides>,
     cal_gen: u64,
+    /// Animation ticks since the last frame (for eased values), eased sensor fractions, visualizer history, slideshow state.
+    steps_now: i32,
+    sens_smooth: HashMap<String, f32>,
+    viz_hist: HashMap<String, std::collections::VecDeque<Vec<f32>>>,
+    viz_last: HashMap<String, u64>,
+    slides: HashMap<String, extras::Slides>,
     /// Screen fit (screen px hidden at each edge). Not zero: the design canvas is scaled into the visible rectangle.
     fit: crate::core::fit::Fit,
     /// The fit the stored base picture was made with (only meaningful while the background is the base).
@@ -260,6 +278,12 @@ pub struct Renderer {
     fit_rects: Vec<(usize, usize, usize, usize)>,
     /// Accumulated microseconds per stage (background, widgets, composite + mask), for profiling.
     pub timing_us: [u64; 3],
+    /// Accumulated microseconds per widget id (kind, us), for profiling.
+    pub widget_us: HashMap<String, (String, u64)>,
+    /// None = every cluster must redraw (set by anything that changes the widgets or what they show).
+    layer_key: Option<()>,
+    /// Groups of overlapping widgets, each redrawn on its own schedule.
+    clusters: Vec<Cluster>,
 }
 
 const CLOCK_CAP: f32 = 0.72;
@@ -285,7 +309,6 @@ impl Renderer {
             t0: Instant::now(),
             bars: [0.0; 6],
             tick: 0,
-            bars_tick: 0,
             last_key: None,
             mask: Mask::none(),
             music: None,
@@ -302,12 +325,20 @@ impl Renderer {
             sample: false,
             calib: None,
             cal_gen: 0,
+            steps_now: 0,
+            sens_smooth: HashMap::new(),
+            viz_hist: HashMap::new(),
+            viz_last: HashMap::new(),
+            slides: HashMap::new(),
             fit: crate::core::fit::Fit::default(),
             bg_fit: crate::core::fit::Fit::default(),
             fit_pm: None,
             fit_layer: None,
             fit_rects: Vec::new(),
             timing_us: [0; 3],
+            widget_us: HashMap::new(),
+            layer_key: None,
+            clusters: Vec::new(),
         };
         r.update_bbox();
         r
@@ -327,6 +358,7 @@ impl Renderer {
             self.calib = g;
             self.cal_gen += 1;
             self.last_key = None;
+            self.layer_key = None;
         }
     }
 
@@ -334,18 +366,21 @@ impl Renderer {
     pub fn set_music_source(&mut self, m: Option<Arc<Mutex<Option<NowPlaying>>>>) {
         self.music = m;
         self.last_key = None;
+        self.layer_key = None;
     }
 
     /// Replace the background clip (None: the animated gradient).
     pub fn set_video(&mut self, v: Option<VideoBg>) {
         self.video = v;
         self.last_key = None;
+        self.layer_key = None;
     }
 
     /// Replace the background with a fixed picture (landscape LW x LH RGBA): used by the preview.
     pub fn set_still_background(&mut self, rgba: Option<Arc<Vec<u8>>>) {
         self.still = rgba;
         self.last_key = None;
+        self.layer_key = None;
     }
 
     /// Swap the theme (widgets); takes effect on the next frame.
@@ -356,6 +391,7 @@ impl Renderer {
         self.images.retain(|p, e| std::fs::metadata(p).and_then(|m| m.modified()).ok() == e.mtime);
         self.update_bbox();
         self.last_key = None;
+        self.layer_key = None;
     }
 
     pub fn theme(&self) -> &ThemeLive {
@@ -371,6 +407,7 @@ impl Renderer {
         if self.bg_is_base != v {
             self.bg_is_base = v;
             self.last_key = None;
+            self.layer_key = None;
         }
     }
 
@@ -403,12 +440,14 @@ impl Renderer {
         if m != self.mask {
             self.mask = m;
             self.last_key = None;
+            self.layer_key = None;
         }
     }
 
     /// Force the next render to redraw (for benchmarks).
     pub fn invalidate(&mut self) {
         self.last_key = None;
+        self.layer_key = None;
     }
 
     pub fn has_fonts(&self) -> bool {
@@ -434,6 +473,24 @@ impl Renderer {
             rects.push((x0, y0, x1, y1));
         }
         self.rects = merge_rects(rects);
+        // one cluster per merged rectangle: the widgets inside it and the fastest refresh any of them needs
+        let mut clusters: Vec<Cluster> = self.rects.iter().map(|&rect| Cluster { rect, fit: None, widgets: Vec::new(), hz: 10, key: None, last_tick: 0 }).collect();
+        for (i, w) in self.theme.theme.widgets.iter().enumerate() {
+            let r = widget_rect(w, self.cw, self.ch);
+            let (cx, cy) = ((r.x + r.w / 2.0) as usize, (r.y + r.h / 2.0) as usize);
+            if let Some(c) = clusters.iter_mut().find(|c| cx >= c.rect.0 && cx < c.rect.2 && cy >= c.rect.1 && cy < c.rect.3) {
+                c.widgets.push(i);
+                if self.theme.theme.is_visible(w) {
+                    c.hz = c.hz.max(match w.kind.as_str() {
+                        "visualizer" => 20,
+                        "slideshow" => 15,
+                        "clock" if w.clock().style == "analog" && w.clock().seconds => 15,
+                        _ => 10,
+                    });
+                }
+            }
+        }
+        self.clusters = clusters;
         self.update_fit_rects();
     }
 
@@ -443,6 +500,7 @@ impl Renderer {
             self.fit = f.clamped();
             self.update_fit_rects();
             self.last_key = None;
+            self.layer_key = None;
         }
     }
 
@@ -451,6 +509,7 @@ impl Renderer {
         if self.bg_fit != f {
             self.bg_fit = f;
             self.last_key = None;
+            self.layer_key = None;
         }
     }
 
@@ -463,26 +522,29 @@ impl Renderer {
     fn update_fit_rects(&mut self) {
         if self.fit.is_zero() {
             self.fit_rects.clear();
+            for c in self.clusters.iter_mut() {
+                c.fit = None;
+            }
             return;
         }
         let (vx0, vy0, vx1, vy1) = self.visible();
         let (sx, sy) = ((vx1 - vx0) as f32 / self.cw as f32, (vy1 - vy0) as f32 / self.ch as f32);
         let (cw, ch) = (self.cw as i64, self.ch as i64);
         let (lo_x, lo_y, hi_x, hi_y) = (vx0.max(0), vy0.max(0), vx1.min(cw), vy1.min(ch));
-        let rects = self
-            .rects
-            .iter()
-            .filter_map(|&(x0, y0, x1, y1)| {
-                let r = (
-                    ((vx0 as f32 + x0 as f32 * sx).floor() as i64 - 1).max(lo_x),
-                    ((vy0 as f32 + y0 as f32 * sy).floor() as i64 - 1).max(lo_y),
-                    ((vx0 as f32 + x1 as f32 * sx).ceil() as i64 + 1).min(hi_x),
-                    ((vy0 as f32 + y1 as f32 * sy).ceil() as i64 + 1).min(hi_y),
-                );
-                (r.2 > r.0 && r.3 > r.1).then_some((r.0 as usize, r.1 as usize, r.2 as usize, r.3 as usize))
-            })
-            .collect();
+        let map = |&(x0, y0, x1, y1): &(usize, usize, usize, usize)| {
+            let r = (
+                ((vx0 as f32 + x0 as f32 * sx).floor() as i64 - 1).max(lo_x),
+                ((vy0 as f32 + y0 as f32 * sy).floor() as i64 - 1).max(lo_y),
+                ((vx0 as f32 + x1 as f32 * sx).ceil() as i64 + 1).min(hi_x),
+                ((vy0 as f32 + y1 as f32 * sy).ceil() as i64 + 1).min(hi_y),
+            );
+            (r.2 > r.0 && r.3 > r.1).then_some((r.0 as usize, r.1 as usize, r.2 as usize, r.3 as usize))
+        };
+        let rects = self.rects.iter().filter_map(map).collect();
         self.fit_rects = merge_rects(rects);
+        for c in self.clusters.iter_mut() {
+            c.fit = map(&c.rect);
+        }
     }
 }
 
@@ -535,12 +597,25 @@ impl Renderer {
         self.apply_handover();
         let t1 = Instant::now();
         if self.live_alpha > 0.004 && !self.rects.is_empty() {
+            // Each cluster of widgets is redrawn only when its own time slot (or the clock second / music state) changed; in
+            // between, the finished layer is just composited again (a fade or a new background frame needs no widget redraw).
+            if self.layer_key.is_none() {
+                for c in self.clusters.iter_mut() {
+                    c.key = None;
+                }
+                self.layer_key = Some(());
+            }
             let np_ref = if show_music { np.as_ref() } else { None };
-            self.draw_widgets(&now, &s, np_ref, false);
+            for ci in 0..self.clusters.len() {
+                let lk = ((t * self.clusters[ci].hz as f32) as u64, now.second, music_key);
+                if self.clusters[ci].key != Some(lk) {
+                    self.draw_cluster(ci, &now, &s, np_ref);
+                    self.clusters[ci].key = Some(lk);
+                }
+            }
             if self.fit.is_zero() {
                 self.composite(self.live_alpha);
             } else {
-                self.fit_widget_layer();
                 self.composite_fitted(self.live_alpha);
             }
         }
@@ -615,19 +690,6 @@ impl Renderer {
         self.fit_pm = Some(out);
     }
 
-    /// Scale the widget regions of the layer into the fitted layer (premultiplied RGBA, transparent elsewhere).
-    fn fit_widget_layer(&mut self) {
-        let (cw, ch) = (self.cw, self.ch);
-        let vis = self.visible();
-        let mut out = self.fit_layer.take().unwrap_or_else(|| Pixmap::new(cw as u32, ch as u32).unwrap());
-        for &reg in &self.fit_rects {
-            for y in reg.1..reg.3 {
-                out.data_mut()[(y * cw + reg.0) * 4..(y * cw + reg.2) * 4].fill(0);
-            }
-            resample_into(self.layer.data(), out.data_mut(), cw, ch, (0, 0, cw as i64, ch as i64), vis, reg);
-        }
-        self.fit_layer = Some(out);
-    }
 
     /// `composite` for the fitted layer and boxes.
     fn composite_fitted(&mut self, alpha: f32) {
@@ -648,17 +710,67 @@ impl Renderer {
         }
     }
 
-    /// Draw the widgets into the (cleared) layer. `only_base`: only the `onBase` items (for the base overlay); otherwise all
-    /// widgets, except that `onBase` items are skipped when the background is the stored base (they are already in it).
+    /// Draw one widget into the layer (and note how long it took).
+    fn draw_one(&mut self, w: &Widget, now: &LocalTime, s: &Sensors, np: Option<&NowPlaying>) {
+        let r = widget_rect(w, self.cw, self.ch);
+        let tw0 = Instant::now();
+        match w.kind.as_str() {
+            "clock" => self.draw_clock(r, &w.clock(), now),
+            "music" => self.draw_music(r, &w.music(), np),
+            "stats" => self.draw_stats(r, &w.stats(), s),
+            "text" => self.draw_text(r, &w.text()),
+            "image" => self.draw_image(r, w),
+            "weather" => self.draw_weather_widget(r, &w.weather()),
+            "sensor" => self.draw_sensor(r, &w.id, &w.sensor()),
+            "date" => self.draw_date(r, &w.date(), now),
+            "visualizer" => self.draw_visualizer(r, &w.id, &w.visualizer()),
+            "slideshow" => self.draw_slideshow(r, &w.id, &w.slideshow(), w),
+            "info" => self.draw_info(r, &w.info()),
+            _ => {}
+        }
+        self.widget_us.entry(w.id.clone()).or_insert_with(|| (w.kind.clone(), 0)).1 += tw0.elapsed().as_micros() as u64;
+    }
+
+    /// Redraw one cluster: clear its rectangle of the layer and draw its widgets in order (live: `onBase` items are skipped while
+    /// the background is the stored base).
+    fn draw_cluster(&mut self, ci: usize, now: &LocalTime, s: &Sensors, np: Option<&NowPlaying>) {
+        let (x0, y0, x1, y1) = self.clusters[ci].rect;
+        let cw = self.cw;
+        for y in y0..y1 {
+            self.layer.data_mut()[(y * cw + x0) * 4..(y * cw + x1) * 4].fill(0);
+        }
+        // ticks since this cluster was last drawn (eases bars and sensor fills)
+        let steps = if self.sample { 40 } else { (self.tick - self.clusters[ci].last_tick.min(self.tick)).min(20) as i32 };
+        self.clusters[ci].last_tick = self.tick;
+        self.steps_now = steps;
+        self.step_bars(s, steps);
+        let idx = self.clusters[ci].widgets.clone();
+        for i in idx {
+            let w = self.theme.theme.widgets[i].clone();
+            if !self.theme.theme.is_visible(&w) || (w.on_base && w.can_be_on_base() && self.bg_is_base) {
+                continue;
+            }
+            self.draw_one(&w, now, s, np);
+        }
+        if !self.fit.is_zero() {
+            if let Some(reg) = self.clusters[ci].fit {
+                let vis = self.visible();
+                let mut out = self.fit_layer.take().unwrap_or_else(|| Pixmap::new(cw as u32, self.ch as u32).unwrap());
+                for y in reg.1..reg.3 {
+                    out.data_mut()[(y * cw + reg.0) * 4..(y * cw + reg.2) * 4].fill(0);
+                }
+                resample_into(self.layer.data(), out.data_mut(), cw, self.ch, (0, 0, cw as i64, self.ch as i64), vis, reg);
+                self.fit_layer = Some(out);
+            }
+        }
+    }
+
+    /// Draw the `onBase` widgets (the base overlay) into the layer.
     fn draw_widgets(&mut self, now: &LocalTime, s: &Sensors, np: Option<&NowPlaying>, only_base: bool) {
         self.clear_layer();
-        let widgets = std::mem::take(&mut self.theme.theme.widgets);
-        // (the preview has no animation history: show the sample values at once)
-        let steps = if self.sample { 40 } else { (self.tick - self.bars_tick.min(self.tick)).min(20) as i32 };
-        self.step_bars(s, steps);
-        if steps > 0 {
-            self.bars_tick = self.tick;
-        }
+        self.steps_now = 40;
+        self.step_bars(s, 40);
+        let widgets = self.theme.theme.widgets.clone();
         for w in &widgets {
             if !self.theme.theme.is_visible(w) {
                 continue;
@@ -667,21 +779,8 @@ impl Renderer {
             if only_base && !on_base {
                 continue;
             }
-            if !only_base && on_base && self.bg_is_base {
-                continue;
-            }
-            let r = widget_rect(w, self.cw, self.ch);
-            match w.kind.as_str() {
-                "clock" => self.draw_clock(r, &w.clock(), now),
-                "music" => self.draw_music(r, &w.music(), np),
-                "stats" => self.draw_stats(r, &w.stats(), s),
-                "text" => self.draw_text(r, &w.text()),
-                "image" => self.draw_image(r, w),
-                "weather" => self.draw_weather(r),
-                _ => {}
-            }
+            self.draw_one(w, now, s, np);
         }
-        self.theme.theme.widgets = widgets;
     }
 
     /// The base overlay: only the `onBase` items, on a transparent layer of this renderer's canvas size, as a PNG
@@ -757,6 +856,13 @@ fn composite_rects(dst: &mut [u8], src: &[u8], cw: usize, rects: &[(usize, usize
             let s = &src[(y * cw + x0) * 4..][..w * 4];
             let d = &mut dst[(y * cw + x0) * 4..][..w * 4];
             for (dp, sp) in d.chunks_exact_mut(4).zip(s.chunks_exact(4)) {
+                if sp[3] == 0 {
+                    continue;
+                }
+                if g >= 256 && sp[3] == 255 {
+                    dp[..3].copy_from_slice(&sp[..3]);
+                    continue;
+                }
                 let sa = (sp[3] as u32 * g) >> 8;
                 let inv = 255 - sa;
                 for c in 0..3 {
@@ -1292,5 +1398,86 @@ mod shift_tests {
         r.set_fit(Fit::default().with_shift(0, 5));
         let out = r.render().0.to_vec();
         assert_eq!(px(&out, LW, LW / 2, 0), [0, 0, 0], "moved down: black on top");
+    }
+
+    fn png_size(png: &[u8]) -> (u32, u32) {
+        let p = Pixmap::decode_png(png).unwrap();
+        (p.width(), p.height())
+    }
+
+    fn w(id: &str, kind: &str, props: serde_json::Value) -> Widget {
+        Widget { id: id.into(), kind: kind.into(), x: 0.1, y: 0.1, w: 0.4, h: 0.4, props, ..Widget::default() }
+    }
+
+    #[test]
+    fn every_widget_type_and_style_renders_in_the_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.gif"), crate::live::gif::tests::tiny()).unwrap();
+        let mut widgets = Vec::new();
+        for style in ["number", "bar", "ring", "gauge", "graph", "sparkline"] {
+            for metric in ["cpu.load", "cpu.core", "cpu.temp", "cpu.clock", "gpu.load", "gpu.temp", "gpu.clock", "gpu.vram", "gpu.power", "gpu.fan", "ram.used", "net.down", "net.up", "disk.used", "disk.activity"] {
+                widgets.push(w("s", "sensor", serde_json::json!({ "metric": metric, "style": style })));
+            }
+        }
+        for s in ["digital", "analog", "minimal"] {
+            widgets.push(w("c", "clock", serde_json::json!({ "style": s, "seconds": true, "format": "12h" })));
+        }
+        for s in ["line", "calendar", "big"] {
+            widgets.push(w("d", "date", serde_json::json!({ "style": s })));
+        }
+        for (s, sp) in [("now", "days"), ("forecast", "days"), ("forecast", "hours")] {
+            widgets.push(w("w", "weather", serde_json::json!({ "style": s, "span": sp, "unit": "F" })));
+        }
+        for s in ["bars-h", "ring", "wave-fade"] {
+            widgets.push(w("v", "visualizer", serde_json::json!({ "style": s, "bands": 64 })));
+        }
+        widgets.push(w("p", "slideshow", serde_json::json!({ "files": ["a.gif", "../escape.png", "missing.png"] })));
+        for k in ["uptime", "cpuName", "gpuName", "countdown", "topProcesses"] {
+            widgets.push(w("i", "info", serde_json::json!({ "kind": k, "target": "2030-01-01T00:00" })));
+        }
+        let mut t = ThemeLive::new(Theme::default(), dir.path().to_path_buf());
+        for (i, mut x) in widgets.into_iter().enumerate() {
+            x.id = format!("{}{i}", x.id);
+            t.theme.widgets.push(x);
+        }
+        let png = crate::live::render_preview(&t, 320, 144, true).unwrap();
+        assert_eq!(png_size(&png), (320, 144));
+        // tiny boxes and an empty slideshow must not panic either
+        t.theme.widgets.iter_mut().for_each(|x| {
+            x.w = 0.02;
+            x.h = 0.02;
+        });
+        crate::live::render_preview(&t, 320, 144, true).unwrap();
+    }
+
+    #[test]
+    fn slideshow_shows_the_first_picture_and_gif_colours() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.gif"), crate::live::gif::tests::tiny()).unwrap();
+        let mut t = ThemeLive::new(Theme::default(), dir.path().to_path_buf());
+        t.theme.widgets.push(Widget { id: "p".into(), kind: "slideshow".into(), x: 0.0, y: 0.0, w: 1.0, h: 1.0, props: serde_json::json!({ "files": ["a.gif"], "fit": "cover" }), ..Widget::default() });
+        let png = crate::live::render_preview(&t, 168, 76, true).unwrap();
+        let pm = Pixmap::decode_png(&png).unwrap();
+        let px = |x: u32, y: u32| pm.pixel(x, y).unwrap();
+        // 2x2 GIF frame 1: red, green / blue, white (first frame at t = 0)
+        assert!(px(5, 5).red() > 200 && px(5, 5).green() < 60, "top-left is red");
+        assert!(px(160, 70).red() > 200 && px(160, 70).green() > 200, "bottom-right is white");
+    }
+
+    #[test]
+    fn live_sensor_widgets_draw_from_the_shared_sampler() {
+        let sensors = Arc::new(Mutex::new(Sensors::default()));
+        let mut r = Renderer::new(sensors, None);
+        let mut t = ThemeLive::new(Theme::default(), PathBuf::new());
+        for (i, m) in ["cpu.load", "ram.used", "cpu.temp"].iter().enumerate() {
+            t.theme.widgets.push(Widget { id: format!("s{i}"), kind: "sensor".into(), x: 0.05 + 0.3 * i as f32, y: 0.1, w: 0.25, h: 0.4, props: serde_json::json!({ "metric": m, "style": "ring" }), ..Widget::default() });
+        }
+        r.set_theme(t);
+        let first = r.render().0.to_vec();
+        std::thread::sleep(Duration::from_millis(1400));
+        r.invalidate();
+        let second = r.render().0.to_vec();
+        // after the sampler has polled, RAM (always readable) has a value: the picture differs from the "no data yet" one
+        assert_ne!(first, second);
     }
 }

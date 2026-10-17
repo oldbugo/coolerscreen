@@ -31,7 +31,7 @@ impl Renderer {
     }
 
     /// Shorten `s` with an ellipsis so it fits `max` px.
-    fn fit(&mut self, s: &str, px: u32, wt: Weight, max: f32) -> String {
+    pub(super) fn fit(&mut self, s: &str, px: u32, wt: Weight, max: f32) -> String {
         if self.fonts.width(s, px, wt) <= max {
             return s.to_string();
         }
@@ -62,6 +62,9 @@ impl Renderer {
     // ------------------------------------------------------------ clock
 
     pub(super) fn draw_clock(&mut self, b: Rect, p: &ClockProps, n: &LocalTime) {
+        if p.style == "analog" || p.style == "minimal" {
+            return self.draw_clock_style(b, p, n);
+        }
         let col = parse_color(&p.color, [255, 255, 255]);
         let rad = (28.0 * self.scale()).min(b.w.min(b.h) / 6.0);
         round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, SCRIM);
@@ -329,16 +332,6 @@ impl Renderer {
         let paint = PixmapPaint { opacity: p.opacity.clamp(0.0, 1.0), ..PixmapPaint::default() };
         self.layer.draw_pixmap(b.x as i32 + ox, b.y as i32 + oy, pm.as_ref(), &paint, Transform::identity(), None);
     }
-
-    // ------------------------------------------------------------ weather (placeholder)
-
-    pub(super) fn draw_weather(&mut self, b: Rect) {
-        let rad = (28.0 * self.scale()).min(b.w.min(b.h) / 6.0);
-        round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, SCRIM);
-        let sz = (b.h * 0.3).min(b.w * 0.18).round().max(8.0) as u32;
-        let w = self.fonts.width("Weather", sz, Weight::Light);
-        self.text("Weather", b.x + (b.w - w) / 2.0, b.y + b.h / 2.0 + 0.36 * sz as f32, sz, Weight::Light, [215, 220, 232], 0.8);
-    }
 }
 
 fn fmt_time(s: f64) -> String {
@@ -356,7 +349,7 @@ pub(crate) fn resolve_image(dir: &Path, file: &str) -> Option<PathBuf> {
 }
 
 /// PNG directly; anything else (jpg, webp, gif, bmp) through the bundled ffmpeg once.
-fn decode_image(path: &Path) -> Option<Pixmap> {
+pub(super) fn decode_image(path: &Path) -> Option<Pixmap> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
         if let Ok(p) = Pixmap::decode_png(&bytes) {
@@ -400,7 +393,7 @@ fn half(src: &Pixmap) -> Pixmap {
 
 /// Scale `src` for a box: contain = fit inside (centred), cover = fill the box (centre crop). Returns
 /// (box w, box h, cover, pixmap, offset x, offset y) where the offset places the pixmap relative to the box origin.
-fn scale_to_box(src: &Pixmap, bw: u32, bh: u32, cover: bool) -> (u32, u32, bool, Pixmap, i32, i32) {
+pub(super) fn scale_to_box(src: &Pixmap, bw: u32, bh: u32, cover: bool) -> (u32, u32, bool, Pixmap, i32, i32) {
     let (sw, sh) = (src.width() as f32, src.height() as f32);
     let k = if cover { (bw as f32 / sw).max(bh as f32 / sh) } else { (bw as f32 / sw).min(bh as f32 / sh) };
     let (tw, th) = ((sw * k).round().max(1.0) as u32, (sh * k).round().max(1.0) as u32);
@@ -554,5 +547,6 @@ impl Renderer {
         }
         self.composite(1.0);
         self.rects = saved;
+        self.layer_key = None;
     }
 }

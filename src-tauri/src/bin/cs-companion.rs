@@ -86,6 +86,7 @@ USAGE
   cs-companion --help
 
 OPTIONS
+  --preview WxH       size of the render_preview image written by --dry-run (default 1280x576)
   --video FILE        use a clip as animated background (overrides companion.json)
   --theme FILE        use this theme.json (its folder is the theme folder for image widgets)
   --preset standard   use the Standard preset (clock, music, stats) as the theme
@@ -109,7 +110,7 @@ fn main() {
         return;
     }
     const FLAGS: [&str; 8] = ["--dry-run", "--no-device", "--help", "-h", "--video-only", "--fake-music", "--music", "--no-music"];
-    const WITH_VALUE: [&str; 11] = ["--video", "--fps", "--measure", "--decode", "--notch", "--frames", "--theme", "--preset", "--base", "--dump-frames", "--theme-of"];
+    const WITH_VALUE: [&str; 12] = ["--preview", "--video", "--fps", "--measure", "--decode", "--notch", "--frames", "--theme", "--preset", "--base", "--dump-frames", "--theme-of"];
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if WITH_VALUE.contains(&a.as_str()) {
@@ -325,9 +326,10 @@ fn dry_run(cfg: &Config, theme: Option<ThemeLive>) -> i32 {
     r.set_calibration(Some(cs_core::live::Guides::from_value(&serde_json::json!({ "left": { "size": 160 }, "right": { "size": 180 }, "curve": { "offset": -40, "left": 60, "right": 80 } }))));
     write_jpeg(dir.join("calibration.jpg"), r.render().0);
     r.set_calibration(None);
+    let (pw, ph) = arg_val(&args, "--preview").and_then(|v| v.split_once('x')).and_then(|(a, b)| Some((a.parse::<u32>().ok()?, b.parse::<u32>().ok()?))).unwrap_or((1280, 576));
     // preview and base overlay without a device (the app's editor calls)
     let t = Instant::now();
-    match cs_core::live::render_preview(&tl, 1280, 576, true) {
+    match cs_core::live::render_preview(&tl, pw, ph, true) {
         Ok(png) => {
             std::fs::write(dir.join("preview-live.png"), &png).unwrap();
             println!("render_preview with live layer 1280x576: {} KB PNG in {} ms (first call, includes the first-frame decode)", png.len() / 1000, t.elapsed().as_millis());
@@ -335,7 +337,7 @@ fn dry_run(cfg: &Config, theme: Option<ThemeLive>) -> i32 {
         Err(e) => eprintln!("render_preview failed: {e}"),
     }
     let t = Instant::now();
-    if let Ok(png) = cs_core::live::render_preview(&tl, 1280, 576, true) {
+    if let Ok(png) = cs_core::live::render_preview(&tl, pw, ph, true) {
         println!("render_preview again: {} ms ({} KB)", t.elapsed().as_millis(), png.len() / 1000);
     }
     match cs_core::live::render_preview(&tl, 1280, 576, false) {
@@ -353,6 +355,7 @@ fn dry_run(cfg: &Config, theme: Option<ThemeLive>) -> i32 {
     }
     // timing of the stages, single thread, 120 frames
     r.timing_us = [0; 3];
+    r.widget_us.clear();
     let (mut tr, mut tt, mut te, mut bytes) = (0u128, 0u128, 0u128, 0usize);
     for _ in 0..120 {
         let t = Instant::now();
@@ -365,6 +368,13 @@ fn dry_run(cfg: &Config, theme: Option<ThemeLive>) -> i32 {
         let t = Instant::now();
         bytes += enc.encode(&portrait, PW, PH, frame_budget(cfg.max_kb, cfg.fps), &mut jpeg).unwrap();
         te += t.elapsed().as_micros();
+    }
+    {
+        let mut v: Vec<_> = r.widget_us.iter().collect();
+        v.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        for (id, (kind, us)) in v {
+            println!("  widget {id} ({kind}): {:.2} ms per frame", *us as f64 / 120000.0);
+        }
     }
     println!("render stages avg: background {:.2} ms, widgets {:.2} ms, composite+mask {:.2} ms", r.timing_us[0] as f64 / 120000.0, r.timing_us[1] as f64 / 120000.0, r.timing_us[2] as f64 / 120000.0);
     println!("per frame (avg of 120, one thread): render {:.2} ms (includes a 5 MB copy), rotate {:.2} ms, encode {:.2} ms, {:.0} KB, quality {}", tr as f64 / 120000.0, tt as f64 / 120000.0, te as f64 / 120000.0, bytes as f64 / 120000.0, enc.quality);

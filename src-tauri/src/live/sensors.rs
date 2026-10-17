@@ -14,6 +14,9 @@ pub struct Gpu {
     pub clock_mhz: u32,
     pub mem_used_mb: u64,
     pub mem_total_mb: u64,
+    /// Board power draw in watts / fan speed in percent, when the driver reports them.
+    pub power_w: Option<f32>,
+    pub fan_pct: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -120,20 +123,22 @@ struct MemInfo {
     used: u64,
 }
 
-struct Nvml {
+pub struct Nvml {
     dev: *mut c_void,
     name: String,
     temp: unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32,
     util: unsafe extern "C" fn(*mut c_void, *mut Util) -> i32,
     clock: unsafe extern "C" fn(*mut c_void, u32, *mut u32) -> i32,
     mem: unsafe extern "C" fn(*mut c_void, *mut MemInfo) -> i32,
+    power: Option<unsafe extern "C" fn(*mut c_void, *mut u32) -> i32>,
+    fan: Option<unsafe extern "C" fn(*mut c_void, *mut u32) -> i32>,
 }
 
 // The handle is only used from the sampler thread that created it.
 unsafe impl Send for Nvml {}
 
 impl Nvml {
-    fn load() -> Option<Nvml> {
+    pub fn load() -> Option<Nvml> {
         use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
         let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
         unsafe {
@@ -170,11 +175,13 @@ impl Nvml {
             } else {
                 "GPU".into()
             };
-            Some(Nvml { dev, name, temp, util, clock, mem })
+            let power = GetProcAddress(lib, "nvmlDeviceGetPowerUsage            Some(Nvml { dev, name, temp, util, clock, mem })".as_ptr()).map(|p| std::mem::transmute::<_, unsafe extern "C" fn(*mut c_void, *mut u32) -> i32>(p));
+            let fan = GetProcAddress(lib, "nvmlDeviceGetFanSpeed            Some(Nvml { dev, name, temp, util, clock, mem })".as_ptr()).map(|p| std::mem::transmute::<_, unsafe extern "C" fn(*mut c_void, *mut u32) -> i32>(p));
+            Some(Nvml { dev, name, temp, util, clock, mem, power, fan })
         }
     }
 
-    fn read(&mut self) -> Option<Gpu> {
+    pub fn read(&mut self) -> Option<Gpu> {
         unsafe {
             let mut t = 0u32;
             let mut c = 0u32;
@@ -186,7 +193,11 @@ impl Nvml {
             let _ = (self.util)(self.dev, &mut u);
             let _ = (self.clock)(self.dev, 0, &mut c); // 0 = graphics clock
             let _ = (self.mem)(self.dev, &mut m);
-            Some(Gpu { name: self.name.clone(), temp_c: t, load_pct: u.gpu, clock_mhz: c, mem_used_mb: m.used / 1048576, mem_total_mb: m.total / 1048576 })
+            let mut mw = 0u32;
+            let power_w = self.power.and_then(|f| if f(self.dev, &mut mw) == 0 { Some(mw as f32 / 1000.0) } else { None });
+            let mut fp = 0u32;
+            let fan_pct = self.fan.and_then(|f| if f(self.dev, &mut fp) == 0 { Some(fp) } else { None });
+            Some(Gpu { name: self.name.clone(), temp_c: t, load_pct: u.gpu, clock_mhz: c, mem_used_mb: m.used / 1048576, mem_total_mb: m.total / 1048576, power_w, fan_pct })
         }
     }
 }

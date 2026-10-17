@@ -237,6 +237,9 @@ impl Pipeline {
                 let mut was_active = false;
                 let mut fade_in_start: Option<Instant> = None;
                 let mut fade_pending = false;
+                // CS_PROFILE=1: log where the render time goes every 5 s
+                let profile = std::env::var_os("CS_PROFILE").is_some();
+                let mut last_prof = Instant::now();
                 let mut bg_wait: Option<Instant> = None;
                 let mut hand_start: Option<Instant> = None;
                 while !sh.quit.load(Relaxed) {
@@ -385,10 +388,20 @@ impl Pipeline {
                     r.set_live_alpha(alpha);
                     let period = Duration::from_secs_f64(1.0 / sh.fps.load(Relaxed).max(1) as f64);
                     let t = Instant::now();
+                    if profile && last_prof.elapsed() > Duration::from_secs(5) {
+                        last_prof = Instant::now();
+                        let mut v: Vec<_> = r.widget_us.iter().collect();
+                        v.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+                        let top: Vec<String> = v.iter().take(6).map(|(id, (k, us))| format!("{id}({k}) {:.1} ms/s", *us as f64 / 5000.0)).collect();
+                        eprintln!("profile: widgets per second: {}; render stages ms/s bg {:.0} widgets {:.0} composite {:.0}", top.join(", "), r.timing_us[0] as f64 / 5000.0, r.timing_us[1] as f64 / 5000.0, r.timing_us[2] as f64 / 5000.0);
+                        log(&format!("profile: widgets per second: {}; render stages ms/s bg {:.0} widgets {:.0} composite {:.0}", top.join(", "), r.timing_us[0] as f64 / 5000.0, r.timing_us[1] as f64 / 5000.0, r.timing_us[2] as f64 / 5000.0));
+                        r.widget_us.clear();
+                        r.timing_us = [0; 3];
+                    }
+                    // Nothing changed since the last frame (the renderer says so without redrawing): skip rotate, encode and send.
                     let on_gradient = applied_src.is_some() && !r.has_background_frame();
                     let (frame, changed) = r.render();
                     let t1 = Instant::now();
-                    // Nothing changed since the last frame (the renderer says so without redrawing): skip rotate, encode and send.
                     // The screen keeps the last picture (keepalives continue), and one frame per half second is still sent as a safety net.
                     if !changed && last_emit.elapsed() < Duration::from_millis(500) {
                         sh.stats.rendered.fetch_add(1, Relaxed);

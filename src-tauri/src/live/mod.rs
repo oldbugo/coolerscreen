@@ -9,7 +9,10 @@
 //!   preview   one-frame renders without a device (editor preview, onBase overlay)
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
 pub mod encode;
+pub mod audio;
 pub mod fitcal;
+pub mod gif;
+pub mod metrics;
 pub mod mask;
 pub mod nowplaying;
 pub mod pipeline;
@@ -19,6 +22,7 @@ pub mod sensors;
 pub mod session;
 pub mod theme;
 pub mod video;
+pub mod weather;
 
 pub use preview::{render_base_overlay, render_preview};
 pub use theme::{ClockProps, DateProps, InfoProps, SensorProps, SlideshowProps, Threshold, VisualizerProps, WeatherProps, Group, Guides, GuidesOffset, Handover, HandoverEnd, ImageProps, MusicIdle, MusicProps, StatsProps, TextProps, Theme, ThemeLive, Widget};
