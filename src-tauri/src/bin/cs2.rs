@@ -4,7 +4,8 @@
 //!   cs2 upload <file> [--intro]   upload an MJPEG .mp4 to the loop slot (0x13; --intro: 0x12), then restart and check
 //!   cs2 restart                   restart the screen and wait for it to come back
 //!   cs2 poll <count> <seconds>    info every <seconds>, <count> times
-//!   cs2 live-test [--frames N | --seconds S --fps F] [--orient landscape|portrait] [--scale 0.7] [--quality 100] [--set-sleep-delay] [--set-brightness] [--dry-run]   3.0 live-mode spike (bin/cs2/live.rs)
+//!   cs2 edge-tune [--dry-run]     temporary: tune the visible area of each screen edge (bin/cs2/edgetune.rs, tune-edges.cmd)
+//!   cs2 live-test[--frames N | --seconds S --fps F] [--orient landscape|portrait] [--scale 0.7] [--quality 100] [--set-sleep-delay] [--set-brightness] [--dry-run]   3.0 live-mode spike (bin/cs2/live.rs)
 use cs_core::device::{self, ops, Slot};
 use std::time::Instant;
 
@@ -14,6 +15,8 @@ mod trial;
 mod live;
 #[path = "cs2/recovery.rs"]
 mod recovery;
+#[path = "cs2/edgetune.rs"]
+mod edgetune;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -88,6 +91,7 @@ fn main() {
         Some("core-send") if args.len() >= 2 => core_send(std::path::Path::new(&args[1])),
         Some("live-test") => live::live_test(&args[1..]),
         Some("wake") => live::wake(),
+        Some("edge-tune") => edgetune::edge_tune(&args[1..]),
         Some("trial") => trial::trial(&args[1..]),
         Some("unstick") => recovery::unstick(),
         Some("recover-race-delete") => recovery::race_delete(),
