@@ -621,7 +621,8 @@ impl Renderer {
         }
         let t2 = Instant::now();
         if !self.mask.is_none() {
-            self.mask.apply(self.pm.data_mut());
+            let fit = self.fit;
+            self.mask.apply_fit(self.pm.data_mut(), &fit);
         }
         self.draw_calibration();
         let t3 = Instant::now();

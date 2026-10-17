@@ -214,3 +214,15 @@ NVML/sysinfo/PDH as researched (docs/roadmap/2026-10-12-v3-data-sources.md). Bud
 layout. App: palette grouped (Time · Sensors · Media · Info · Decoration), property panels per type with live
 preview, sensible default sizes per style, "Add the Standard layout" kept. Settings: Weather place picker; °C/°F
 default.
+
+## v1.7 (user, 2026-10-18): rounded corners follow the visible rectangle
+
+Finding: the corner radius mask was drawn at the panel's full edges while the top N px are hidden by the bezel, so each top
+corner's visible part was cut (a flat curve), worse the more top fit was set. Supersedes the v1.5 sentence that said masks stay
+in panel coordinates, for the corners only:
+- The rounded rectangle is the **visible rectangle** = the panel inset by `screenFit` top/right/bottom/left, NOT moved by
+  `shiftX`/`shiftY` (the bezel is physical), and on a band edge also after the notch band: its left edge = max(fit.left, notch
+  band px). Radius as before (theme override or default), at most half the short side. Everything outside is black.
+- The notch band itself stays physical, measured from the panel's own edge. Screen guides are unchanged.
+- Same geometry in the live engine (`live/mask.rs` `apply_fit`), the stored base (`media` `visible_rect` and the corner PNG,
+  whose cache name holds the rectangle, so a changed fit makes a new file and the base stale) and the editor's preview overlay.

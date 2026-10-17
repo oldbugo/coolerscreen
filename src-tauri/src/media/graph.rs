@@ -194,15 +194,18 @@ pub struct Rect {
     pub y1: u32,
 }
 pub fn visible_rect(mask: &Mask) -> Rect {
-    let mut r = Rect { x0: 0, y0: 0, x1: W, y1: H };
+    // The panel inset by the screen fit (the bezel is physical: the shift does not move it), then the notch band, which is
+    // measured from the panel's own edge.
+    let (fx0, fy0, fx1, fy1) = mask.fit.rect(W as usize, H as usize);
+    let mut r = Rect { x0: fx0 as u32, y0: fy0 as u32, x1: fx1 as u32, y1: fy1 as u32 };
     if let (MaskMode::Band, Some(b)) = (mask.mode, mask.band) {
         let px = band_px(&b);
         if px > 0 {
             match b.edge {
-                Edge::Left => r.x0 = px,
-                Edge::Right => r.x1 = W - px,
-                Edge::Top => r.y0 = px,
-                Edge::Bottom => r.y1 = H - px,
+                Edge::Left => r.x0 = r.x0.max(px),
+                Edge::Right => r.x1 = r.x1.min(W - px),
+                Edge::Top => r.y0 = r.y0.max(px),
+                Edge::Bottom => r.y1 = r.y1.min(H - px),
             }
         }
     }
@@ -610,6 +613,65 @@ mod fit_ffmpeg_tests {
             let v = at(row, 500);
             assert_eq!(v < 40, want_black, "landscape column {row} = {v}");
         }
+    }
+}
+
+#[cfg(test)]
+mod corner_fit_tests {
+    use super::*;
+    use crate::core::fit::Fit;
+
+    #[test]
+    fn the_rounded_rectangle_is_the_panel_inset_by_the_fit_and_after_the_notch() {
+        let mut m = Mask::band(Edge::Left, 92.0);
+        m.fit = Fit::new(4, 0, 0, 9);
+        assert_eq!(visible_rect(&m), Rect { x0: 96, y0: 4, x1: 2400, y1: 1080 }, "the notch band (96) wins on the left, the fit on the top");
+        m.fit = Fit::new(4, 7, 3, 120);
+        assert_eq!(visible_rect(&m), Rect { x0: 120, y0: 4, x1: 2393, y1: 1077 }, "a bigger hidden edge wins over the band");
+        assert_eq!(visible_rect(&Mask::default()), Rect { x0: 0, y0: 0, x1: 2400, y1: 1080 });
+        // the shift moves the picture, never the bezel
+        let mut s = Mask::default();
+        s.fit = Fit::new(4, 0, 0, 9).with_shift(8, -6);
+        assert_eq!(visible_rect(&s), Rect { x0: 9, y0: 4, x1: 2400, y1: 1080 });
+    }
+
+    /// A real conversion of a white clip with fit 4/0/0/9, notch 92 and radius 80: the top-right curve starts at landscape row 4
+    /// (the stored frame: landscape (x, y) -> row x, column 1079 - y).
+    #[test]
+    fn a_real_conversion_draws_the_corner_on_the_visible_rectangle() {
+        let ff = crate::media::ffmpeg::locate();
+        if !ff.exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = Mask::band(Edge::Left, 92.0);
+        m.fit = Fit::new(4, 0, 0, 9);
+        let corners = Corners { on: true, r: 80.0 };
+        let png = crate::media::assets::corner_mask_file(&ff, dir.path(), &corners, &m, &crate::media::CancelToken::new()).unwrap().unwrap();
+        let b = Base { start: 0.0, length: 1.0, blend: 0.0, fps: 18, src_fps: None, is_image: false, frame: Frame::default(), detail: 0.0, canvas: (W, H), flags: LANCZOS.into(), head: String::new() };
+        let g = device_graph(&b, &m, true);
+        let (jpg, raw) = (dir.path().join("f.jpg"), dir.path().join("f.raw"));
+        let made = std::process::Command::new(&ff)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=white:s=640x360:d=1:r=18", "-i"])
+            .arg(&png)
+            .args(["-filter_complex", &g, "-map", "[out]", "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "2"])
+            .arg(&jpg)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let dec = std::process::Command::new(&ff).args(["-v", "error", "-y", "-i"]).arg(&jpg).args(["-f", "rawvideo", "-pix_fmt", "gray"]).arg(&raw).output().unwrap();
+        assert!(dec.status.success());
+        let d = std::fs::read(&raw).unwrap();
+        let px = |x: usize, y: usize| d[x * 1080 + (1079 - y)] as i32; // landscape pixel
+        assert!(px(2310, 3) < 40, "row 3 is hidden by the bezel");
+        assert!(px(2310, 6) > 200, "the top edge of the rounded rectangle is at row 4: white right after the hidden strip");
+        assert!(px(2398, 6) < 40, "the corner curve cuts the top-right corner");
+        assert!(px(2398, 40) < 40, "still inside the curve");
+        assert!(px(2398, 92) > 200, "the curve has ended (radius 80 below row 4)");
+        assert!(px(1000, 1077) > 200 && px(2300, 1077) > 200, "the bottom edge is the panel edge");
+        // the left top corner starts after the notch band (x = 96)
+        assert!(px(100, 6) < 80, "the top-left curve begins at the band's edge");
+        assert!(px(96 + 80 + 20, 6) > 200, "and is done after the radius");
     }
 }
 

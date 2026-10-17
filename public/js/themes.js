@@ -322,7 +322,7 @@ export function createThemes(ctx) {
     const u = E.ui;
     if (!u) return;
     styleNotch(u.notch, S.app && S.app.mask);
-    styleCorners(u.corners, { on: radius() > 0, r: radius() }, S.app && S.app.mask);
+    styleCorners(u.corners, { on: radius() > 0, r: radius() }, S.app && S.app.mask, S.app && S.app.screenFit);
     fillGuides(u.gz, E.guides ? guidesNow() : null);
     u.boxes.textContent = '';
     const g = guidesNow();

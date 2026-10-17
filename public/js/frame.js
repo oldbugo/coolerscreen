@@ -60,11 +60,13 @@ export function styleNotch(el, mask) {
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /** Path of the area outside a rounded rectangle covering the canvas (even-odd fill), radius r in canvas pixels. */
 /** The visible picture: the canvas minus the notch band (same as src/convert.js visibleRect()). */
-export function visibleRect(mask) {
-  const r = { x0: 0, y0: 0, x1: W, y1: H };
+export function visibleRect(mask, fit) {
+  // the panel inset by the screen fit (the shift does not move the bezel), then the notch band from the panel's own edge
+  const f = fit || {};
+  const r = { x0: Math.min(f.left || 0, W - 2), y0: Math.min(f.top || 0, H - 2), x1: W - (f.right || 0), y1: H - (f.bottom || 0) };
   if (mask && mask.mode === 'band') {
     const px = bandPx(mask.band);
-    if (px > 0) ({ left: () => (r.x0 = px), right: () => (r.x1 = W - px), top: () => (r.y0 = px), bottom: () => (r.y1 = H - px) })[mask.band.edge]();
+    if (px > 0) ({ left: () => (r.x0 = Math.max(r.x0, px)), right: () => (r.x1 = Math.min(r.x1, W - px)), top: () => (r.y0 = Math.max(r.y0, px)), bottom: () => (r.y1 = Math.min(r.y1, H - px)) })[mask.band.edge]();
   }
   return r;
 }
@@ -93,8 +95,8 @@ export function makeCornersOverlay() {
 }
 
 /** Same shape as src/convert.js cornerMaskFile(): black outside the visible rectangle rounded with radius corners.r. */
-export function styleCorners(svg, corners, notchMask) {
+export function styleCorners(svg, corners, notchMask, fit) {
   const on = !!(corners && corners.on && Math.round(corners.r) > 0);
   svg.style.display = on ? '' : 'none';
-  if (on) svg.firstChild.setAttribute('d', cornersPath(corners.r, visibleRect(notchMask)));
+  if (on) svg.firstChild.setAttribute('d', cornersPath(corners.r, visibleRect(notchMask, fit)));
 }

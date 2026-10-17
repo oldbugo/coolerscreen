@@ -66,8 +66,15 @@ impl Mask {
         self.band.is_none() && self.circle.is_none() && self.corners.is_none()
     }
 
-    /// Black out the masked areas of an LW x LH RGBA frame.
+    /// Black out the masked areas of an LW x LH RGBA frame (no screen fit).
     pub fn apply(&self, d: &mut [u8]) {
+        self.apply_fit(d, &crate::core::fit::Fit::default());
+    }
+
+    /// As `apply`, with the screen fit: the rounded corners are drawn on the VISIBLE rectangle (the panel inset by the fit,
+    /// not moved by the shift: the bezel is physical), and on the left after the notch band. The band itself stays measured
+    /// from the panel's edge.
+    pub fn apply_fit(&self, d: &mut [u8], fit: &crate::core::fit::Fit) {
         if let Some((edge, px)) = &self.band {
             let px = (*px).min(LW);
             let black = |row: &mut [u8]| row.chunks_exact_mut(4).for_each(|p| p[..3].fill(0));
@@ -102,14 +109,15 @@ impl Mask {
         if let Some(r) = self.corners {
             // Same geometry as the base's corner PNG (media::assets::corner_mask_file): black outside the visible rectangle
             // (the canvas minus a notch band) rounded with radius r (at most half its short side), anti-aliased.
-            let (mut x0, mut y0, mut x1, mut y1) = (0.0f32, 0.0f32, LW as f32, LH as f32);
+            let (fx0, fy0, fx1, fy1) = fit.rect(LW, LH);
+            let (mut x0, mut y0, mut x1, mut y1) = (fx0 as f32, fy0 as f32, fx1 as f32, fy1 as f32);
             if let Some((edge, px)) = &self.band {
                 let px = *px as f32;
                 match edge.as_str() {
-                    "right" => x1 -= px,
-                    "top" => y0 += px,
-                    "bottom" => y1 -= px,
-                    _ => x0 += px,
+                    "right" => x1 = x1.min(LW as f32 - px),
+                    "top" => y0 = y0.max(px),
+                    "bottom" => y1 = y1.min(LH as f32 - px),
+                    _ => x0 = x0.max(px),
                 }
             }
             let rr = r.round().min(((x1 - x0).min(y1 - y0)) / 2.0).max(0.0);
@@ -159,6 +167,33 @@ mod tests {
         assert_eq!(f[66 * 4], 0);
         assert_eq!(f[67 * 4], 255);
         assert_eq!(f[((LH - 1) * LW + 10) * 4], 0);
+    }
+
+    #[test]
+    fn corners_are_tangent_to_the_visible_rectangle_with_the_fit_and_the_notch() {
+        use crate::core::fit::Fit;
+        // fit 4/0/0/9 and notch 92 at 2400x1080 are 3/0/0/6 and a 67 px band at 1680x756; radius 80 is 56
+        let m = Mask::from_value(&json!({ "mode": "band", "band": { "edge": "left", "px": 92 }, "corners": { "on": true, "r": 80 } }));
+        let fit = Fit::new(4, 0, 0, 9);
+        let (_, y0, x1, y1) = fit.rect(LW, LH);
+        assert_eq!((y0, x1, y1), (3, LW, LH));
+        let mut f = vec![255u8; LW * LH * 4];
+        m.apply_fit(&mut f, &fit);
+        let at = |x: usize, y: usize| f[(y * LW + x) * 4];
+        let rr = 56;
+        assert_eq!(at(x1 - rr - 4, y0), 255, "top edge row y0 is untouched before the arc: tangent there");
+        assert!(at(x1 - 1, y0) < 20, "the corner pixel is black");
+        assert!(at(x1 - 1, y0 + rr / 2) < 20 && at(x1 - 1, y0 + rr + 3) == 255, "the arc ends rr rows down");
+        assert_eq!(at(67 + rr + 4, y0), 255, "the top-left curve starts after the notch band (67)");
+        assert!(at(67, y0) < 20 && at(67 + 3, y0) < 60);
+        // without the fit the curve starts at row 0 (as before)
+        let mut g = vec![255u8; LW * LH * 4];
+        m.apply(&mut g);
+        assert_eq!(g[(0 * LW + LW - rr - 4) * 4], 255);
+        assert!(g[(LW - 1) * 4] < 20);
+        // at the full design size: tangent at y = fit.top
+        let big = Fit::new(4, 0, 0, 9).rect(2400, 1080);
+        assert_eq!(big, (9, 4, 2400, 1080));
     }
 
     #[test]
