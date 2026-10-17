@@ -4,3 +4,8 @@ work/
 dist/
 .claude/
 src-tauri/target/
+
+# The user's own clips and old local build output (kept out of git, never deleted)
+Gallery/*
+!Gallery/.gitkeep
+dist-2.0/
