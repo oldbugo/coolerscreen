@@ -20,7 +20,7 @@ pub mod theme;
 pub mod video;
 
 pub use preview::{render_base_overlay, render_preview};
-pub use theme::{ClockProps, Group, Handover, HandoverEnd, ImageProps, MusicIdle, MusicProps, StatsProps, TextProps, Theme, ThemeLive, Widget};
+pub use theme::{ClockProps, Group, Guides, GuidesOffset, Handover, HandoverEnd, ImageProps, MusicIdle, MusicProps, StatsProps, TextProps, Theme, ThemeLive, Widget};
 use serde::{Deserialize, Serialize};
 
 /// Landscape canvas (the 2400x1080 design space at 0.7) and the portrait frame the screen takes.

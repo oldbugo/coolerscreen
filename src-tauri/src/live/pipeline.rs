@@ -10,7 +10,7 @@ use super::render::{HandTarget, Renderer};
 use super::sensors::Sampler;
 use super::nowplaying::MusicWatcher;
 use super::session::{Ending, LiveSession};
-use super::theme::{HandoverEnd, Theme, ThemeLive};
+use super::theme::{Guides, HandoverEnd, Theme, ThemeLive};
 use std::path::PathBuf;
 use super::video::VideoBg;
 use super::{Config, PH, PW};
@@ -149,6 +149,9 @@ pub struct Shared {
     /// Current theme (set through `set_theme`); the render thread picks it up when `theme_gen` changes.
     pub theme: Mutex<Option<ThemeLive>>,
     pub theme_gen: AtomicU64,
+    /// Calibration guides drawn over every live frame while Some (see `set_calibration`).
+    pub calibration: Mutex<Option<Guides>>,
+    pub calibration_gen: AtomicU64,
     /// Hand-over at stop: 0 = none, 1 = fade onto the loop's first frame, 2 = fade to black. Set by `stop()` while the stream runs.
     pub stop_mode: AtomicU8,
     /// The render thread has put the final hand-over frame in the slot; `hand_sent_mark` is the sent-frame count at that moment.
@@ -186,6 +189,8 @@ impl Pipeline {
             cfg_gen: AtomicU64::new(0),
             theme: Mutex::new(None),
             theme_gen: AtomicU64::new(0),
+            calibration: Mutex::new(None),
+            calibration_gen: AtomicU64::new(0),
             stop_mode: AtomicU8::new(0),
             hand_done: AtomicBool::new(false),
             hand_sent_mark: AtomicU64::new(0),
@@ -212,6 +217,7 @@ impl Pipeline {
                 let mut cfg = sh.cfg.lock().unwrap().clone();
                 let mut seen_gen = sh.cfg_gen.load(Relaxed);
                 let mut seen_theme_gen = u64::MAX;
+                let mut seen_cal_gen = u64::MAX;
                 let mut music: Option<MusicWatcher> = None;
                 let mut video_on = false;
                 // What the background decodes: (file, is the stored portrait base, decode mode).
@@ -238,6 +244,11 @@ impl Pipeline {
                         fade_in_secs = eff.theme.handover.fade_in;
                         r.set_theme(eff);
                         force_apply = true;
+                    }
+                    let cg = sh.calibration_gen.load(Relaxed);
+                    if cg != seen_cal_gen {
+                        seen_cal_gen = cg;
+                        r.set_calibration(sh.calibration.lock().unwrap().clone());
                     }
                     let active = !sh.paused.load(Relaxed) && sh.connected.load(Relaxed);
                     if active && !was_active {
@@ -556,6 +567,13 @@ impl Pipeline {
     pub fn set_theme(&self, t: ThemeLive) {
         *self.shared.theme.lock().unwrap() = Some(t);
         self.shared.theme_gen.fetch_add(1, Relaxed);
+    }
+
+    /// Screen-guide calibration: while Some, every live frame gets the guide lines, zone tints and labels drawn on top (and a
+    /// change redraws at once). None = normal frames. Guides are never drawn otherwise. Temporary: call with None to leave.
+    pub fn set_calibration(&self, g: Option<Guides>) {
+        *self.shared.calibration.lock().unwrap() = g;
+        self.shared.calibration_gen.fetch_add(1, Relaxed);
     }
 
     /// Change the background clip while running (None: the animated gradient). The decoder is restarted by the render thread.

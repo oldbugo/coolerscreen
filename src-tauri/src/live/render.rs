@@ -6,7 +6,7 @@
 use super::mask::Mask;
 use super::nowplaying::NowPlaying;
 use super::sensors::Sensors;
-use super::theme::{MusicIdle, Theme, ThemeLive, Widget};
+use super::theme::{Guides, MusicIdle, Theme, ThemeLive, Widget};
 use super::video::VideoBg;
 use super::{LH, LW};
 use ab_glyph::{Font as _, FontVec, PxScale, ScaleFont};
@@ -246,6 +246,9 @@ pub struct Renderer {
     bg_is_base: bool,
     /// Preview: fixed music state (no fade animation).
     sample: bool,
+    /// Calibration overlay (screen guides) drawn over every frame while Some; `cal_gen` changes with it.
+    calib: Option<Guides>,
+    cal_gen: u64,
     /// Accumulated microseconds per stage (background, widgets, composite + mask), for profiling.
     pub timing_us: [u64; 3],
 }
@@ -288,6 +291,8 @@ impl Renderer {
             first: Arc::new(Mutex::new(None)),
             bg_is_base: false,
             sample: false,
+            calib: None,
+            cal_gen: 0,
             timing_us: [0; 3],
         };
         r.update_bbox();
@@ -299,6 +304,15 @@ impl Renderer {
         self.sample = on;
         if on {
             self.music_alpha = 1.0;
+        }
+    }
+
+    /// Draw the calibration guides over every frame (None: normal frames).
+    pub fn set_calibration(&mut self, g: Option<Guides>) {
+        if self.calib != g {
+            self.calib = g;
+            self.cal_gen += 1;
+            self.last_key = None;
         }
     }
 
@@ -458,7 +472,7 @@ impl Renderer {
         };
         // Fade state (live-layer opacity and hand-over blend in 1/64 steps) is part of the key so fades redraw every frame.
         let hand_key = self.hand.map(|(k, p)| ((p * 64.0) as u64 + 1) | ((k == HandTarget::Black) as u64) << 8).unwrap_or(0);
-        let fade_key = ((self.live_alpha * 64.0) as u64) << 12 | hand_key;
+        let fade_key = (((self.live_alpha * 64.0) as u64) << 12 | hand_key) ^ (self.cal_gen << 40);
         // With a video the widgets follow the video frames (no separate 10 Hz redraw on top of them).
         let key = (if vkey != 0 { 0 } else { self.tick }, vkey, now.second, music_key, fade_key);
         if self.last_key == Some(key) {
@@ -480,6 +494,7 @@ impl Renderer {
         if !self.mask.is_none() {
             self.mask.apply(self.pm.data_mut());
         }
+        self.draw_calibration();
         let t3 = Instant::now();
         self.timing_us[0] += (t1 - t0).as_micros() as u64;
         self.timing_us[1] += (t2 - t1).as_micros() as u64;
@@ -874,5 +889,23 @@ mod tests {
         t.theme.widgets.clear();
         let base = crate::live::render_preview(&t, 320, 144, true).unwrap();
         assert_eq!(png_size(&live), png_size(&base));
+    }
+
+    #[test]
+    fn calibration_draws_guides_only_while_set() {
+        let mut r = Renderer::new(Arc::new(Mutex::new(Sensors::default())), None);
+        r.set_theme(ThemeLive::new(Theme::default(), PathBuf::new()));
+        let plain = r.render().0.to_vec();
+        let g = Guides::from_value(&serde_json::json!({ "curve": { "right": 200 }, "zones": [{ "name": "RAM", "edge": "right", "size": 180 }] }));
+        r.set_calibration(Some(g));
+        let (f, changed) = r.render();
+        assert!(changed, "a change redraws at once");
+        // the curve line is yellow at 2400-200 px = canvas x 1540
+        let i = (300 * LW + 1540) * 4;
+        assert_eq!(&f[i..i + 3], &[255, 235, 0]);
+        r.set_calibration(None);
+        let back = r.render().0.to_vec();
+        assert_eq!(back.len(), plain.len());
+        assert!(back.chunks_exact(4).zip(plain.chunks_exact(4)).all(|(a, b)| a[..3].iter().zip(&b[..3]).all(|(x, y)| x.abs_diff(*y) < 8)), "normal frame again");
     }
 }

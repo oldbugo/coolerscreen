@@ -482,3 +482,98 @@ pub(crate) fn resize_exact(src: &Pixmap, tw: u32, th: u32) -> Pixmap {
     out.draw_pixmap(0, 0, cur.as_ref(), &paint, t, None);
     out
 }
+
+// ---------------------------------------------------------------- calibration overlay (screen guides)
+
+impl Renderer {
+    /// Draw the screen guides over the finished frame: lines where the curve starts, tinted hatched bands for the avoid zones,
+    /// and labels with names and px values. Static horizontal and vertical lines only (the panel tears on vertical motion).
+    /// Guide px are on the 2400x1080 canvas. Temporary: only while calibrating, never part of a normal frame.
+    pub(super) fn draw_calibration(&mut self) {
+        let Some(g) = self.calib.clone() else { return };
+        let (cw, ch) = (self.cw, self.ch);
+        let k = cw as f32 / crate::live::theme::GUIDE_W;
+        let saved = std::mem::replace(&mut self.rects, vec![(0, 0, cw, ch)]);
+        self.layer.data_mut().fill(0);
+        let (fw, fh) = (cw as f32, ch as f32);
+        let zone_col = [255u8, 70, 70];
+        let curve_col = [255u8, 235, 0];
+        let lsz = (26.0 * k / 0.7).round().max(10.0) as u32;
+        let mut chips: Vec<(String, f32, f32, [u8; 3])> = Vec::new(); // text, x, baseline, colour
+        // zones: tint + vertical-stripe hatch + boundary line
+        for (i, z) in g.zones.iter().enumerate() {
+            let s = z.size * k;
+            if s < 0.5 {
+                continue;
+            }
+            let (x, y, w, h) = match z.edge.as_str() {
+                "left" => (0.0, 0.0, s, fh),
+                "top" => (0.0, 0.0, fw, s),
+                "bottom" => (0.0, fh - s, fw, s),
+                _ => (fw - s, 0.0, s, fh),
+            };
+            round_rect(&mut self.layer, x, y, w, h, 0.0, [zone_col[0], zone_col[1], zone_col[2], 60]);
+            let mut sx = x;
+            while sx < x + w {
+                round_rect(&mut self.layer, sx, y, 3.0f32.min(x + w - sx), h, 0.0, [zone_col[0], zone_col[1], zone_col[2], 70]);
+                sx += 14.0;
+            }
+            let label = format!("{}  {:.0} px", if z.name.is_empty() { "Zone" } else { &z.name }, z.size);
+            let tw = self.fonts.width(&label, lsz, Weight::Bold);
+            let off = i as f32 * (lsz as f32 * 1.7);
+            match z.edge.as_str() {
+                "left" => {
+                    round_rect(&mut self.layer, x + w - 3.0, 0.0, 3.0, fh, 0.0, [zone_col[0], zone_col[1], zone_col[2], 255]);
+                    chips.push((label, (x + w + 10.0).min(fw - tw - 4.0), fh * 0.5 + off, zone_col));
+                }
+                "top" => {
+                    round_rect(&mut self.layer, 0.0, y + h - 3.0, fw, 3.0, 0.0, [zone_col[0], zone_col[1], zone_col[2], 255]);
+                    chips.push((label, fw * 0.5 - tw / 2.0 + off, y + h + lsz as f32 + 10.0, zone_col));
+                }
+                "bottom" => {
+                    round_rect(&mut self.layer, 0.0, y, fw, 3.0, 0.0, [zone_col[0], zone_col[1], zone_col[2], 255]);
+                    chips.push((label, fw * 0.5 - tw / 2.0 + off, y - 12.0, zone_col));
+                }
+                _ => {
+                    round_rect(&mut self.layer, x, 0.0, 3.0, fh, 0.0, [zone_col[0], zone_col[1], zone_col[2], 255]);
+                    chips.push((label, (x - tw - 10.0).max(4.0), fh * 0.5 + off, zone_col));
+                }
+            }
+        }
+        // curve start lines
+        let c = &g.curve;
+        for (edge, v) in [("left", c.left), ("right", c.right), ("top", c.top), ("bottom", c.bottom)] {
+            let s = v * k;
+            if s < 0.5 {
+                continue;
+            }
+            let label = format!("Curve starts  {:.0} px", v);
+            let tw = self.fonts.width(&label, lsz, Weight::Bold);
+            match edge {
+                "left" => {
+                    round_rect(&mut self.layer, s - 1.5, 0.0, 3.0, fh, 0.0, [curve_col[0], curve_col[1], curve_col[2], 255]);
+                    chips.push((label, s + 10.0, lsz as f32 + 14.0, curve_col));
+                }
+                "right" => {
+                    round_rect(&mut self.layer, fw - s - 1.5, 0.0, 3.0, fh, 0.0, [curve_col[0], curve_col[1], curve_col[2], 255]);
+                    chips.push((label, (fw - s - tw - 10.0).max(4.0), lsz as f32 + 14.0, curve_col));
+                }
+                "top" => {
+                    round_rect(&mut self.layer, 0.0, s - 1.5, fw, 3.0, 0.0, [curve_col[0], curve_col[1], curve_col[2], 255]);
+                    chips.push((label, fw * 0.25 - tw / 2.0, s + lsz as f32 + 12.0, curve_col));
+                }
+                _ => {
+                    round_rect(&mut self.layer, 0.0, fh - s - 1.5, fw, 3.0, 0.0, [curve_col[0], curve_col[1], curve_col[2], 255]);
+                    chips.push((label, fw * 0.25 - tw / 2.0, fh - s - 14.0, curve_col));
+                }
+            }
+        }
+        for (text, x, base, col) in chips {
+            let tw = self.fonts.width(&text, lsz, Weight::Bold);
+            round_rect(&mut self.layer, x - 8.0, base - lsz as f32 - 2.0, tw + 16.0, lsz as f32 + 14.0, 6.0, [0, 0, 0, 190]);
+            self.text(&text, x, base, lsz, Weight::Bold, col, 1.0);
+        }
+        self.composite(1.0);
+        self.rects = saved;
+    }
+}

@@ -25,12 +25,16 @@ pub struct Theme {
     pub groups: Vec<Group>,
     /// The single "Live layer" switch: false = base only (the app stops streaming; previews show the base only).
     pub live_layer: bool,
+    /// Per-theme offsets added to the global screen guides.
+    pub guides_offset: GuidesOffset,
+    /// Corner radius in px on 2400x1080: None = use the settings default, 0 = none for this theme.
+    pub corners: Option<f32>,
     pub handover: Handover,
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), groups: Vec::new(), live_layer: true, handover: Handover::default() }
+        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), groups: Vec::new(), live_layer: true, guides_offset: GuidesOffset::default(), corners: None, handover: Handover::default() }
     }
 }
 
@@ -244,6 +248,101 @@ pub fn parse_color(s: &str, fallback: [u8; 3]) -> [u8; 3] {
     }
 }
 
+
+// ---------------------------------------------------------------- screen guides (v1.2)
+
+/// Canvas the guide pixel values refer to.
+pub const GUIDE_W: f32 = 2400.0;
+pub const GUIDE_H: f32 = 1080.0;
+
+/// How far in from each edge the curve starts (px on the 2400x1080 canvas; 0 = flat).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Curve {
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
+}
+
+/// An "avoid" band along an edge (something in front of the screen, e.g. the RAM).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Zone {
+    pub id: String,
+    pub name: String,
+    /// "left" | "right" | "top" | "bottom"
+    pub edge: String,
+    pub size: f32,
+}
+
+impl Default for Zone {
+    fn default() -> Self {
+        Zone { id: String::new(), name: String::new(), edge: "right".into(), size: 0.0 }
+    }
+}
+
+/// Global screen guides (settings.json `screenGuides`). Guides are hints, never masks.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Guides {
+    pub curve: Curve,
+    pub zones: Vec<Zone>,
+}
+
+/// Per-theme offsets (theme.json `guidesOffset`): values added to the global ones, may be negative; zones by id.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GuidesOffset {
+    pub curve: Curve,
+    pub zones: std::collections::HashMap<String, f32>,
+}
+
+fn edge_len(edge: &str) -> f32 {
+    if edge == "top" || edge == "bottom" { GUIDE_H } else { GUIDE_W }
+}
+
+impl Guides {
+    pub fn from_value(v: &Value) -> Guides {
+        let mut g: Guides = serde_json::from_value(v.clone()).unwrap_or_default();
+        g.clamp();
+        g
+    }
+
+    /// Finite values, curve 0..half the canvas, zone size 0..the canvas across, valid edges, ids filled.
+    pub fn clamp(&mut self) {
+        let fix = |v: &mut f32, max: f32| *v = if v.is_finite() { v.clamp(0.0, max) } else { 0.0 };
+        fix(&mut self.curve.left, GUIDE_W / 2.0);
+        fix(&mut self.curve.right, GUIDE_W / 2.0);
+        fix(&mut self.curve.top, GUIDE_H / 2.0);
+        fix(&mut self.curve.bottom, GUIDE_H / 2.0);
+        for (i, z) in self.zones.iter_mut().enumerate() {
+            if !["left", "right", "top", "bottom"].contains(&z.edge.as_str()) {
+                z.edge = "right".into();
+            }
+            let max = edge_len(if z.edge == "left" || z.edge == "right" { "top" } else { "left" }) ;
+            fix(&mut z.size, max);
+            if z.id.trim().is_empty() {
+                z.id = format!("z{}", i + 1);
+            }
+        }
+    }
+
+    /// The guides in effect for a theme: global values plus the theme's offsets, clamped.
+    pub fn effective(&self, off: &GuidesOffset) -> Guides {
+        let mut g = self.clone();
+        g.curve.left += off.curve.left;
+        g.curve.right += off.curve.right;
+        g.curve.top += off.curve.top;
+        g.curve.bottom += off.curve.bottom;
+        for z in g.zones.iter_mut() {
+            z.size += off.zones.get(&z.id).copied().unwrap_or(0.0);
+        }
+        g.clamp();
+        g
+    }
+}
+
 // ---------------------------------------------------------------- theme operations
 
 impl Theme {
@@ -283,6 +382,7 @@ impl Theme {
     /// non-empty ids, props always an object, onBase only where allowed, text size/opacity ranges.
     pub fn clamp(&mut self) {
         self.v = THEME_VERSION;
+        self.corners = self.corners.filter(|c| c.is_finite()).map(|c| c.clamp(0.0, 300.0));
         self.handover.fade_in = if self.handover.fade_in.is_finite() { self.handover.fade_in.clamp(0.0, 3.0) } else { 0.8 };
         let mut gids = std::collections::HashSet::new();
         for (i, g) in self.groups.iter_mut().enumerate() {
@@ -493,5 +593,20 @@ mod tests {
         assert!(!t.has_base_items(), "hidden widgets are not baked");
         let off = Theme::from_json(r#"{"liveLayer":false}"#).unwrap();
         assert!(!off.live_layer && off.to_json().contains("\"liveLayer\": false"));
+    }
+
+    #[test]
+    fn guides_offsets_and_corners() {
+        let g = Guides::from_value(&json!({ "curve": { "right": 40 }, "zones": [{ "name": "RAM", "edge": "right", "size": 180 }, { "id": "q", "edge": "weird", "size": -5 }] }));
+        assert_eq!(g.zones[0].id, "z1");
+        assert_eq!(g.zones[1].edge, "right");
+        assert_eq!(g.zones[1].size, 0.0);
+        let t = Theme::from_json(r#"{"guidesOffset":{"curve":{"right":-60},"zones":{"z1":30}},"corners":999}"#).unwrap();
+        assert_eq!(t.corners, Some(300.0));
+        let e = g.effective(&t.guides_offset);
+        assert_eq!(e.curve.right, 0.0, "clamped at 0");
+        assert_eq!(e.zones[0].size, 210.0);
+        assert_eq!(Theme::from_json(r#"{"corners":null}"#).unwrap().corners, None);
+        assert_eq!(Theme::from_json(r#"{"corners":0}"#).unwrap().corners, Some(0.0));
     }
 }
