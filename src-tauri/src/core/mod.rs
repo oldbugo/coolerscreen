@@ -21,6 +21,7 @@ pub mod service;
 pub mod settings;
 pub mod sources_adapter;
 pub mod theme;
+pub mod themes;
 #[cfg(test)]
 mod tests_app;
 

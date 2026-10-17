@@ -78,7 +78,13 @@ fn main() {
             cc::device_restart,
             cc::device_setup,
             cc::device_restore,
-            cc::device_reconnect
+            cc::device_reconnect,
+            cc::theme_get,
+            cc::theme_set,
+            cc::theme_standard,
+            cc::theme_preview,
+            cc::theme_asset_add,
+            cc::theme_apply
         ])
         .setup(move |app| {
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));

@@ -14,7 +14,7 @@
 //! [`RAW_MAX_BYTES`] fall back to 1.2's method (2 s sample from raw, extrapolate with a 0.97 margin, direct encode).
 use super::assets::corner_mask_file;
 use super::ffmpeg::{self, p};
-use super::graph::{self, device_graph, input_args, mjpeg_args, q_from_quality, quality_from_q, Base, Corners, Frame, Mask};
+use super::graph::{self, device_graph_ov, input_args_ov, mjpeg_args, q_from_quality, quality_from_q, Base, Corners, Frame, Mask};
 use super::graph::{DEVICE_FPS, IMAGE_SECONDS, Q_MAX, Q_MIN};
 use super::{gpu, probe, r3, CancelToken, MediaConfig, MediaError, Progress, Result, SourceInfo};
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,9 @@ pub struct VersionRequest {
     pub budget_bytes: u64,
     #[serde(default)]
     pub max_seconds: Option<f64>,
+    /// 3.0 themes: a 2400x1080 RGBA PNG (text/picture items) drawn over the picture, under the notch corners.
+    #[serde(default)]
+    pub overlay: Option<PathBuf>,
 }
 
 /// What 1.2's estimate() returned (sizes are now exact, not extrapolated, unless `exact` is false).
@@ -134,6 +137,7 @@ struct Prep {
     base: Base,
     mask: Mask,
     corner_file: Option<PathBuf>,
+    overlay_file: Option<PathBuf>,
     hw: bool,
 }
 
@@ -153,7 +157,7 @@ impl Prep {
             .map(|m| format!("{}-{:?}", m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())))
             .unwrap_or_default();
         format!(
-            "{}|{}|{}|{}|{}|{:?}|{}|{:?}|{:?}|{}",
+            "{}|{}|{}|{}|{}|{:?}|{}|{:?}|{:?}|{:?}|{}",
             self.file.display(),
             stamp,
             self.base.start,
@@ -163,6 +167,7 @@ impl Prep {
             self.base.detail,
             self.mask,
             self.corner_file,
+            self.overlay_file,
             self.hw
         )
     }
@@ -173,8 +178,8 @@ impl Prep {
         b.length = length;
         b.blend = blend;
         let mut a: Vec<String> = if hw { crate::ff_args!["-hwaccel", "cuda"] } else { vec![] };
-        a.extend(input_args(&p(&self.file), &b, self.corner_file.as_deref().map(p).as_deref()));
-        (a, device_graph(&b, &self.mask, self.corner_file.is_some()))
+        a.extend(input_args_ov(&p(&self.file), &b, self.corner_file.as_deref().map(p).as_deref(), self.overlay_file.as_deref().map(p).as_deref()));
+        (a, device_graph_ov(&b, &self.mask, self.corner_file.is_some(), self.overlay_file.is_some()))
     }
     /// Input + graph args of the full device graph (without output args).
     fn graph_args(&self, start: f64, length: f64, blend: f64, hw: bool) -> Vec<String> {
@@ -420,6 +425,7 @@ impl Engine {
             info,
             mask: req.mask,
             corner_file,
+            overlay_file: req.overlay.clone().filter(|f| f.is_file()),
             hw,
         })
     }
@@ -751,12 +757,12 @@ impl Engine {
             let mut b = c.base.clone();
             b.flags = graph::LANCZOS.into();
             let mut a: Vec<String> = if c.hw { crate::ff_args!["-hwaccel", "cuda"] } else { vec![] };
-            a.extend(input_args(&p(&c.file), &b, c.corner_file.as_deref().map(p).as_deref()));
+            a.extend(input_args_ov(&p(&c.file), &b, c.corner_file.as_deref().map(p).as_deref(), c.overlay_file.as_deref().map(p).as_deref()));
             let g = format!(
                 "{};{};{};[mc]scale=1200:540:flags=bicubic,format=yuv420p[out]",
                 graph::base_graph(&b),
                 graph::mask_graph(&c.mask),
-                graph::corners_graph(c.corner_file.is_some())
+                graph::finish_graph(c.corner_file.is_some(), c.overlay_file.is_some())
             );
             a.extend(crate::ff_args!["-filter_complex", g, "-map", "[out]", "-an"]);
             a

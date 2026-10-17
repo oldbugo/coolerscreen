@@ -1112,7 +1112,7 @@ impl Shared {
 
 /// 1.2 `publicJob`: loop searches and source jobs return their whole result; others a small summary.
 fn public_result(kind: &str, v: &Value) -> Value {
-    if kind == "loopsearch" || kind == "source" || !v.is_object() {
+    if kind == "loopsearch" || kind == "source" || kind == "apply" || !v.is_object() {
         return v.clone();
     }
     json!({

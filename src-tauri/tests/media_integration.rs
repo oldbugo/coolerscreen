@@ -30,6 +30,7 @@ fn req(start: f64, length: f64) -> VersionRequest {
         blend: 0.3,
         budget_bytes: 8_940_000,
         max_seconds: Some(10.0),
+        overlay: None,
     }
 }
 

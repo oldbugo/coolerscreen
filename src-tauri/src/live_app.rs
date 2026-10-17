@@ -299,6 +299,7 @@ pub fn apply(app: &AppHandle, force: bool) {
     let _ = HOST.set(core.live.clone());
     if l.in_app || force {
         ensure_tray(app, true);
+        core.refresh_live_theme(); // the current theme (or the Standard layout) is what live shows
         core.live.start_with(core.live_config());
     } else {
         let a = app.clone();

@@ -272,3 +272,199 @@ fn settings_update_keeps_corners() {
     assert_eq!(st["notchKey"], "band:right:48");
     assert_eq!(st["maxSeconds"], json!(20));
 }
+
+// ---------- 3.0 themes ----------
+
+fn setup_slow(delay_ms: u64) -> (tempfile::TempDir, Arc<App>, Arc<Rec>, std::path::PathBuf) {
+    let d = tempfile::tempdir().unwrap();
+    let home = d.path().join("home");
+    let gallery = d.path().join("Gallery");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&gallery).unwrap();
+    std::fs::write(home.join("settings.json"), json!({ "galleryDir": gallery.to_string_lossy() }).to_string()).unwrap();
+    let rec = Arc::new(Rec::default());
+    let app = App::with_device(
+        home,
+        Backends { media: Arc::new(FakeMedia { delay: Duration::from_millis(delay_ms) }), sources: Arc::new(NoSources) },
+        rec.clone(),
+        "3.0.0-test",
+        DeviceService::fake("winusb", 0.01, false),
+    );
+    (d, app, rec, gallery)
+}
+
+fn one_original(app: &App, gallery: &std::path::Path, name: &str) -> String {
+    put(&gallery.join(name), b"fake video data");
+    app.startup();
+    wait_until(|| app.originals_list()["originals"].as_array().unwrap().len() == 1);
+    let oid = app.originals_list()["originals"][0]["id"].as_str().unwrap().to_string();
+    wait_until(|| app.original_get(&oid).unwrap()["assets"] == "ready");
+    oid
+}
+
+#[test]
+fn theme_get_gives_defaults_and_set_validates() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "t.mp4");
+    let v = app.theme_get(&oid).unwrap();
+    assert_eq!(v["theme"]["widgets"], json!([]));
+    assert_eq!(v["theme"]["handover"]["end"], "loopStart");
+    assert_eq!(v["theme"]["handover"]["fadeIn"], json!(0.8));
+    assert_eq!(v["current"], json!(false));
+    assert_eq!(v["baseStale"], json!(false));
+    assert!(v["theme"]["baseVersionId"].is_null());
+    assert!(!app.theme_dir(&oid).join("theme.json").exists(), "nothing is written until the user saves");
+
+    // saved, clamped, and the base version cannot be set from the page
+    let t = json!({ "baseVersionId": "zzzzzzzz", "widgets": [
+        { "id": "a", "type": "clock", "x": 0.9, "y": 0.2, "w": 0.5, "h": 0.3, "props": { "seconds": true } },
+        { "id": "b", "type": "image", "x": 0, "y": 0, "w": 0.2, "h": 0.2, "onBase": true, "props": { "file": "../../secret.png" } },
+        { "id": "c", "type": "stats", "x": 0.6, "y": 0.1, "w": 0.3, "h": 0.3, "onBase": true } ],
+        "handover": { "fadeIn": 9 } });
+    let v = app.theme_set(&oid, &t).unwrap();
+    assert!(v["theme"]["baseVersionId"].is_null());
+    assert_eq!(v["theme"]["handover"]["fadeIn"], json!(3.0));
+    let w = &v["theme"]["widgets"];
+    assert!(w[0]["x"].as_f64().unwrap() + w[0]["w"].as_f64().unwrap() <= 1.0001, "box pulled inside the canvas");
+    assert_eq!(w[1]["props"]["file"], "", "a picture path leaving the theme folder is dropped");
+    assert_eq!(w[2]["onBase"], json!(false), "live-data items are never baked in");
+    assert_eq!(v["hasBaseItems"], json!(true), "the picture is still baked in");
+    assert!(app.theme_dir(&oid).join("theme.json").exists());
+    assert_eq!(app.theme_get(&oid).unwrap()["theme"], v["theme"]);
+
+    // invalid input is refused
+    assert!(app.theme_set(&oid, &json!({ "widgets": [{ "type": "rocket" }] })).is_err());
+    assert!(app.theme_set(&oid, &json!("nope")).is_err());
+    let many: Vec<Value> = (0..41).map(|_| json!({ "type": "text" })).collect();
+    assert!(app.theme_set(&oid, &json!({ "widgets": many })).is_err());
+    assert!(app.theme_set("nosuchid1", &json!({})).is_err());
+    // the list tells which kinds each theme has
+    let l = app.originals_list();
+    assert_eq!(l["originals"][0]["theme"]["widgets"], json!(["clock", "image", "stats"]));
+}
+
+#[test]
+fn theme_pictures_are_copied_into_the_theme_folder() {
+    let (d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "t.mp4");
+    let a = app.theme_asset_add_bytes(&oid, "My Logo.png", &super::fake_media::png(4, 4, [1, 2, 3])).unwrap();
+    assert_eq!(a["file"], "assets/My Logo.png");
+    let b = app.theme_asset_add_bytes(&oid, "My Logo.png", &super::fake_media::png(4, 4, [9, 9, 9])).unwrap();
+    assert_eq!(b["file"], "assets/My Logo (2).png");
+    assert!(app.theme_dir(&oid).join("assets/My Logo.png").is_file());
+    assert!(app.theme_asset_add_bytes(&oid, "run.exe", b"MZ").is_err(), "only pictures");
+    assert!(app.theme_asset_add_bytes(&oid, "empty.png", b"").is_err());
+    let src = d.path().join("from disk.jpg");
+    std::fs::write(&src, b"jpegbytes").unwrap();
+    assert_eq!(app.theme_asset_add_path(&oid, &src.to_string_lossy()).unwrap()["file"], "assets/from disk.jpg");
+    assert!(app.theme_asset_add_path(&oid, "relative.png").is_err());
+}
+
+#[test]
+fn adding_from_browse_makes_independent_copies() {
+    let (d, app, _rec, gallery) = setup();
+    let tmp = d.path().join("dl");
+    std::fs::create_dir_all(&tmp).unwrap();
+    // What a source hands over twice for the same item: a downloaded file named with the source's key.
+    let mut names = vec![];
+    for _ in 0..3 {
+        let f = tmp.join("dl.mp4");
+        put(&f, b"same wallpaper bytes");
+        let id = app.add_file(&f, Some("Ocean Echo [we-1635817562].mp4")).unwrap();
+        names.push(app.lib.read_original(&id).unwrap()["name"].as_str().unwrap().to_string());
+    }
+    assert_eq!(names, ["Ocean Echo", "Ocean Echo (2)", "Ocean Echo (3)"]);
+    assert!(gallery.join("Ocean Echo [we-1635817562].mp4").exists() && gallery.join("Ocean Echo [we-1635817562] (2).mp4").exists());
+    assert_eq!(app.originals_list()["originals"].as_array().unwrap().len(), 3, "three independent themes");
+}
+
+#[test]
+fn apply_stores_the_base_and_switches_the_theme() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Apply me.mp4");
+    app.theme_set(&oid, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.4, "h": 0.3 }] })).unwrap();
+    assert!(app.current_theme_oid().is_none());
+    let r = app.theme_apply(&oid).unwrap();
+    let jid = r["jobId"].as_str().unwrap().to_string();
+    let mut seen = std::collections::BTreeSet::new();
+    let j = loop {
+        let j = app.job_get(&jid).unwrap();
+        seen.insert(j["message"].as_str().unwrap_or("").to_string());
+        if ["done", "failed", "cancelled"].contains(&j["state"].as_str().unwrap()) {
+            break j;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    assert_eq!(j["state"], "done", "{j}");
+    assert!(seen.iter().any(|m| m.starts_with("Step 1 of 3") || m.starts_with("Step 2 of 3")), "steps are reported: {seen:?}");
+    let vid = j["result"]["versionId"].as_str().unwrap().to_string();
+    assert_eq!(app.current_theme_oid().as_deref(), Some(oid.as_str()));
+    assert_eq!(app.settings.load().slot("standby").unwrap()["versionId"], json!(vid));
+    let v = app.theme_get(&oid).unwrap();
+    assert_eq!(v["current"], json!(true));
+    assert_eq!(v["baseVersionId"], json!(vid));
+    assert_eq!(v["baseStale"], json!(false));
+    assert!(app.lib.device_path(&vid).is_some());
+    // applying again reuses the same base (no second version)
+    let r = app.theme_apply(&oid).unwrap();
+    let j = wait_job(&app, r["jobId"].as_str().unwrap());
+    assert_eq!(j["state"], "done", "{j}");
+    assert_eq!(j["result"]["versionId"], json!(vid));
+    assert_eq!(app.lib.versions(&oid).len(), 1);
+    // editing the live layer keeps the base; the list marks the current theme
+    app.theme_set(&oid, &json!({ "widgets": [] })).unwrap();
+    assert_eq!(app.theme_get(&oid).unwrap()["baseVersionId"], json!(vid));
+    assert_eq!(app.originals_list()["currentTheme"], json!(oid));
+    // a base made by a plain "Push to screen" counts too
+    let other = app.lib.create_version(&oid, &json!({ "start": 0, "length": 2, "force": true })).unwrap();
+    let ovid = other["id"].as_str().unwrap().to_string();
+    app.version_handle(&oid, &other).wait().unwrap();
+    app.send_handle(&ovid).unwrap().wait().unwrap();
+    assert_eq!(app.theme_get(&oid).unwrap()["baseVersionId"], json!(ovid));
+}
+
+#[test]
+fn stopping_an_apply_keeps_the_previous_theme() {
+    let (_d, app, _rec, gallery) = setup_slow(400);
+    let oid = one_original(&app, &gallery, "Stop me.mp4");
+    let r = app.theme_apply(&oid).unwrap();
+    let jid = r["jobId"].as_str().unwrap().to_string();
+    wait_until(|| app.job_get(&jid).unwrap()["state"] == "running");
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(app.sched.cancel(&jid));
+    let j = wait_job(&app, &jid);
+    assert_eq!(j["state"], "cancelled", "{j}");
+    assert!(app.settings.load().slot("standby").is_none(), "nothing was stored on the screen");
+    assert!(app.current_theme_oid().is_none());
+    assert!(app.theme_get(&oid).unwrap()["theme"]["baseVersionId"].is_null());
+}
+
+#[test]
+fn deleting_the_current_theme_clears_it() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Gone.mp4");
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    assert_eq!(app.current_theme_oid().as_deref(), Some(oid.as_str()));
+    app.original_delete(&oid).unwrap();
+    assert!(app.current_theme_oid().is_none());
+}
+
+#[test]
+fn changing_baked_items_marks_the_base_as_stale() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Baked.mp4");
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(false));
+    // a live-only item never touches the base
+    let live = json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3 }] });
+    assert_eq!(app.theme_set(&oid, &live).unwrap()["baseStale"], json!(false));
+    // text that is also drawn into the stored base does
+    let baked = json!({ "widgets": [{ "id": "t", "type": "text", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.2, "onBase": true, "props": { "text": "Hi" } }] });
+    let v = app.theme_set(&oid, &baked).unwrap();
+    assert_eq!(v["baseStale"], json!(true));
+    assert_eq!(v["hasBaseItems"], json!(true));
+    // taking it off again clears the notice
+    assert_eq!(app.theme_set(&oid, &live).unwrap()["baseStale"], json!(false));
+}

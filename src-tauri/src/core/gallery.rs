@@ -85,8 +85,23 @@ pub fn unique_path(dir: &Path, base: &str, ext: &str) -> PathBuf {
 }
 
 /// Files added from a source carry its key in brackets ("Title [we-123]"): keep the key in the file name, not in
-/// the clip's name.
-fn strip_source_key(name: &str) -> &str {
+/// the clip's name. A copy the folder numbered ("Title [we-123] (2)") keeps its number: "Title (2)".
+fn strip_source_key(name: &str) -> String {
+    if let Some(open) = name.rfind(" (") {
+        let tail = &name[open + 2..];
+        if let Some(n) = tail.strip_suffix(')') {
+            if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) {
+                let head = strip_key_only(&name[..open]);
+                if head.len() != open {
+                    return format!("{head} ({n})");
+                }
+            }
+        }
+    }
+    strip_key_only(name).to_string()
+}
+
+fn strip_key_only(name: &str) -> &str {
     if let Some(open) = name.rfind(" [") {
         let inner = &name[open + 2..];
         if let Some(body) = inner.strip_suffix(']') {
@@ -132,7 +147,7 @@ impl App {
         let r = (|| -> CoreResult<()> {
             let ext = ext_lower(file);
             let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("clip").to_string();
-            let mut name = strip_source_key(&stem).to_string();
+            let mut name = strip_source_key(&stem);
             let mut extracted = false;
             let mut orig = file.to_path_buf();
             if ext == ".ht" || ext == ".zip" || theme::is_theme_file(file) {
@@ -632,6 +647,8 @@ mod tests {
     #[test]
     fn names() {
         assert_eq!(strip_source_key("Sakura [we-2970331102]"), "Sakura");
+        assert_eq!(strip_source_key("Sakura [we-2970331102] (2)"), "Sakura (2)");
+        assert_eq!(strip_source_key("Plain (2)"), "Plain (2)");
         assert_eq!(strip_source_key("Sakura [x]"), "Sakura [x]");
         assert_eq!(strip_source_key("A [lc-ab-12]"), "A");
         assert_eq!(sanitize_name("a<b>:c. "), "a_b__c");

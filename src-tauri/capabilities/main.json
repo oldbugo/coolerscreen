@@ -52,6 +52,12 @@
     "allow-device-restart",
     "allow-device-setup",
     "allow-device-restore",
-    "allow-device-reconnect"
+    "allow-device-reconnect",
+    "allow-theme-get",
+    "allow-theme-set",
+    "allow-theme-standard",
+    "allow-theme-preview",
+    "allow-theme-asset-add",
+    "allow-theme-apply"
   ]
 }

@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub const DEVICE_FPS: f64 = 18.0;
-const O_FILES: [&str; 4] = ["thumb.jpg", "frame.jpg", "proxy.mp4", "proxy.jpg"];
+const O_FILES: [&str; 7] = ["thumb.jpg", "frame.jpg", "proxy.mp4", "proxy.jpg", "theme-preview.png", "theme-preview-base.png", "theme-card.png"];
 const V_FILES: [&str; 3] = ["preview.mp4", "thumb.jpg", "device.mp4"];
 
 pub fn is_id(id: &str) -> bool {
@@ -509,10 +509,15 @@ impl Library {
         }
         let ctx = self.context();
         let st = clean_settings(&o, body, ctx.max_seconds, &ctx.corners_default);
+        // 3.0: text/picture items baked into the base ({ key, file }); a version without them never duplicates one with.
+        let overlay = body.get("overlay").filter(|v| v.is_object() && v["key"].is_string()).cloned();
+        let ov_key = |v: &Value| v["overlay"]["key"].as_str().map(String::from);
+        let want = overlay.as_ref().and_then(|o| o["key"].as_str().map(String::from));
         let _g = self.lock();
         let vs = self.versions(oid);
         let dup = vs.iter().find(|v| {
             v["status"] != "error"
+                && ov_key(v) == want
                 && base_key(v["notchKey"].as_str()) == ctx.notch_key
                 && v["settings"].is_object()
                 && same_settings(&effective_settings(v), &st)
@@ -535,7 +540,7 @@ impl Library {
         settings.insert("fps".into(), num(DEVICE_FPS));
         let v = json!({
             "id": new_id(), "originalId": oid, "n": num(n), "label": null, "created": js::iso_now(),
-            "settings": settings, "notch": ctx.mask, "notchKey": ctx.notch_key, "result": null, "status": "queued", "error": null,
+            "settings": settings, "notch": ctx.mask, "notchKey": ctx.notch_key, "result": null, "status": "queued", "error": null, "overlay": overlay,
         });
         self.write_version_locked(oid, &v)
     }
@@ -547,6 +552,9 @@ impl Library {
         let mut body = Map::new();
         for k in ["start", "length", "quality", "frame", "corners", "detail", "blend"] {
             body.insert(k.into(), e.get(k).cloned().unwrap_or(Value::Null));
+        }
+        if let Some(o) = v.get("overlay").filter(|o| o.is_object()) {
+            body.insert("overlay".into(), o.clone());
         }
         body.insert("force".into(), json!(true));
         self.create_version(&oid, &Value::Object(body))

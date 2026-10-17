@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-theme-standard"
+description = "Enables the theme_standard command without any pre-configured scope."
+commands.allow = ["theme_standard"]
+
+[[permission]]
+identifier = "deny-theme-standard"
+description = "Denies the theme_standard command without any pre-configured scope."
+commands.deny = ["theme_standard"]

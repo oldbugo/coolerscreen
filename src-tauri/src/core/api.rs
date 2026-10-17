@@ -62,6 +62,9 @@ pub struct EncodeReq {
     pub budget_bytes: u64,
     pub max_seconds: f64,
     pub info: ProbeInfo,
+    /// 3.0 themes: PNG (2400x1080 RGBA) of the text/picture items baked into the base; None for a plain base.
+    #[serde(default)]
+    pub overlay: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

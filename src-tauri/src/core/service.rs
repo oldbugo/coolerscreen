@@ -150,7 +150,16 @@ impl App {
             .iter()
             .map(|o| json!({ "id": o["id"], "name": o["name"], "since": o["missing"]["since"] }))
             .collect();
-        json!({ "rev": self.lib.rev(), "originals": all.iter().map(|o| self.lib.summary(o, &ctx)).collect::<Vec<_>>(), "longMissing": long })
+        let cur = self.current_theme_oid();
+        let originals: Vec<Value> = all
+            .iter()
+            .map(|o| {
+                let mut s = self.lib.summary(o, &ctx);
+                s["theme"] = self.theme_summary(o["id"].as_str().unwrap_or(""), cur.as_deref());
+                s
+            })
+            .collect();
+        json!({ "rev": self.lib.rev(), "originals": originals, "longMissing": long, "currentTheme": cur })
     }
 
     /// POST /api/import: the bytes of a dropped file.
@@ -185,7 +194,9 @@ impl App {
     }
 
     pub fn missing_delete(&self, ids: &[String]) -> Value {
-        json!({ "deleted": self.delete_missing(ids) })
+        let n = self.delete_missing(ids);
+        self.refresh_live_theme();
+        json!({ "deleted": n })
     }
 
     pub fn original_get(&self, oid: &str) -> CoreResult<Value> {
@@ -209,6 +220,7 @@ impl App {
     pub fn original_delete(&self, oid: &str) -> CoreResult<Value> {
         self.lib.read_original(oid).ok_or_else(gone_clip)?;
         self.delete_original(oid)?;
+        self.refresh_live_theme();
         Ok(json!({ "ok": true }))
     }
 
@@ -246,6 +258,7 @@ impl App {
             budget_bytes: ctx.budget.max(0.0) as u64,
             max_seconds: ctx.max_seconds,
             info: probe_of(o),
+            overlay: None,
         })
     }
 
@@ -457,6 +470,10 @@ impl App {
     // ---------- versions ----------
 
     fn version_job(&self, oid: &str, v: &Value) -> String {
+        self.version_handle(oid, v).id
+    }
+
+    pub(crate) fn version_handle(&self, oid: &str, v: &Value) -> super::scheduler::JobHandle {
         let o = self.lib.read_original(oid);
         let label = format!("{} · v{}", o.as_ref().and_then(|o| o["name"].as_str()).unwrap_or("clip"), js::fmt(v["n"].as_f64().unwrap_or(0.0)));
         let info = o.as_ref().map(probe_of);
@@ -464,7 +481,7 @@ impl App {
         let vid = v["id"].as_str().unwrap_or("").to_string();
         let spec = TaskSpec::new("version", label, res).original(oid).version(&vid).priority(Priority::User).visible();
         let app = self.arc();
-        self.sched.submit(spec, move |ctx| app.run_version(ctx, &vid)).id
+        self.sched.submit(spec, move |ctx| app.run_version(ctx, &vid))
     }
 
     fn run_version(&self, tctx: &super::scheduler::TaskCtx, vid: &str) -> CoreResult<Value> {
@@ -479,7 +496,15 @@ impl App {
         let st = effective_settings(&v);
         let mut c2 = ctx.clone();
         c2.mask = v.get("notch").cloned().unwrap_or(ctx.mask.clone());
-        let req = self.encode_req(&oid, &o, &st, &c2)?;
+        let mut req = self.encode_req(&oid, &o, &st, &c2)?;
+        if let Some(f) = v["overlay"]["file"].as_str() {
+            if !std::path::Path::new(f).is_file() {
+                let msg = "The text and pictures for this base are missing. Apply the theme again to make them.";
+                self.lib.patch_version(vid, &json!({ "status": "error", "error": msg }))?;
+                return Err(CoreError::new(msg));
+            }
+            req.overlay = Some(PathBuf::from(f));
+        }
         let out = self.lib.v_dir(&oid, vid);
         match self.media.convert(tctx, &req, &out) {
             Ok(r) => {
@@ -645,6 +670,7 @@ impl App {
             record_splash(&sp);
         }
         self.settings.record_slot("standby", Some(record))?;
+        self.after_base_sent(&oid, vid); // 3.0: this version is its theme's base and the live layer follows
         let secs = started.elapsed().as_secs_f64();
         if secs > 20.0 && r["transport"] != "fake" {
             let rate = (bytes_total as f64 / secs).round();
@@ -669,12 +695,21 @@ impl App {
     }
 
     fn device_job(&self, kind: &str, label: &str, spec_mod: impl FnOnce(TaskSpec) -> TaskSpec, f: impl Fn(&App, &super::scheduler::TaskCtx) -> CoreResult<Value> + Send + Sync + 'static) -> String {
+        self.device_handle(kind, label, spec_mod, f).id
+    }
+
+    fn device_handle(&self, kind: &str, label: &str, spec_mod: impl FnOnce(TaskSpec) -> TaskSpec, f: impl Fn(&App, &super::scheduler::TaskCtx) -> CoreResult<Value> + Send + Sync + 'static) -> super::scheduler::JobHandle {
         let spec = spec_mod(TaskSpec::new(kind, label, Resources::one(Res::Device)).priority(Priority::User).visible());
         let app = self.arc();
-        self.sched.submit(spec, move |ctx| f(&app, ctx)).id
+        self.sched.submit(spec, move |ctx| f(&app, ctx))
     }
 
     pub fn version_send(&self, vid: &str) -> CoreResult<Value> {
+        Ok(json!({ "jobId": self.send_handle(vid)?.id }))
+    }
+
+    /// The send job of a version (the same one "Push to screen" runs).
+    pub(crate) fn send_handle(&self, vid: &str) -> CoreResult<super::scheduler::JobHandle> {
         let (oid, v) = self.lib.find_version(vid).ok_or_else(gone_version)?;
         let o = self.lib.read_original(&oid);
         let label = format!(
@@ -683,8 +718,7 @@ impl App {
             if truthy(v.get("label")) { v["label"].as_str().unwrap_or("").to_string() } else { format!("v{}", js::fmt(v["n"].as_f64().unwrap_or(0.0))) }
         );
         let vid2 = vid.to_string();
-        let id = self.device_job("send", &label, |s| s.original(&oid).version(vid), move |app, ctx| app.send_version(ctx, &vid2));
-        Ok(json!({ "jobId": id }))
+        Ok(self.device_handle("send", &label, |s| s.original(&oid).version(vid), move |app, ctx| app.send_version(ctx, &vid2)))
     }
 
     pub fn device_state(&self) -> CoreResult<Value> {
@@ -850,11 +884,6 @@ impl App {
         let prov = self.provider(sid).ok_or_else(|| CoreError::new("This source is turned off. Turn it on in Settings > Sources.").status(403))?;
         let page = page.max(1);
         let r = prov.list(&self.source_ctx(sid), page, refresh).map_err(|e| e.status(502))?;
-        let have = self.lib.list_originals();
-        let in_gallery = |key: &Option<String>| -> Value {
-            let Some(k) = key.as_deref().filter(|k| !k.is_empty()) else { return Value::Null };
-            have.iter().find(|o| o["fileName"].as_str().unwrap_or("").contains(k)).map(|o| o["id"].clone()).unwrap_or(Value::Null)
-        };
         let items: Vec<Value> = r
             .items
             .iter()
@@ -869,7 +898,7 @@ impl App {
                 json!({
                     "id": it.id, "title": title.chars().take(160).collect::<String>(), "type": it.kind,
                     "action": if it.action == "add" || it.action == "record" { it.action.as_str() } else { "none" },
-                    "note": it.note, "badge": it.badge, "inGallery": in_gallery(&it.key), "thumb": thumb,
+                    "note": it.note, "badge": it.badge, "thumb": thumb,
                 })
             })
             .collect();
@@ -936,6 +965,7 @@ impl App {
     pub fn startup(&self) {
         self.lib.reset_interrupted();
         self.gallery_init(true);
+        self.refresh_live_theme();
     }
 
     /// Resolve a media-server path (after the token).
@@ -979,22 +1009,15 @@ pub fn encode_uri_component(s: &str) -> String {
 }
 
 impl App {
-    /// The live engine's config for this app: companion.json (fps, ...) with the app's live settings on top
-    /// (show seconds; the background clip is a Gallery clip chosen in Settings, resolved to its file).
+    /// The live engine's config for this app: companion.json (fps, ...) with the app's live settings on top. The background
+    /// and the layout come from the current theme (`refresh_live_theme`), and music is a widget, so the old per-live
+    /// background picker and music switch no longer apply.
     pub fn live_config(&self) -> crate::live::Config {
         let l = self.settings.load().live();
         let mut c = crate::live::Config::load();
         c.show_seconds = l.show_seconds;
-        c.background = if l.background.is_empty() {
-            None
-        } else {
-            self.lib
-                .read_original(&l.background)
-                .filter(|o| !truthy(o.get("isImage")))
-                .and_then(|o| self.lib.source_path(&o))
-                .map(|p| p.to_string_lossy().to_string())
-        };
-        c.music.enabled = l.music;
+        c.background = None;
+        c.music.enabled = true;
         c
     }
 }

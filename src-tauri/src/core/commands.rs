@@ -251,6 +251,61 @@ pub async fn source_add(
     run(&core, move |a| a.source_add(&source_id, &item_id, &json!({ "record": record.unwrap_or(false), "seconds": seconds, "title": title }))).await
 }
 
+// ---------- themes (3.0, docs/v3/theme-format.md) ----------
+
+#[tauri::command]
+pub async fn theme_get(core: State<'_, Core>, original_id: String) -> Result<Value, CoreError> {
+    run(&core, move |a| a.theme_get(&original_id)).await
+}
+
+#[tauri::command]
+pub async fn theme_set(core: State<'_, Core>, original_id: String, theme: Value) -> Result<Value, CoreError> {
+    run(&core, move |a| a.theme_set(&original_id, &theme)).await
+}
+
+#[tauri::command]
+pub async fn theme_standard(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |a| Ok(a.theme_standard())).await
+}
+
+/// `{ originalId, theme?, withLive, w?, h? }` -> `{ url }` (a PNG on the media server).
+#[tauri::command]
+pub async fn theme_preview(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let a = json_args(&request);
+    let oid = a["originalId"].as_str().unwrap_or("").to_string();
+    let theme = a.get("theme").filter(|t| t.is_object()).cloned();
+    let with_live = a["withLive"].as_bool().unwrap_or(true);
+    let (w, h) = (a["w"].as_u64().unwrap_or(1200) as u32, a["h"].as_u64().unwrap_or(540) as u32);
+    run(&core, move |app| app.theme_preview(&oid, theme.as_ref(), with_live, w, h)).await
+}
+
+/// JSON `{ originalId, path }`, or the raw bytes of a picture with headers `x-cs-oid` and `x-cs-name` -> `{ file }`.
+#[tauri::command]
+pub async fn theme_asset_add(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    if let tauri::ipc::InvokeBody::Raw(bytes) = request.body() {
+        let hdr = |k: &str| {
+            request
+                .headers()
+                .get(k)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| super::media_server::query_param(&format!("n={s}"), "n").unwrap_or_default())
+                .unwrap_or_default()
+        };
+        let (oid, name, bytes) = (hdr("x-cs-oid"), hdr("x-cs-name"), bytes.clone());
+        return run(&core, move |a| a.theme_asset_add_bytes(&oid, &name, &bytes)).await;
+    }
+    let a = json_args(&request);
+    let oid = a["originalId"].as_str().unwrap_or("").to_string();
+    let path = a["path"].as_str().unwrap_or("").to_string();
+    run(&core, move |app| app.theme_asset_add_path(&oid, &path)).await
+}
+
+/// Apply a theme: base picture, store it on the screen, switch the live layer -> `{ jobId }`.
+#[tauri::command]
+pub async fn theme_apply(core: State<'_, Core>, original_id: String) -> Result<Value, CoreError> {
+    run(&core, move |a| a.theme_apply(&original_id)).await
+}
+
 // ---------- gallery folder ----------
 
 #[tauri::command]
@@ -310,5 +365,6 @@ pub const COMMANDS: &[&str] = &[
     "missing_delete", "original_get", "original_patch", "original_delete", "original_reveal", "estimate", "loop_search", "loop_point",
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
-    "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect",
+    "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
+    "theme_preview", "theme_asset_add", "theme_apply",
 ];

@@ -326,13 +326,33 @@ pub fn corners_graph(has_corner_file: bool) -> &'static str {
     }
 }
 
+/// [m] -> [mc] with the optional theme overlay (3.0: text/picture items baked into the base; input 1, or input 2 when a
+/// corner file is input 1) under the corners. Without an overlay this is `corners_graph`.
+pub fn finish_graph(has_corner_file: bool, has_overlay: bool) -> String {
+    match (has_corner_file, has_overlay) {
+        (c, false) => corners_graph(c).into(),
+        (false, true) => "[m][1:v]overlay=0:0:format=auto,format=yuv420p[mc]".into(),
+        (true, true) => "[m][2:v]overlay=0:0:format=auto[mo];[mo][1:v]overlay=0:0:format=auto,format=yuv420p[mc]".into(),
+    }
+}
+
 /// The whole device graph ending in [out] (stored portrait 1080x2400 yuvj420p).
 pub fn device_graph(base: &Base, mask: &Mask, has_corner_file: bool) -> String {
-    format!("{};{};{};[mc]transpose=1,format=yuvj420p[out]", base_graph(base), mask_graph(mask), corners_graph(has_corner_file))
+    device_graph_ov(base, mask, has_corner_file, false)
+}
+
+/// As `device_graph`, with the theme overlay PNG as the last input.
+pub fn device_graph_ov(base: &Base, mask: &Mask, has_corner_file: bool, has_overlay: bool) -> String {
+    format!("{};{};{};[mc]transpose=1,format=yuvj420p[out]", base_graph(base), mask_graph(mask), finish_graph(has_corner_file, has_overlay))
 }
 
 /// Input args: `-ss/-t` around the selection (with a blend, from B seconds before the start); images loop.
 pub fn input_args(file: &str, base: &Base, corner_file: Option<&str>) -> Vec<String> {
+    input_args_ov(file, base, corner_file, None)
+}
+
+/// As `input_args`, plus the theme overlay PNG after the corner file.
+pub fn input_args_ov(file: &str, base: &Base, corner_file: Option<&str>, overlay: Option<&str>) -> Vec<String> {
     let mut a: Vec<String> = if base.is_image {
         crate::ff_args!["-loop", "1", "-framerate", base.fps, "-t", base.length, "-i", file]
     } else if let Some(t) = timing(base) {
@@ -342,6 +362,9 @@ pub fn input_args(file: &str, base: &Base, corner_file: Option<&str>) -> Vec<Str
     };
     if let Some(c) = corner_file {
         a.extend(crate::ff_args!["-i", c]);
+    }
+    if let Some(o) = overlay {
+        a.extend(crate::ff_args!["-i", o]);
     }
     a
 }
@@ -429,5 +452,26 @@ mod tests {
         assert_eq!(q_from_quality(45.0), 39);
         assert_eq!(quality_from_q(2), 100);
         assert_eq!(quality_from_q(69), 1);
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::*;
+    #[test]
+    fn theme_overlay_goes_over_the_picture_and_under_the_corners() {
+        assert_eq!(finish_graph(false, false), corners_graph(false));
+        assert_eq!(finish_graph(true, false), corners_graph(true));
+        assert_eq!(finish_graph(false, true), "[m][1:v]overlay=0:0:format=auto,format=yuv420p[mc]");
+        // corner file is input 1, overlay input 2: the overlay is laid first, the corners last
+        assert_eq!(
+            finish_graph(true, true),
+            "[m][2:v]overlay=0:0:format=auto[mo];[mo][1:v]overlay=0:0:format=auto,format=yuv420p[mc]"
+        );
+        let b = Base { start: 0.0, length: 2.0, blend: 0.0, fps: 18, src_fps: None, is_image: false, frame: Frame::default(), detail: 0.0, canvas: (W, H), flags: "lanczos".into(), head: String::new() };
+        assert_eq!(input_args_ov("f.mp4", &b, Some("c.png"), Some("o.png")), ["-ss", "0", "-t", "2", "-i", "f.mp4", "-i", "c.png", "-i", "o.png"]);
+        assert_eq!(input_args_ov("f.mp4", &b, None, Some("o.png")).last().map(String::as_str), Some("o.png"));
+        assert_eq!(device_graph(&b, &Mask::band(Edge::Left, 96.0), false), device_graph_ov(&b, &Mask::band(Edge::Left, 96.0), false, false));
+        assert!(device_graph_ov(&b, &Mask::band(Edge::Left, 96.0), false, true).contains("[m][1:v]overlay=0:0:format=auto,format=yuv420p[mc]"));
     }
 }

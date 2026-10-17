@@ -21,6 +21,7 @@ fn req_from(v: &Value) -> VersionRequest {
         blend: v["blend"].as_f64().unwrap_or(0.0),
         budget_bytes: v["budgetBytes"].as_u64().unwrap(),
         max_seconds: v["maxSeconds"].as_f64(),
+        overlay: None,
     }
 }
 

@@ -34,6 +34,8 @@ pub struct LiveHost {
     last_cfg: Mutex<Option<Config>>,
     /// Live was stopped with the screen off for a sleep or lock hold and starts again when the holds are released.
     off_stopped: AtomicBool,
+    /// The theme live shows (3.0): given to every pipeline when it starts and whenever it changes.
+    theme: Mutex<Option<crate::live::theme::ThemeLive>>,
 }
 
 impl Default for LiveHost {
@@ -46,6 +48,7 @@ impl Default for LiveHost {
             cfg_override: Mutex::new(None),
             last_cfg: Mutex::new(None),
             off_stopped: AtomicBool::new(false),
+            theme: Mutex::new(None),
         }
     }
 }
@@ -73,6 +76,14 @@ impl LiveHost {
             return c.fps;
         }
         std::fs::read_to_string(Config::path()).ok().and_then(|s| serde_json::from_str::<Config>(&s).ok()).map(|c| c.fps).unwrap_or(60)
+    }
+
+    /// The theme live shows: kept for pipelines that start later, and given to the running one without ending the stream.
+    pub fn set_theme(&self, t: crate::live::theme::ThemeLive) {
+        *self.theme.lock().unwrap() = Some(t.clone());
+        if let Some(p) = self.pipeline() {
+            p.set_theme(t);
+        }
     }
 
     pub fn running(&self) -> bool {
@@ -110,6 +121,9 @@ impl LiveHost {
         *self.last_cfg.lock().unwrap() = Some(cfg.clone());
         let sink = if self.no_device.load(SeqCst) { Sink::Null } else { Sink::Device };
         let p = Arc::new(Pipeline::start(&cfg, sink));
+        if let Some(t) = self.theme.lock().unwrap().clone() {
+            p.set_theme(t);
+        }
         // Started while a hold is set (a device task is running): stay paused until it is done.
         p.shared.paused.store(self.holds.load(SeqCst) != 0, SeqCst);
         *g = Some(p);

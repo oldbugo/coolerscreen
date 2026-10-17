@@ -6,7 +6,8 @@ fn main() {
         "missing_delete", "original_get", "original_patch", "original_delete", "original_reveal", "estimate", "loop_search", "loop_point",
         "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
         "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
-        "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect",
+        "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
+        "theme_preview", "theme_asset_add", "theme_apply",
     ];
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(cmds)))
         .expect("tauri build");

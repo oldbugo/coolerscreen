@@ -157,6 +157,7 @@ pub fn version_request(r: &EncodeReq) -> VersionRequest {
         blend: r.blend,
         budget_bytes: r.budget_bytes,
         max_seconds: Some(r.max_seconds),
+        overlay: r.overlay.clone(),
     }
 }
 
