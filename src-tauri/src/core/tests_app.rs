@@ -991,3 +991,41 @@ fn screen_fit_shift_is_saved_validated_and_part_of_the_base_key() {
     app.fit_cal(&json!({ "action": "end" })).unwrap();
     assert_eq!(app.live.effective_fit().top, 4, "the saved fit again");
 }
+
+#[test]
+fn v1_6_widgets_are_cleaned_and_saved() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "t.mp4");
+    let t = json!({ "widgets": [
+        { "id": "s", "type": "sensor", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "props": { "metric": "gpu.temp", "style": "ring", "history": 1, "thresholds": [{ "at": 90, "color": "#ff0000" }, { "at": 70, "color": "#ffaa00" }], "min": 100, "max": 10 } },
+        { "id": "p", "type": "slideshow", "x": 0.4, "y": 0.1, "w": 0.3, "h": 0.3, "props": { "files": ["assets/a.png", "../evil.png"], "seconds": 0 } },
+        { "id": "i", "type": "info", "x": 0.1, "y": 0.5, "w": 0.3, "h": 0.2, "props": { "kind": "countdown", "target": "garbage" } } ] });
+    let v = app.theme_set(&oid, &t).unwrap();
+    let w = &v["theme"]["widgets"];
+    assert_eq!(w[0]["props"]["style"], "ring");
+    assert_eq!(w[0]["props"]["history"], json!(5));
+    assert_eq!(w[0]["props"]["thresholds"][0]["at"], json!(70.0), "sorted");
+    assert!(w[0]["props"]["min"].is_null() && w[0]["props"]["max"].is_null());
+    assert_eq!(w[1]["props"]["files"], json!(["assets/a.png"]));
+    assert_eq!(w[1]["props"]["seconds"], json!(1));
+    assert!(w[2]["props"]["target"].is_null());
+    assert!(app.theme_set(&oid, &json!({ "widgets": [{ "type": "sensor" }, { "type": "hologram" }] })).is_err());
+}
+
+#[test]
+fn weather_place_and_unit_are_stored_in_settings() {
+    let (_d, app, _rec, _gallery) = setup();
+    let st = app.app_state();
+    assert_eq!(st["weather"], json!({ "place": null, "unit": "C" }), "nothing is set by itself");
+    assert!(!std::fs::read_to_string(app.settings.file()).unwrap_or_default().contains("weather"));
+    let st = app.weather_set_place(&json!({ "name": "Sydney", "lat": -33.8678, "lon": 151.2073, "tz": "Australia/Sydney", "country": "Australia" })).unwrap();
+    assert_eq!(st["weather"]["place"], json!({ "name": "Sydney", "lat": -33.8678, "lon": 151.2073, "tz": "Australia/Sydney" }));
+    let st = app.settings_update(&json!({ "weather": { "unit": "F" } })).unwrap();
+    assert_eq!(st["weather"]["unit"], "F");
+    assert_eq!(st["weather"]["place"]["name"], "Sydney", "the unit change keeps the place");
+    assert_eq!(app.settings_update(&json!({ "weather": { "unit": "K" } })).unwrap()["weather"]["unit"], "F", "an unknown unit is ignored");
+    assert!(app.weather_set_place(&json!({ "name": "Nowhere", "lat": 200, "lon": 0 })).is_err());
+    assert!(app.weather_search("a").is_err(), "too short, and no network call");
+    let st = app.weather_set_place(&Value::Null).unwrap();
+    assert!(st["weather"]["place"].is_null() && st["weather"]["unit"] == "F");
+}

@@ -105,7 +105,7 @@ impl App {
             "appVersion": self.app_version, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
-            "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(),
+            "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(), "weather": s.weather_value(),
             "budget": num(b.loop_bytes), "total": num(b.total), "budgetMeasured": b.measured, "capacityAt": b.capacity_at,
             "uploadRate": s.upload_rate().map(num).unwrap_or(json!(50000)),
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
@@ -123,6 +123,7 @@ impl App {
         let radius = body.get("cornerRadius").and_then(Value::as_f64).filter(|r| r.is_finite()).map(|r| r.clamp(0.0, 300.0).round());
         let guides = body.get("screenGuides").filter(|g| g.is_object()).map(|g| super::settings::guides_value(&crate::live::theme::Guides::from_value(g)));
         let snap = body.get("editor").and_then(|e| e["snap"].as_bool());
+        let w_unit = body.get("weather").and_then(|w| w["unit"].as_str()).filter(|u| *u == "C" || *u == "F").map(String::from);
         let fit_patch = body.get("screenFit").filter(|f| f.is_object()).cloned();
         self.settings.update(|s| {
             if let Some(r) = radius {
@@ -130,6 +131,11 @@ impl App {
             }
             if let Some(g) = guides {
                 s["screenGuides"] = g;
+            }
+            if let Some(u) = &w_unit {
+                let mut w = s.get("weather").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
+                w["unit"] = json!(u);
+                s["weather"] = w;
             }
             if let Some(b) = snap {
                 s["editor"] = json!({ "snap": b });

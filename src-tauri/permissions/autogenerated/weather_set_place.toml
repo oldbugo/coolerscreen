@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-weather-set-place"
+description = "Enables the weather_set_place command without any pre-configured scope."
+commands.allow = ["weather_set_place"]
+
+[[permission]]
+identifier = "deny-weather-set-place"
+description = "Denies the weather_set_place command without any pre-configured scope."
+commands.deny = ["weather_set_place"]

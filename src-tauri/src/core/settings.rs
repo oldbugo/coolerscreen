@@ -26,6 +26,11 @@ impl Settings {
     pub fn screen_fit(&self) -> super::fit::Fit {
         super::fit::Fit::from_value(self.0.get("screenFit").unwrap_or(&Value::Null))
     }
+    /// Weather: the place the user picked (None until then) and the default temperature unit ("C" or "F").
+    pub fn weather_value(&self) -> Value {
+        let w = self.0.get("weather").unwrap_or(&Value::Null);
+        json!({ "place": w.get("place").and_then(super::weather::clean_place).unwrap_or(Value::Null), "unit": if w.get("unit").and_then(Value::as_str) == Some("F") { "F" } else { "C" } })
+    }
     /// Gentle snapping in the theme editor (default on).
     pub fn editor_snap(&self) -> bool {
         self.0["editor"]["snap"] != false
@@ -310,6 +315,18 @@ pub fn sanitize(s: &Value) -> Settings {
     let fit = super::fit::Fit::from_value(s.get("screenFit").unwrap_or(&Value::Null));
     if !fit.is_zero() {
         out["screenFit"] = fit.to_value();
+    }
+    // 3.0 weather (v1.6): the chosen place and the default unit, written only when set.
+    let w = Settings(s.clone()).weather_value();
+    if !w["place"].is_null() || w["unit"] == "F" {
+        let mut o = json!({});
+        if !w["place"].is_null() {
+            o["place"] = w["place"].clone();
+        }
+        if w["unit"] == "F" {
+            o["unit"] = json!("F");
+        }
+        out["weather"] = o;
     }
     if s.get("editor").and_then(|e| e.get("snap")) == Some(&Value::Bool(false)) {
         out["editor"] = json!({ "snap": false });

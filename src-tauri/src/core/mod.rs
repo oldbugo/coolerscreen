@@ -24,6 +24,8 @@ pub mod settings;
 pub mod sources_adapter;
 pub mod theme;
 pub mod themes;
+pub mod weather;
+pub mod widget_props;
 #[cfg(test)]
 mod tests_app;
 

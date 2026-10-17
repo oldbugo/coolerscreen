@@ -91,7 +91,9 @@ fn main() {
             cc::theme_apply,
             cc::theme_set_base,
             cc::calibration_set,
-            cc::fit_cal
+            cc::fit_cal,
+            cc::weather_search,
+            cc::weather_set_place
         ])
         .setup(move |app| {
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));

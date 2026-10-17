@@ -12,7 +12,8 @@ use super::error::{CoreError, CoreResult};
 use super::gallery::{sanitize_name, unique_path};
 use super::js::{self, truthy, write_atomic};
 use super::scheduler::{JobHandle, Resources, TaskCtx, TaskSpec, Priority};
-use crate::live::theme::{Theme, ThemeLive, WIDGET_TYPES};
+use super::widget_props;
+use crate::live::theme::{Theme, ThemeLive};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -229,7 +230,7 @@ impl App {
         if t.widgets.len() > MAX_WIDGETS {
             return Err(CoreError::new(format!("A theme can hold at most {MAX_WIDGETS} items.")));
         }
-        if let Some(w) = t.widgets.iter().find(|w| !WIDGET_TYPES.contains(&w.kind.as_str())) {
+        if let Some(w) = t.widgets.iter().find(|w| !widget_props::TYPES.contains(&w.kind.as_str())) {
             return Err(CoreError::new(format!("Unknown item type \"{}\".", w.kind)));
         }
         for w in t.widgets.iter_mut().filter(|w| w.kind == "image") {
@@ -240,6 +241,9 @@ impl App {
                     o.insert("file".into(), json!(""));
                 }
             }
+        }
+        for w in t.widgets.iter_mut() {
+            widget_props::clean(&w.kind, &mut w.props); // sensor, date, weather, visualizer, slideshow, info (and the clock style)
         }
         t.base_version_id = self.load_theme(oid).base_version_id;
         normalize_groups(&mut t);

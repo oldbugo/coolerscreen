@@ -61,6 +61,8 @@
     "allow-theme-apply",
     "allow-theme-set-base",
     "allow-calibration-set",
-    "allow-fit-cal"
+    "allow-fit-cal",
+    "allow-weather-search",
+    "allow-weather-set-place"
   ]
 }

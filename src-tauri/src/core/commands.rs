@@ -392,5 +392,20 @@ pub const COMMANDS: &[&str] = &[
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
-    "theme_preview", "theme_asset_add", "theme_apply", "theme_set_base", "calibration_set", "fit_cal",
+    "theme_preview", "theme_asset_add", "theme_apply", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place",
 ];
+
+// ---------- weather place ----------
+
+/// `{ query }` -> `{ results: [{ name, country, admin1, lat, lon, tz }] }` (Open-Meteo geocoding; only when the user searches).
+#[tauri::command]
+pub async fn weather_search(core: State<'_, Core>, query: String) -> Result<Value, CoreError> {
+    run(&core, move |a| a.weather_search(&query)).await
+}
+
+/// `{ place: { name, lat, lon, tz } | null }` -> the app state.
+#[tauri::command]
+pub async fn weather_set_place(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let place = json_args(&request).get("place").cloned().unwrap_or(Value::Null);
+    run(&core, move |a| a.weather_set_place(&place)).await
+}
