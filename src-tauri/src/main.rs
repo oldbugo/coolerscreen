@@ -123,6 +123,16 @@ fn main() {
             } else if tray_only || c.settings.load().live_in_app() {
                 live_app::apply(app.handle(), tray_only);
             }
+            // Debug builds only: the tray's Quit path on a timer, for the fake-setup tests (a tray menu cannot be clicked from a script).
+            #[cfg(debug_assertions)]
+            if let Some(ms) = std::env::var("COOLERSCREEN_TEST_TRAY_QUIT_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
+                let h = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                    eprintln!("CS_TEST tray quit, tray_on={}", live_app::tray_on());
+                    live_app::quit_app(&h);
+                });
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -136,6 +146,7 @@ fn main() {
             }
         }
         RunEvent::Exit => {
+            live_app::arm_exit_watchdog("exit");
             app.state::<Core>().0.live.stop(); // ends the live stream: the screen plays its loop clip again
             app.state::<Core>().0.shutdown();
             // ffmpeg children (Job Object) and the media scratch files (raw intermediates)

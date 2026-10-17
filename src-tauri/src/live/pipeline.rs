@@ -629,9 +629,7 @@ impl Pipeline {
         self.shared.ending.store(if ending == Ending::ScreenOff { 1 } else { 0 }, Relaxed);
         self.shared.quit.store(true, Relaxed);
         let ts: Vec<_> = self.threads.lock().unwrap().drain(..).collect();
-        for t in ts {
-            let _ = t.join();
-        }
+        join_bounded(ts, STOP_JOIN_MAX);
     }
 
     /// Shutdown / end-of-session variant: no pauses between the end-of-stream writes, and it does not wait for the render
@@ -652,6 +650,28 @@ impl Pipeline {
             let _ = send.join();
         }
     }
+}
+
+/// The longest a normal stop waits for the engine threads. A thread stuck in a USB call (screen held by another program,
+/// or not answering) must never keep the app from quitting.
+pub const STOP_JOIN_MAX: Duration = Duration::from_millis(2500);
+
+/// Join threads, but give up (and leave them behind) once `max` has passed in total. Returns true if all ended.
+pub fn join_bounded(ts: Vec<std::thread::JoinHandle<()>>, max: Duration) -> bool {
+    let end = Instant::now() + max;
+    let mut all = true;
+    for t in ts {
+        while !t.is_finished() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if t.is_finished() {
+            let _ = t.join();
+        } else {
+            eprintln!("live: an engine thread did not end within {:?}; not waiting for it", max);
+            all = false;
+        }
+    }
+    all
 }
 
 /// How long live start waits for the first real background frame before it falls back to the gradient.
@@ -709,6 +729,18 @@ fn publish_video_info(v: &VideoBg, vc: &Arc<Mutex<Option<usize>>>, vd: &Arc<Mute
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn join_bounded_does_not_wait_for_a_stuck_thread() {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let stuck = std::thread::spawn(move || { let _ = rx.recv(); });
+        let quick = std::thread::spawn(|| {});
+        let t0 = std::time::Instant::now();
+        assert!(!super::join_bounded(vec![quick, stuck], std::time::Duration::from_millis(300)));
+        assert!(t0.elapsed() < std::time::Duration::from_millis(1500));
+        drop(tx);
+        assert!(super::join_bounded(vec![std::thread::spawn(|| {})], std::time::Duration::from_millis(300)));
+    }
+
     use super::*;
 
     fn quiet_cfg() -> Config {

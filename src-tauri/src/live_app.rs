@@ -279,6 +279,7 @@ fn remove_tray() {
 
 /// Tray "Quit": end the live stream (loop clip plays again), then exit.
 pub fn quit_app(app: &AppHandle) {
+    arm_exit_watchdog("tray Quit");
     let a = app.clone();
     std::thread::spawn(move || {
         host(&a).stop();
@@ -287,6 +288,20 @@ pub fn quit_app(app: &AppHandle) {
             remove_tray();
             b.exit(0);
         });
+    });
+}
+
+/// Safety net: if quitting has not finished within ~3 s (a stuck USB call, a lock, a thread that will not end), leave anyway.
+/// The screen then keeps playing whatever it has (its stored loop after the stream times out).
+pub fn arm_exit_watchdog(why: &'static str) {
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    if ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(3000));
+        eprintln!("quit ({why}) took more than 3 s: exiting anyway");
+        std::process::exit(0);
     });
 }
 
