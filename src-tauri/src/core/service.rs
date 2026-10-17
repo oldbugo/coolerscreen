@@ -262,22 +262,60 @@ impl App {
         Ok(json!({ "ok": true }))
     }
 
+    /// One line in device.log per change of the fit while the page is tuning (what the user tried).
+    fn log_fit_tuning(fit: super::fit::Fit, theme_mode: bool) {
+        static LAST: std::sync::Mutex<Option<(super::fit::Fit, bool)>> = std::sync::Mutex::new(None);
+        let mut g = LAST.lock().unwrap_or_else(|p| p.into_inner());
+        if *g != Some((fit, theme_mode)) {
+            *g = Some((fit, theme_mode));
+            crate::device::log(&format!(
+                "Screen fit tuning ({}): top {} right {} bottom {} left {} shiftX {} shiftY {}",
+                if theme_mode { "my theme" } else { "rulers" },
+                fit.top, fit.right, fit.bottom, fit.left, fit.shift_x, fit.shift_y
+            ));
+        }
+    }
+
     /// The Screen fit page's calibration: `{ action: "start" | "set" | "end", fit, sel }` (see commands::fit_cal). Nothing is saved
     /// here; Save goes through `settings_update { screenFit }`.
     pub fn fit_cal(&self, a: &Value) -> CoreResult<Value> {
         let fit = super::fit::Fit::from_value(a.get("fit").unwrap_or(&Value::Null));
         let sel = a.get("sel").and_then(Value::as_u64).unwrap_or(0).min(3) as usize;
+        // one at a time, in the order they arrive (a slow start must not finish after the end that followed it)
+        static ORDER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _order = ORDER.lock().unwrap_or_else(|p| p.into_inner());
         let live = self.live.clone();
-        match a.get("action").and_then(Value::as_str).unwrap_or("") {
-            "start" => live.calibrate_start(fit, sel),
-            "set" => {
+        // "rulers" (default): the ruler picture. "theme": the current theme's live picture with the unsaved fit, applied at once.
+        let theme_mode = a.get("mode").and_then(Value::as_str) == Some("theme");
+        let action = a.get("action").and_then(Value::as_str).unwrap_or("");
+        if action != "end" {
+            Self::log_fit_tuning(fit, theme_mode);
+        }
+        match (action, theme_mode) {
+            ("start", false) => {
+                live.tune_end();
+                live.calibrate_start(fit, sel)
+            }
+            ("set", false) => {
                 live.calibrate_set(fit, sel);
             }
-            "end" => live.calibrate_end(),
-            other => return Err(CoreError::new(format!("Unknown screen fit action: {other}"))),
+            ("start", true) => {
+                live.calibrate_end();
+                live.tune_start(fit)
+            }
+            ("set", true) => {
+                if !live.tune_set(fit) {
+                    live.tune_start(fit);
+                }
+            }
+            ("end", _) => {
+                live.calibrate_end();
+                live.tune_end();
+            }
+            (other, _) => return Err(CoreError::new(format!("Unknown screen fit action: {other}"))),
         }
         let st = live.status();
-        Ok(json!({ "calibrating": st["calibrating"], "connected": live.calibration_connected() }))
+        Ok(json!({ "calibrating": st["calibrating"], "tuning": st["tuning"], "connected": live.calibration_connected() || (st["tuning"] == json!(true) && st["connected"] == json!(true)) }))
     }
 
     // ---------- tuning: estimate, loops ----------

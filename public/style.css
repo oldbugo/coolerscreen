@@ -601,6 +601,9 @@ summary h3 { display: inline; color: var(--text); }
 .fit-row { display: grid; grid-template-columns: 96px 40px 56px 40px; gap: var(--s2); align-items: center; margin: var(--s1) 0; padding: var(--s1) var(--s2); border-radius: var(--r-sm); border: 1px solid transparent; }
 .fit-row.sel { border-color: var(--border-strong); background: var(--surface-2); }
 .fit-val { text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+.seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--r-sm); overflow: hidden; margin: var(--s2) 0; }
+.seg-btn { background: none; border: 0; padding: var(--s1) var(--s3); color: var(--text-muted); cursor: pointer; font: inherit; font-size: var(--fs-small); }
+.seg-btn.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
 .gcal-curve .gcal-row { margin-top: var(--s1); }
 .bs { flex: 1; padding: 22px 12px 4px; min-width: 0; }
 .bs-track { position: relative; height: 6px; background: var(--border-strong); border-radius: 3px; margin: 0 8px; }

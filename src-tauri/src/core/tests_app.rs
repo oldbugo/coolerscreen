@@ -663,14 +663,14 @@ fn a_themes_own_corner_radius_is_applied_to_the_base_and_marks_it_stale_when_cha
 #[test]
 fn screen_fit_is_validated_saved_and_reported() {
     let (_d, app, _rec, _gallery) = setup();
-    assert_eq!(app.app_state()["screenFit"], json!({ "top": 0, "right": 0, "bottom": 0, "left": 0 }), "default: nothing hidden");
+    assert_eq!(app.app_state()["screenFit"], json!({ "top": 0, "right": 0, "bottom": 0, "left": 0, "shiftX": 0, "shiftY": 0 }), "default: nothing hidden");
     let st = app.settings_update(&json!({ "screenFit": { "top": 4, "left": 9 } })).unwrap();
-    assert_eq!(st["screenFit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9 }));
+    assert_eq!(st["screenFit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9, "shiftX": 0, "shiftY": 0 }));
     // out of range / not a number: clamped to 0..200, garbage counts as 0; keys left out keep their value
     let st = app.settings_update(&json!({ "screenFit": { "top": 999, "right": -5, "bottom": "x", "left": 9.4 } })).unwrap();
-    assert_eq!(st["screenFit"], json!({ "top": 200, "right": 0, "bottom": 0, "left": 9 }));
+    assert_eq!(st["screenFit"], json!({ "top": 200, "right": 0, "bottom": 0, "left": 9, "shiftX": 0, "shiftY": 0 }));
     let st = app.settings_update(&json!({ "screenFit": { "right": 3 } })).unwrap();
-    assert_eq!(st["screenFit"], json!({ "top": 200, "right": 3, "bottom": 0, "left": 9 }));
+    assert_eq!(st["screenFit"], json!({ "top": 200, "right": 3, "bottom": 0, "left": 9, "shiftX": 0, "shiftY": 0 }));
     // on disk it is written only when something is hidden
     let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(app.settings.file()).unwrap()).unwrap();
     assert_eq!(on_disk["screenFit"]["left"], json!(9));
@@ -685,7 +685,7 @@ fn edge_offsets_from_the_tuning_tool_are_taken_over_once() {
     let old = d.path().join("home").join("edge-offsets.json");
     std::fs::write(&old, r#"{ "top": 4, "right": 0, "bottom": 0, "left": 9, "note": "from cs2 edge-tune" }"#).unwrap();
     app.startup();
-    assert_eq!(app.app_state()["screenFit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9 }));
+    assert_eq!(app.app_state()["screenFit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9, "shiftX": 0, "shiftY": 0 }));
     assert!(!old.exists(), "the file is set aside after the migration");
     assert!(d.path().join("home").join("edge-offsets.migrated.json").exists());
     // a later change is never overwritten by the old file
@@ -718,7 +718,7 @@ fn changing_the_screen_fit_makes_the_stored_base_stale() {
     assert_ne!(v["baseVersionId"].as_str().unwrap(), first);
     assert_eq!(v["baseStale"], json!(false));
     let made = app.lib.find_version(v["baseVersionId"].as_str().unwrap()).unwrap().1;
-    assert_eq!(made["notch"]["fit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9 }), "the version records the fit it was made with");
+    assert_eq!(made["notch"]["fit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9, "shiftX": 0, "shiftY": 0 }), "the version records the fit it was made with");
     let tl = app.theme_live_of(&oid, app.load_theme(&oid));
     assert_eq!(tl.base_fit, Some(super::fit::Fit::new(4, 0, 0, 9)), "the engine is told which fit the base has");
     // back to no fit: stale again, and the first version (made without a fit) is the one that matches
@@ -969,4 +969,25 @@ fn an_inflated_capacity_is_not_trusted() {
     app.settings.update(|s| s["slots"]["standby"] = json!({ "name": "x", "size": 10_662_507, "at": "t" })).unwrap();
     let ok = json!({ "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 792 } });
     assert_eq!(capacity_from(&ok, &app.settings.load()), Some(MAX_CAPACITY), "the true 11,605,065 is counted as the conservative value");
+}
+
+#[test]
+fn screen_fit_shift_is_saved_validated_and_part_of_the_base_key() {
+    let (_d, app, _rec, _g) = setup();
+    let st = app.settings_update(&json!({ "screenFit": { "top": 4, "left": 9, "shiftX": 3, "shiftY": -50 } })).unwrap();
+    assert_eq!(st["screenFit"]["shiftX"], json!(3));
+    assert_eq!(st["screenFit"]["shiftY"], json!(-20), "-20..20");
+    let k1 = app.app_state()["notchKey"].as_str().unwrap().to_string();
+    assert!(k1.ends_with("+fit:4.0.0.9.3.-20"), "{k1}");
+    app.settings_update(&json!({ "screenFit": { "shiftX": 0, "shiftY": 0 } })).unwrap();
+    let k2 = app.app_state()["notchKey"].as_str().unwrap().to_string();
+    assert!(k2.ends_with("+fit:4.0.0.9") && k1 != k2);
+    // fit_cal in "theme" mode tunes the live picture and logs; ending gives it back
+    let r = app.fit_cal(&json!({ "action": "start", "mode": "theme", "fit": { "top": 6, "shiftX": 2 } })).unwrap();
+    assert_eq!(r["tuning"], json!(true));
+    assert_eq!(app.live.effective_fit().top, 6);
+    app.fit_cal(&json!({ "action": "set", "mode": "theme", "fit": { "top": 7, "shiftX": 2 } })).unwrap();
+    assert_eq!(app.live.effective_fit().top, 7);
+    app.fit_cal(&json!({ "action": "end" })).unwrap();
+    assert_eq!(app.live.effective_fit().top, 4, "the saved fit again");
 }

@@ -150,7 +150,8 @@
 
       <section id="setFit" aria-labelledby="hFit">
         <h3 id="hFit">Screen fit</h3>
-        <p id="fitNote" class="muted small">The screen shows rulers. Move each red edge in until its first mark just shows.</p>
+        <div class="seg" role="group" aria-label="What the screen shows"><button type="button" id="fitModeRulers" class="seg-btn">Rulers</button><button type="button" id="fitModeTheme" class="seg-btn">My theme</button></div>
+        <p id="fitNote" class="muted small"></p>
         <div id="fitRows" class="fit-rows"></div>
         <div class="row"><button type="button" id="fitSave" class="btn primary">Save</button><button type="button" id="fitRevert" class="btn ghost">Undo</button></div>
         <p id="fitMsg" class="muted small" role="status"></p>

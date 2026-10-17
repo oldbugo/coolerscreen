@@ -2594,26 +2594,37 @@ $('gcSave').onclick = async () => {
 // Settings > Screen fit: how many pixels the panel hides at each edge. While this section is in use the screen shows rulers
 // (fit_cal); one press of - or + moves an edge by one sent pixel (about 1.4 screen pixels), the numbers are screen pixels.
 // Leaving the section, or closing the settings, gives the screen back.
-const FC = { saved: { top: 0, right: 0, bottom: 0, left: 0 }, cur: { top: 0, right: 0, bottom: 0, left: 0 }, sel: 0, on: false, t: 0 };
-const FIT_EDGES = [['top', 'Top'], ['right', 'Right'], ['bottom', 'Bottom'], ['left', 'Left']];
-const fitSent = v => Math.floor((v * 7 + 5) / 10);   // screen px -> sent px (x 0.7, rounded)
-const fitScreen = p => Math.round(p * 10 / 7);        // sent px -> screen px
+const FIT_KEYS = ['top', 'right', 'bottom', 'left', 'shiftX', 'shiftY'];
+const FIT0 = { top: 0, right: 0, bottom: 0, left: 0, shiftX: 0, shiftY: 0 };
+const FC = { saved: { ...FIT0 }, cur: { ...FIT0 }, sel: 0, on: false, t: 0, mode: lsGet('cs.fitMode') === 'theme' ? 'theme' : 'rulers' };
+// [key, label, hint, shift?]: the four hidden edges, then the whole-picture shift (right and down are positive)
+const FIT_ROWS = [['top', 'Top'], ['right', 'Right'], ['bottom', 'Bottom'], ['left', 'Left'],
+  ['shiftY', 'Up / down', 'Moves the whole picture: − up, + down', true], ['shiftX', 'Left / right', 'Moves the whole picture: − left, + right', true]];
+const fitSent = v => Math.sign(v) * Math.floor((Math.abs(v) * 7 + 5) / 10);   // screen px -> sent px (x 0.7, rounded)
+const fitScreen = p => Math.sign(p) * Math.round(Math.abs(p) * 10 / 7);        // sent px -> screen px
 function loadFitForm() {
-  FC.saved = { top: 0, right: 0, bottom: 0, left: 0, ...((S.app && S.app.screenFit) || {}) };
+  FC.saved = { ...FIT0, ...((S.app && S.app.screenFit) || {}) };
   FC.cur = { ...FC.saved };
   renderFitRows();
+  paintFitMode();
 }
 function renderFitRows() {
   const rows = $('fitRows');
   rows.textContent = '';
-  FIT_EDGES.forEach(([key, label], i) => {
-    const step = d => { FC.sel = i; FC.cur[key] = clamp(fitScreen(clamp(fitSent(FC.cur[key]) + d, 0, 140)), 0, 200); $('fitMsg').textContent = ''; paintFit(); fitSend(); };
+  FIT_ROWS.forEach(([key, label, hint, isShift], i) => {
+    const step = d => {
+      FC.sel = Math.min(i, 3);
+      const lim = isShift ? [-14, 14] : [0, 140]; // sent px
+      FC.cur[key] = clamp(fitScreen(clamp(fitSent(FC.cur[key]) + d, lim[0], lim[1])), isShift ? -20 : 0, isShift ? 20 : 200);
+      $('fitMsg').textContent = '';
+      paintFit(); fitSend();
+    };
     const minus = el('button', { type: 'button', class: 'iconbtn', 'aria-label': `${label} less`, text: '−' });
     const plus = el('button', { type: 'button', class: 'iconbtn', 'aria-label': `${label} more`, text: '+' });
     minus.onclick = () => step(-1);
     plus.onclick = () => step(1);
-    const row = el('div', { class: 'fit-row' }, el('span', { class: 'small', text: label }), minus, el('output', { class: 'fit-val', 'data-key': key }), plus);
-    row.addEventListener('focusin', () => { if (FC.sel !== i) { FC.sel = i; paintFit(); fitSend(); } });
+    const row = el('div', { class: 'fit-row', title: hint || '' }, el('span', { class: 'small', text: label }), minus, el('output', { class: 'fit-val' }), plus);
+    row.addEventListener('focusin', () => { if (!isShift && FC.sel !== i) { FC.sel = i; paintFit(); fitSend(); } });
     rows.append(row);
   });
   paintFit();
@@ -2621,15 +2632,31 @@ function renderFitRows() {
 // The numbers and the marked row, in place (so the focused button stays).
 function paintFit() {
   [...$('fitRows').children].forEach((row, i) => {
-    row.classList.toggle('sel', FC.sel === i);
-    row.querySelector('output').textContent = String(FC.cur[FIT_EDGES[i][0]]);
+    row.classList.toggle('sel', FC.mode === 'rulers' && FC.sel === i);
+    row.querySelector('output').textContent = String(FC.cur[FIT_ROWS[i][0]]);
   });
 }
-function fitSend() {
+function paintFitMode() {
+  $('fitModeRulers').classList.toggle('on', FC.mode === 'rulers');
+  $('fitModeTheme').classList.toggle('on', FC.mode === 'theme');
+  $('fitModeRulers').setAttribute('aria-pressed', String(FC.mode === 'rulers'));
+  $('fitModeTheme').setAttribute('aria-pressed', String(FC.mode === 'theme'));
+  $('fitNote').textContent = FC.mode === 'rulers' ? 'The screen shows rulers. Move each red edge in until its first mark just shows.' : 'The screen shows your theme with these values, live. Adjust until it looks right, then Save.';
+}
+function fitMode(m) {
+  FC.mode = m;
+  lsSet('cs.fitMode', m);
+  paintFitMode(); paintFit();
+  FC.on = true;
+  fitSend(0);
+}
+$('fitModeRulers').onclick = () => fitMode('rulers');
+$('fitModeTheme').onclick = () => fitMode('theme');
+function fitSend(delay = 25) {
   clearTimeout(FC.t);
   FC.t = setTimeout(() => {
-    call('fit_cal', { action: 'start', fit: FC.cur, sel: FC.sel }).then(r => { FC.on = !!r.calibrating; }).catch(e => { $('fitMsg').textContent = e.message; });
-  }, 60);
+    call('fit_cal', { action: 'start', mode: FC.mode, fit: FC.cur, sel: FC.sel }).then(r => { FC.on = !!(r.calibrating || r.tuning); }).catch(e => { $('fitMsg').textContent = e.message; });
+  }, delay);
 }
 function fitEnd() {
   clearTimeout(FC.t);
@@ -2645,7 +2672,7 @@ $('fitRevert').onclick = () => { FC.cur = { ...FC.saved }; paintFit(); fitSend()
 $('fitSave').onclick = async () => {
   try {
     S.app = await call('settings_update', { screenFit: FC.cur });
-    FC.saved = { ...S.app.screenFit };
+    FC.saved = { ...FIT0, ...S.app.screenFit };
     $('fitMsg').textContent = 'Saved. Store your theme again to update the loop.';
     await loadOriginals().catch(() => {});
     if (typeof themes !== 'undefined') themes.appChanged();

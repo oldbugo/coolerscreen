@@ -130,7 +130,7 @@ pub fn parse_mask(v: &Value) -> Mask {
         Some("circle") => MaskMode::Circle,
         _ => MaskMode::Off,
     };
-    let fit = crate::core::fit::Fit::from_value(v.get("fit").unwrap_or(&Value::Null)).as_array();
+    let fit = crate::core::fit::Fit::from_value(v.get("fit").unwrap_or(&Value::Null));
     Mask { mode, band, circle, fit }
 }
 fn parse_frame(v: &Value) -> Frame {

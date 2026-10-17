@@ -123,8 +123,8 @@ impl Rect {
 pub fn draw(fit: Fit, sel: usize) -> Vec<u8> {
     let sel = sel.min(3);
     let mut c = Pic::new();
-    let (x0, y0, x1, y1) = fit.rect(LW, LH);
-    let r = Rect { x0: x0 as i64, y0: y0 as i64, x1: x1 as i64, y1: y1 as i64 };
+    let (x0, y0, x1, y1) = fit.placed(LW, LH); // with the shift; may reach beyond the picture
+    let r = Rect { x0, y0, x1, y1 };
     // rulers: three per edge; a tick every 2 sent px (alternating colours) for 60 px, a long white tick with a number every 10
     for e in 0..4 {
         let (a0, a1) = r.span(e);

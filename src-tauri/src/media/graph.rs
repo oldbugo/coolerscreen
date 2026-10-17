@@ -84,11 +84,11 @@ pub struct Mask {
     /// Screen fit: screen px (2400x1080 space) the panel hides at the top, right, bottom and left edge; 0 = none.
     /// The picture is scaled into the visible rectangle before the notch and the corners are applied.
     #[serde(default)]
-    pub fit: [u32; 4],
+    pub fit: crate::core::fit::Fit,
 }
 impl Mask {
     pub fn band(edge: Edge, px: f64) -> Mask {
-        Mask { mode: MaskMode::Band, band: Some(Band { edge, px }), circle: None, fit: [0; 4] }
+        Mask { mode: MaskMode::Band, band: Some(Band { edge, px }), circle: None, fit: crate::core::fit::Fit::default() }
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -168,15 +168,20 @@ pub fn mask_graph(mask: &Mask) -> String {
 /// [base] -> [basef]: the screen fit. The picture is scaled into the visible rectangle (the panel minus the hidden edge
 /// strips) and padded with black to the full canvas. The padding is done in RGB so the strips are exact to the pixel
 /// (4:2:0 video can only pad on even coordinates). None when nothing is hidden.
-pub fn fit_graph(fit: [u32; 4], flags: &str) -> Option<String> {
-    if fit == [0; 4] {
+pub fn fit_graph(fit: crate::core::fit::Fit, flags: &str) -> Option<String> {
+    if fit.is_zero() {
         return None;
     }
-    let (x0, y0, x1, y1) = crate::core::fit::Fit::new(fit[0], fit[1], fit[2], fit[3]).rect(W as usize, H as usize);
+    let (x0, y0, x1, y1) = fit.rect(W as usize, H as usize);
+    let (rw, rh) = ((x1 - x0) as i64, (y1 - y0) as i64);
+    // the picture goes where the shift puts it; what falls outside the canvas is cut off first (pad cannot start before 0)
+    let (px0, py0, ..) = fit.placed(W as usize, H as usize);
+    let (vx0, vy0) = (px0.max(0), py0.max(0));
+    let (vx1, vy1) = ((px0 + rw).min(W as i64), (py0 + rh).min(H as i64));
+    let (vw, vh) = ((vx1 - vx0).max(1), (vy1 - vy0).max(1));
+    let crop = if (vw, vh) != (rw, rh) { format!("crop={vw}:{vh}:{}:{},", vx0 - px0, vy0 - py0) } else { String::new() };
     Some(format!(
-        "[base]scale={}:{}:flags={flags},format=gbrp,pad={W}:{H}:{x0}:{y0}:color=black,format=yuv420p,setsar=1[basef]",
-        x1 - x0,
-        y1 - y0
+        "[base]scale={rw}:{rh}:flags={flags},{crop}format=gbrp,pad={W}:{H}:{vx0}:{vy0}:color=black,format=yuv420p,setsar=1[basef]"
     ))
 }
 
@@ -455,7 +460,7 @@ mod tests {
             frame_graph(&Frame { zoom: 1.25, x: 0.2, y: 0.7 }, W, H, "lanczos"),
             "scale=w='2*trunc(iw*1.25*max(2400/iw\\,1080/ih)/2)':h='2*trunc(ih*1.25*max(2400/iw\\,1080/ih)/2)':flags=lanczos,pad=w='max(iw\\,2400)':h='max(ih\\,1080)':x='2*trunc((ow-iw)*0.2/2)':y='2*trunc((oh-ih)*0.7/2)':color=black,crop=w=2400:h=1080:x='2*trunc((iw-2400)*0.2/2)':y='2*trunc((ih-1080)*0.7/2)'"
         );
-        let circle = Mask { mode: MaskMode::Circle, band: None, circle: Some(Circle { cx: 100.5, cy: 540.0, r: 40.0, feather: 3.0 }), fit: [0; 4] };
+        let circle = Mask { mode: MaskMode::Circle, band: None, circle: Some(Circle { cx: 100.5, cy: 540.0, r: 40.0, feather: 3.0 }), fit: crate::core::fit::Fit::default() };
         assert_eq!(
             mask_graph(&circle),
             "[base]split[a][b];[b]crop=92:90:54:494,format=gbrp,geq=r='r(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)':g='g(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)':b='b(X,Y)*clip((hypot(X+54-100.5,Y+494-540)-40)/3,0,1)',format=yuv420p[c];[a][c]overlay=54:494,format=yuv420p[m]"
@@ -515,7 +520,7 @@ mod fit_tests {
     #[test]
     fn no_fit_leaves_the_graph_as_it_was() {
         let m = Mask::band(Edge::Left, 96.0);
-        assert_eq!(fit_graph([0; 4], "lanczos"), None);
+        assert_eq!(fit_graph(crate::core::fit::Fit::default(), "lanczos"), None);
         assert!(!device_graph(&base(), &m, true).contains("basef"));
     }
 
@@ -523,7 +528,7 @@ mod fit_tests {
     fn fit_scales_into_the_visible_rectangle_before_the_notch_and_corners() {
         // top 4, right 0, bottom 0, left 9: the visible rectangle is x 9..2400, y 4..1080 = 2391 x 1076
         let mut m = Mask::band(Edge::Left, 96.0);
-        m.fit = [4, 0, 0, 9];
+        m.fit = crate::core::fit::Fit::new(4, 0, 0, 9);
         assert_eq!(
             fit_graph(m.fit, "lanczos").unwrap(),
             "[base]scale=2391:1076:flags=lanczos,format=gbrp,pad=2400:1080:9:4:color=black,format=yuv420p,setsar=1[basef]"
@@ -536,7 +541,7 @@ mod fit_tests {
         assert!(g.contains("[basef]drawbox=x=0:y=0:w=96:h=1080:color=black:t=fill[m]"), "the notch band stays where the panel is: {g}");
         assert!(g.ends_with("[mc]transpose=1,format=yuvj420p[out]"));
         // the circle mask reads the fitted picture too
-        let c = Mask { mode: MaskMode::Circle, band: None, circle: Some(Circle { cx: 100.0, cy: 540.0, r: 40.0, feather: 0.0 }), fit: [4, 0, 0, 9] };
+        let c = Mask { mode: MaskMode::Circle, band: None, circle: Some(Circle { cx: 100.0, cy: 540.0, r: 40.0, feather: 0.0 }), fit: crate::core::fit::Fit::new(4, 0, 0, 9) };
         assert!(device_graph(&base(), &c, false).contains("[basef]split[a][b]"));
     }
 
@@ -544,11 +549,11 @@ mod fit_tests {
     fn fit_is_part_of_the_request_key_through_the_mask() {
         let a = Mask::band(Edge::Left, 96.0);
         let mut b = a;
-        b.fit = [4, 0, 0, 9];
+        b.fit = crate::core::fit::Fit::new(4, 0, 0, 9);
         assert_ne!(format!("{a:?}"), format!("{b:?}"));
         let j = serde_json::json!({ "mode": "band", "band": { "edge": "left", "px": 96 }, "fit": { "top": 4, "right": 0, "bottom": 0, "left": 9 } });
-        assert_eq!(super::super::core_engine::parse_mask(&j).fit, [4, 0, 0, 9]);
-        assert_eq!(super::super::core_engine::parse_mask(&serde_json::json!({ "mode": "off" })).fit, [0; 4]);
+        assert_eq!(super::super::core_engine::parse_mask(&j).fit, crate::core::fit::Fit::new(4, 0, 0, 9));
+        assert_eq!(super::super::core_engine::parse_mask(&serde_json::json!({ "mode": "off" })).fit, crate::core::fit::Fit::default());
     }
 }
 
@@ -567,7 +572,7 @@ mod fit_ffmpeg_tests {
         let dir = tempfile::tempdir().unwrap();
         let (jpg, raw) = (dir.path().join("f.jpg"), dir.path().join("f.raw"));
         let mut m = Mask::band(Edge::Left, 96.0);
-        m.fit = [4, 0, 0, 9];
+        m.fit = crate::core::fit::Fit::new(4, 0, 0, 9);
         let b = Base { start: 0.0, length: 1.0, blend: 0.0, fps: 18, src_fps: None, is_image: false, frame: Frame::default(), detail: 0.0, canvas: (W, H), flags: LANCZOS.into(), head: String::new() };
         let g = device_graph(&b, &m, false);
         let ok = |o: std::process::Output| o.status.success();
@@ -589,7 +594,7 @@ mod fit_ffmpeg_tests {
         }
         // landscape columns: the notch band hides x < 96 anyway, so check the fit on the right side of the band with a no-notch run
         let mut m2 = Mask::default();
-        m2.fit = [4, 0, 0, 9];
+        m2.fit = crate::core::fit::Fit::new(4, 0, 0, 9);
         let g2 = device_graph(&b, &m2, false);
         let made = std::process::Command::new(&ff)
             .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=white:s=640x360:d=1:r=18", "-filter_complex", &g2, "-map", "[out]", "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "2"])
@@ -605,5 +610,72 @@ mod fit_ffmpeg_tests {
             let v = at(row, 500);
             assert_eq!(v < 40, want_black, "landscape column {row} = {v}");
         }
+    }
+}
+
+#[cfg(test)]
+mod shift_graph_tests {
+    use super::*;
+    use crate::core::fit::Fit;
+
+    #[test]
+    fn a_shift_moves_the_scaled_picture_and_cuts_what_leaves_the_canvas() {
+        let f = Fit::new(4, 0, 0, 9).with_shift(8, -6);
+        assert_eq!(
+            fit_graph(f, "lanczos").unwrap(),
+            "[base]scale=2391:1076:flags=lanczos,crop=2383:1074:0:2,format=gbrp,pad=2400:1080:17:0:color=black,format=yuv420p,setsar=1[basef]"
+        );
+        // a shift without insets
+        assert_eq!(
+            fit_graph(Fit::default().with_shift(-5, 3), "lanczos").unwrap(),
+            "[base]scale=2400:1080:flags=lanczos,crop=2395:1077:5:0,format=gbrp,pad=2400:1080:0:3:color=black,format=yuv420p,setsar=1[basef]"
+        );
+        // inside the canvas nothing is cut
+        assert_eq!(
+            fit_graph(Fit::new(10, 10, 10, 10).with_shift(5, 5), "lanczos").unwrap(),
+            "[base]scale=2380:1060:flags=lanczos,format=gbrp,pad=2400:1080:15:15:color=black,format=yuv420p,setsar=1[basef]"
+        );
+        // the fit without a shift is unchanged from before
+        assert_eq!(
+            fit_graph(Fit::new(4, 0, 0, 9), "lanczos").unwrap(),
+            "[base]scale=2391:1076:flags=lanczos,format=gbrp,pad=2400:1080:9:4:color=black,format=yuv420p,setsar=1[basef]"
+        );
+    }
+
+    /// A real conversion with inset 4/0/0/9 and a shift of 8 right, 6 up: landscape columns 0..16 and the last 6 rows are black,
+    /// the top row is covered (stored rotated clockwise: landscape (x, y) -> row x, column 1079 - y).
+    #[test]
+    fn a_real_conversion_with_a_shift() {
+        let ff = crate::media::ffmpeg::locate();
+        if !ff.exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (jpg, raw) = (dir.path().join("f.jpg"), dir.path().join("f.raw"));
+        let mut m = Mask::default();
+        m.fit = Fit::new(4, 0, 0, 9).with_shift(8, -6);
+        let b = Base { start: 0.0, length: 1.0, blend: 0.0, fps: 18, src_fps: None, is_image: false, frame: Frame::default(), detail: 0.0, canvas: (W, H), flags: LANCZOS.into(), head: String::new() };
+        let g = device_graph(&b, &m, false);
+        let made = std::process::Command::new(&ff)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=white:s=640x360:d=1:r=18", "-filter_complex", &g, "-map", "[out]", "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "2"])
+            .arg(&jpg)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let dec = std::process::Command::new(&ff).args(["-v", "error", "-y", "-i"]).arg(&jpg).args(["-f", "rawvideo", "-pix_fmt", "gray"]).arg(&raw).output().unwrap();
+        assert!(dec.status.success());
+        let d = std::fs::read(&raw).unwrap();
+        assert_eq!(d.len(), 1080 * 2400);
+        let at = |row: usize, col: usize| d[row * 1080 + col];
+        let black = |v: u8| v < 40;
+        // landscape y = 500 -> column 579; landscape x -> row
+        assert!(black(at(16, 579)) && !black(at(17, 579)), "left edge at landscape x = 17: {} {}", at(16, 579), at(17, 579));
+        // landscape x = 500 -> row 500; the top covered (y = 0 -> col 1079), bottom rows y = 1074.. black (cols 5..0)
+        assert!(!black(at(500, 1079)), "top row covered");
+        assert!(!black(at(500, 1079 - 1073)), "last white row y = 1073: {}", at(500, 6));
+        assert!(black(at(500, 1079 - 1074)), "first black row y = 1074: {}", at(500, 5));
+        assert!(black(at(500, 0)));
+        // the right side runs off the canvas: the last landscape column is covered
+        assert!(!black(at(2399, 579)));
     }
 }

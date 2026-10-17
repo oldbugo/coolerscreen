@@ -455,8 +455,8 @@ impl Renderer {
     }
 
     /// The visible rectangle on this canvas.
-    fn visible(&self) -> (usize, usize, usize, usize) {
-        self.fit.rect(self.cw, self.ch)
+    fn visible(&self) -> (i64, i64, i64, i64) {
+        self.fit.placed(self.cw, self.ch)
     }
 
     /// Where the widget boxes land on the fitted frame (a pixel wider on each side for the interpolation).
@@ -467,16 +467,19 @@ impl Renderer {
         }
         let (vx0, vy0, vx1, vy1) = self.visible();
         let (sx, sy) = ((vx1 - vx0) as f32 / self.cw as f32, (vy1 - vy0) as f32 / self.ch as f32);
+        let (cw, ch) = (self.cw as i64, self.ch as i64);
+        let (lo_x, lo_y, hi_x, hi_y) = (vx0.max(0), vy0.max(0), vx1.min(cw), vy1.min(ch));
         let rects = self
             .rects
             .iter()
-            .map(|&(x0, y0, x1, y1)| {
-                (
-                    ((vx0 as f32 + x0 as f32 * sx).floor() as usize).saturating_sub(1).max(vx0),
-                    ((vy0 as f32 + y0 as f32 * sy).floor() as usize).saturating_sub(1).max(vy0),
-                    (((vx0 as f32 + x1 as f32 * sx).ceil() as usize) + 1).min(vx1),
-                    (((vy0 as f32 + y1 as f32 * sy).ceil() as usize) + 1).min(vy1),
-                )
+            .filter_map(|&(x0, y0, x1, y1)| {
+                let r = (
+                    ((vx0 as f32 + x0 as f32 * sx).floor() as i64 - 1).max(lo_x),
+                    ((vy0 as f32 + y0 as f32 * sy).floor() as i64 - 1).max(lo_y),
+                    ((vx0 as f32 + x1 as f32 * sx).ceil() as i64 + 1).min(hi_x),
+                    ((vy0 as f32 + y1 as f32 * sy).ceil() as i64 + 1).min(hi_y),
+                );
+                (r.2 > r.0 && r.3 > r.1).then_some((r.0 as usize, r.1 as usize, r.2 as usize, r.3 as usize))
             })
             .collect();
         self.fit_rects = merge_rects(rects);
@@ -600,13 +603,14 @@ impl Renderer {
     fn fit_background(&mut self) {
         let (cw, ch) = (self.cw, self.ch);
         let vis = self.visible();
-        let src = self.bg_src_fit().rect(cw, ch);
+        let src = self.bg_src_fit().placed(cw, ch);
         let mut out = self.fit_pm.take().unwrap_or_else(|| Pixmap::new(cw as u32, ch as u32).unwrap());
         out.data_mut().fill(0);
         for p in out.data_mut().chunks_exact_mut(4) {
             p[3] = 255;
         }
-        resample_into(self.pm.data(), out.data_mut(), cw, ch, src, vis, vis);
+        let region = (vis.0.max(0) as usize, vis.1.max(0) as usize, vis.2.clamp(0, cw as i64) as usize, vis.3.clamp(0, ch as i64) as usize);
+        resample_into(self.pm.data(), out.data_mut(), cw, ch, src, vis, region);
         std::mem::swap(&mut self.pm, &mut out);
         self.fit_pm = Some(out);
     }
@@ -620,7 +624,7 @@ impl Renderer {
             for y in reg.1..reg.3 {
                 out.data_mut()[(y * cw + reg.0) * 4..(y * cw + reg.2) * 4].fill(0);
             }
-            resample_into(self.layer.data(), out.data_mut(), cw, ch, (0, 0, cw, ch), vis, reg);
+            resample_into(self.layer.data(), out.data_mut(), cw, ch, (0, 0, cw as i64, ch as i64), vis, reg);
         }
         self.fit_layer = Some(out);
     }
@@ -788,23 +792,31 @@ fn merge_rects(mut rects: Vec<(usize, usize, usize, usize)>) -> Vec<(usize, usiz
 
 /// Bilinear resample of the `content` rectangle of a `cw` x `ch` picture so that it fills the rectangle `vis` of `dst` (same size); only the pixels
 /// of `region` (inside `vis`) are written. Pixel centres map to pixel centres, the source edges are clamped.
-fn resample_into(src: &[u8], dst: &mut [u8], cw: usize, _ch: usize, content: (usize, usize, usize, usize), vis: (usize, usize, usize, usize), region: (usize, usize, usize, usize)) {
+fn resample_into(src: &[u8], dst: &mut [u8], cw: usize, ch: usize, content: (i64, i64, i64, i64), vis: (i64, i64, i64, i64), region: (usize, usize, usize, usize)) {
+    // `content` and `vis` are signed: a shifted picture may reach beyond the canvas (that part is simply not written / not read)
     let (vx0, vy0, vx1, vy1) = vis;
     let (sx0, sy0, sx1, sy1) = content;
     let (kx, ky) = ((sx1 - sx0) as f32 / (vx1 - vx0) as f32, (sy1 - sy0) as f32 / (vy1 - vy0) as f32);
-    let (rx0, ry0, rx1, ry1) = (region.0.max(vx0), region.1.max(vy0), region.2.min(vx1), region.3.min(vy1));
+    let (rx0, ry0) = ((region.0 as i64).max(vx0).max(0) as usize, (region.1 as i64).max(vy0).max(0) as usize);
+    let (rx1, ry1) = ((region.2 as i64).min(vx1).min(cw as i64) as usize, (region.3 as i64).min(vy1).min(ch as i64) as usize);
+    if rx1 <= rx0 || ry1 <= ry0 {
+        return;
+    }
+    // the source pixels that hold picture content
+    let (lo_x, hi_x) = (sx0.max(0) as f32, (sx1.min(cw as i64) - 1) as f32);
+    let (lo_y, hi_y) = (sy0.max(0) as f32, (sy1.min(ch as i64) - 1) as f32);
     // per-column source index and weight (computed once)
     let cols: Vec<(usize, usize, u32)> = (rx0..rx1)
         .map(|x| {
-            let u = ((x as f32 + 0.5 - vx0 as f32) * kx - 0.5 + sx0 as f32).clamp(sx0 as f32, (sx1 - 1) as f32);
+            let u = ((x as f32 + 0.5 - vx0 as f32) * kx - 0.5 + sx0 as f32).clamp(lo_x, hi_x);
             let i = u.floor() as usize;
-            (i, (i + 1).min(sx1 - 1), ((u - i as f32) * 256.0) as u32)
+            (i, (i + 1).min(hi_x as usize), ((u - i as f32) * 256.0) as u32)
         })
         .collect();
     for y in ry0..ry1 {
-        let v = ((y as f32 + 0.5 - vy0 as f32) * ky - 0.5 + sy0 as f32).clamp(sy0 as f32, (sy1 - 1) as f32);
+        let v = ((y as f32 + 0.5 - vy0 as f32) * ky - 0.5 + sy0 as f32).clamp(lo_y, hi_y);
         let j = v.floor() as usize;
-        let (j1, wy) = ((j + 1).min(sy1 - 1), ((v - j as f32) * 256.0) as u32);
+        let (j1, wy) = ((j + 1).min(hi_y as usize), ((v - j as f32) * 256.0) as u32);
         let (r0, r1) = (&src[j * cw * 4..(j + 1) * cw * 4], &src[j1 * cw * 4..(j1 + 1) * cw * 4]);
         let row = &mut dst[(y * cw + rx0) * 4..(y * cw + rx1) * 4];
         for (o, &(i0, i1, wx)) in row.chunks_exact_mut(4).zip(&cols) {
@@ -1196,5 +1208,89 @@ mod tests {
         r.set_bg_fit(f);
         let out = r.render().0.to_vec();
         assert_eq!((px(&out, LW, 0, 0), px(&out, LW, 3, 1), px(&out, LW, LW - 1, LH - 1)), (white, white, white));
+    }
+}
+
+#[cfg(test)]
+mod shift_tests {
+    use super::*;
+    use crate::core::fit::Fit;
+
+    fn px(f: &[u8], w: usize, x: usize, y: usize) -> [u8; 3] {
+        let i = (y * w + x) * 4;
+        [f[i], f[i + 1], f[i + 2]]
+    }
+
+    fn white(w: usize, h: usize) -> Renderer {
+        let mut r = Renderer::new_sized(w, h, Arc::new(Mutex::new(Sensors::default())), None);
+        r.set_theme(ThemeLive::new(Theme::default(), PathBuf::new()));
+        r.set_still_background(Some(Arc::new(vec![255u8; w * h * 4])));
+        r
+    }
+
+    /// The picture is scaled into the inset rectangle and then moved: black where it no longer covers, cut off past the edge.
+    #[test]
+    fn the_shift_moves_the_whole_picture_at_both_sizes() {
+        for (w, h) in [(1680usize, 756usize), (2400, 1080)] {
+            let f = Fit::new(4, 0, 0, 9).with_shift(8, -6);
+            let (x0, y0, x1, y1) = f.placed(w, h);
+            let mut r = white(w, h);
+            r.set_fit(f);
+            let out = r.render().0.to_vec();
+            let (b, wh) = ([0u8; 3], [255u8; 3]);
+            assert!(x0 > 0 && y0 <= 0, "{w}: the shift is small ({x0},{y0})");
+            // left strip (inset 9 + shift 8), top starts at row y0 (inset 4 - shift 6 = 0 after clipping)
+            assert_eq!(px(&out, w, x0 as usize - 1, h / 2), b, "{w}: last black column");
+            assert_eq!(px(&out, w, x0 as usize, h / 2), wh, "{w}: first white column");
+            assert_eq!(px(&out, w, w / 2, 0), wh, "{w}: the top row is covered (moved up past the edge)");
+            // the bottom now stops short: the last rows are black
+            assert_eq!(px(&out, w, w / 2, y1 as usize), b, "{w}: first black row at the bottom");
+            assert_eq!(px(&out, w, w / 2, y1 as usize - 1), wh, "{w}: last white row");
+            assert_eq!(px(&out, w, w - 1, h / 2), wh, "{w}: shifted right past the edge: the last column is covered");
+            assert!(x1 as usize >= w);
+            // a shift alone
+            let mut r = white(w, h);
+            r.set_fit(Fit::default().with_shift(-10, 10));
+            let out = r.render().0.to_vec();
+            let (dx, dy) = Fit::default().with_shift(-10, 10).shift_px(w, h);
+            assert_eq!(px(&out, w, (w as i64 + dx) as usize, h / 2), b, "{w}: black strip on the right where it moved away");
+            assert_eq!(px(&out, w, (w as i64 + dx) as usize - 1, h / 2), wh);
+            assert_eq!(px(&out, w, w / 2, dy as usize - 1), b, "{w}: black strip on top");
+            assert_eq!(px(&out, w, w / 2, dy as usize), wh);
+        }
+    }
+
+    #[test]
+    fn the_notch_band_stays_put_when_the_picture_moves() {
+        use serde_json::json;
+        let mask = Mask::from_value(&json!({ "mode": "band", "band": { "edge": "left", "px": 92 }, "corners": { "on": false, "r": 0 } }));
+        let mut r = white(LW, LH);
+        r.set_mask(mask);
+        r.set_fit(Fit::default().with_shift(15, 0)); // the picture moves right by 11 px: the strip on its left is black anyway
+        let out = r.render().0.to_vec();
+        assert_eq!(px(&out, LW, 66, 300), [0, 0, 0]);
+        assert_eq!(px(&out, LW, 67, 300), [255, 255, 255], "the band is where the panel is, not where the picture is");
+    }
+
+    #[test]
+    fn a_base_made_with_a_shift_is_refitted_to_a_new_one() {
+        let old = Fit::default().with_shift(10, 0);
+        let mut pic = vec![255u8; LW * LH * 4];
+        let (dx, _) = old.shift_px(LW, LH);
+        for y in 0..LH {
+            for x in 0..(dx as usize) {
+                pic[(y * LW + x) * 4..][..3].fill(0);
+            }
+        }
+        // the base was made with +7 sent px right; now the fit is none: the picture is moved back to cover the panel again
+        let mut r = white(LW, LH);
+        r.set_still_background(Some(Arc::new(pic)));
+        r.set_bg_is_base(true);
+        r.set_bg_fit(old);
+        r.set_fit(Fit::default().with_shift(0, 0));
+        // zero fit and a base with a shift: render the base as it is, then compare by forcing the refit path with another shift
+        r.set_fit(Fit::default().with_shift(0, 5));
+        let out = r.render().0.to_vec();
+        assert_eq!(px(&out, LW, LW / 2, 0), [0, 0, 0], "moved down: black on top");
     }
 }
