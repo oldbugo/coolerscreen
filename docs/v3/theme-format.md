@@ -85,3 +85,20 @@ thing: a **base** (the loop stored on the screen — the existing MJPEG "version
   - **Browse** = today's sources view, separated, add = independent copy.
   - Settings keeps global things (fps 30/60, start with Windows, sleep/lock/shutdown, notch, screen tools).
 - Defaults stay 2.0-like: live off until the user turns it on.
+
+## v1.1 additions (user feedback 2026-10-17, after trying the first build)
+
+- `liveLayer` (theme, bool, default true): the editor's single "Live layer" switch. Off = base only: while live is on
+  and this theme is current, the app stops streaming (the screen plays its own base); preview shows the base only.
+- Layers: the `widgets` array order IS the drawing order (first = bottom, last = top). New widget fields:
+  `hidden` (bool, default false: not drawn live, not baked), `group` (string id or null).
+  New theme field `groups`: `[{ "id": "g1", "name": "Group 1", "hidden": false, "collapsed": false }]`. Members of a
+  group are contiguous in `widgets`; a hidden group hides its members. The engine only needs order + hidden (+ group
+  hidden); grouping is otherwise an editor concept (move/select together).
+- Base from any clip: `baseVersionId` may point to a version of ANY original in the library (not only the theme's
+  own). The engine's fallback/background uses that version's original. Changing it does not send anything to the
+  screen; the editor then shows "Base changed — store it on the screen" (the Apply flow).
+- Hand-over is no longer a view of the editor; it lives in the theme's own settings (right panel when nothing is
+  selected, or a "Theme settings" section). Same `handover` fields.
+- Live start must never show a placeholder/gradient when the theme has a base or a clip: wait for the first real
+  background frame before the first live frame (fixes the "flash" when turning live on).
