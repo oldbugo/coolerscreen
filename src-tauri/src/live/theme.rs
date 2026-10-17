@@ -14,7 +14,7 @@ pub const MIN_BOX: f32 = 0.02;
 pub const DEFAULT_GAP: f32 = 24.0;
 
 /// Widget types the engine draws. "weather" is reserved (a labelled placeholder).
-pub const WIDGET_TYPES: [&str; 6] = ["clock", "music", "stats", "text", "image", "weather"];
+pub const WIDGET_TYPES: [&str; 11] = ["clock", "music", "stats", "text", "image", "weather", "sensor", "date", "visualizer", "slideshow", "info"];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -85,6 +85,24 @@ impl Widget {
         serde_json::from_value(self.props.clone()).unwrap_or_default()
     }
     pub fn text(&self) -> TextProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn sensor(&self) -> SensorProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn date(&self) -> DateProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn weather(&self) -> WeatherProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn visualizer(&self) -> VisualizerProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn slideshow(&self) -> SlideshowProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn info(&self) -> InfoProps {
         serde_json::from_value(self.props.clone()).unwrap_or_default()
     }
     pub fn image(&self) -> ImageProps {
@@ -167,10 +185,12 @@ pub struct ClockProps {
     pub seconds: bool,
     pub date: bool,
     pub color: String,
+    /// "digital" | "analog" | "minimal"
+    pub style: String,
 }
 impl Default for ClockProps {
     fn default() -> Self {
-        ClockProps { format: "24h".into(), seconds: false, date: true, color: "#ffffff".into() }
+        ClockProps { format: "24h".into(), seconds: false, date: true, color: "#ffffff".into(), style: "digital".into() }
     }
 }
 
@@ -229,6 +249,180 @@ pub struct ImageProps {
 impl Default for ImageProps {
     fn default() -> Self {
         ImageProps { file: String::new(), opacity: 1.0, fit: "contain".into() }
+    }
+}
+
+
+// ---------------------------------------------------------------- v1.6 widget props
+
+/// One colour step of a sensor: from value `at` upward the colour is `color` ("#rrggbb").
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Threshold {
+    pub at: f32,
+    pub color: String,
+}
+impl Default for Threshold {
+    fn default() -> Self {
+        Threshold { at: 0.0, color: "#ffffff".into() }
+    }
+}
+
+/// Metrics a `sensor` widget can show.
+pub const SENSOR_METRICS: [&str; 15] = [
+    "cpu.load", "cpu.core", "cpu.temp", "cpu.clock", "gpu.load", "gpu.temp", "gpu.clock", "gpu.vram", "gpu.power", "gpu.fan", "ram.used", "net.down",
+    "net.up", "disk.used", "disk.activity",
+];
+pub const SENSOR_STYLES: [&str; 6] = ["number", "bar", "ring", "gauge", "graph", "sparkline"];
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SensorProps {
+    pub metric: String,
+    /// cpu.core: which logical core (0-based).
+    pub core: u32,
+    /// disk.used: drive, e.g. "C:".
+    pub drive: String,
+    /// net.*: adapter name; None = the busiest.
+    pub adapter: Option<String>,
+    /// "number" | "bar" | "ring" | "gauge" | "graph" | "sparkline"
+    pub style: String,
+    /// None = the metric's default name, "" = no label.
+    pub label: Option<String>,
+    /// "C" | "F" (temperatures).
+    pub unit: String,
+    pub decimals: Option<u32>,
+    /// Scale ends for bar/ring/gauge/graph; None = automatic per metric.
+    pub min: Option<f32>,
+    pub max: Option<f32>,
+    /// None = the metric's default colour steps; Some(empty) = none.
+    pub thresholds: Option<Vec<Threshold>>,
+    /// Base colour; None = per metric default.
+    pub color: Option<String>,
+    /// Seconds of history for graph / sparkline.
+    pub history: f32,
+    /// Sampling rate in Hz: 1, 2 or 4.
+    pub rate: u32,
+}
+impl Default for SensorProps {
+    fn default() -> Self {
+        SensorProps {
+            metric: "cpu.load".into(),
+            core: 0,
+            drive: "C:".into(),
+            adapter: None,
+            style: "number".into(),
+            label: None,
+            unit: "C".into(),
+            decimals: None,
+            min: None,
+            max: None,
+            thresholds: None,
+            color: None,
+            history: 60.0,
+            rate: 1,
+        }
+    }
+}
+impl SensorProps {
+    /// History seconds 5..600, rate 1/2/4.
+    pub fn history_secs(&self) -> f32 {
+        if self.history.is_finite() { self.history.clamp(5.0, 600.0) } else { 60.0 }
+    }
+    pub fn rate_hz(&self) -> u32 {
+        match self.rate {
+            0 | 1 => 1,
+            2 | 3 => 2,
+            _ => 4,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct DateProps {
+    /// "line" | "calendar" | "big"
+    pub style: String,
+    pub color: String,
+}
+impl Default for DateProps {
+    fn default() -> Self {
+        DateProps { style: "line".into(), color: "#ffffff".into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WeatherProps {
+    /// "now" | "forecast"
+    pub style: String,
+    /// "C" | "F"
+    pub unit: String,
+    /// forecast: "days" | "hours"
+    pub span: String,
+    /// forecast: entries after now (days 3..5, hours 3..6; clamped).
+    pub count: u32,
+    pub color: String,
+}
+impl Default for WeatherProps {
+    fn default() -> Self {
+        WeatherProps { style: "now".into(), unit: "C".into(), span: "days".into(), count: 4, color: "#ffffff".into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VisualizerProps {
+    /// 16..64
+    pub bands: u32,
+    /// "bars-h" | "ring" | "wave-fade"
+    pub style: String,
+    pub color: String,
+    /// 0.2..4
+    pub sensitivity: f32,
+}
+impl Default for VisualizerProps {
+    fn default() -> Self {
+        VisualizerProps { bands: 32, style: "bars-h".into(), color: "#5ac8ff".into(), sensitivity: 1.0 }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SlideshowProps {
+    /// Paths relative to the theme folder (png, jpg, gif...).
+    pub files: Vec<String>,
+    /// Seconds per image (1..3600).
+    pub seconds: f32,
+    /// Cross-fade seconds (0..5).
+    pub fade: f32,
+    /// "contain" | "cover"
+    pub fit: String,
+}
+impl Default for SlideshowProps {
+    fn default() -> Self {
+        SlideshowProps { files: Vec::new(), seconds: 8.0, fade: 1.0, fit: "cover".into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct InfoProps {
+    /// "uptime" | "cpuName" | "gpuName" | "countdown" | "topProcesses"
+    pub kind: String,
+    /// countdown: ISO local time "2026-12-25T00:00" (seconds optional).
+    pub target: Option<String>,
+    /// countdown: caption (None = "Countdown").
+    pub label: Option<String>,
+    /// topProcesses: "cpu" | "ram"
+    pub by: String,
+    /// topProcesses: 3..5
+    pub count: u32,
+    pub color: String,
+}
+impl Default for InfoProps {
+    fn default() -> Self {
+        InfoProps { kind: "uptime".into(), target: None, label: None, by: "cpu".into(), count: 4, color: "#ffffff".into() }
     }
 }
 
@@ -699,5 +893,31 @@ mod tests {
         // round trip
         let back = Theme::from_json(&t.to_json()).unwrap();
         assert_eq!(back.guides_offset, t.guides_offset);
+    }
+
+    #[test]
+    fn v1_6_props_parse_with_defaults() {
+        let t = Theme::from_json(r##"{"widgets":[
+            {"id":"s","type":"sensor","props":{"metric":"gpu.temp","style":"gauge","unit":"F","thresholds":[{"at":70,"color":"#f0b43c"}],"rate":3,"history":9999}},
+            {"id":"c","type":"clock","props":{"style":"analog"}},
+            {"id":"d","type":"date","props":{"style":"calendar"}},
+            {"id":"w","type":"weather","props":{"style":"forecast","count":5}},
+            {"id":"v","type":"visualizer","props":{"bands":48,"style":"ring"}},
+            {"id":"p","type":"slideshow","props":{"files":["a.png","b.gif"],"seconds":5}},
+            {"id":"i","type":"info","props":{"kind":"countdown","target":"2026-12-25T00:00"}}]}"##).unwrap();
+        assert!(t.validate().is_empty(), "{:?}", t.validate());
+        let s = t.widgets[0].sensor();
+        assert_eq!((s.metric.as_str(), s.style.as_str(), s.unit.as_str()), ("gpu.temp", "gauge", "F"));
+        assert_eq!(s.thresholds.as_ref().unwrap()[0].at, 70.0);
+        assert_eq!((s.rate_hz(), s.history_secs()), (2, 600.0));
+        assert_eq!(SensorProps::default().thresholds, None);
+        assert_eq!(t.widgets[1].clock().style, "analog");
+        assert_eq!(ClockProps::default().style, "digital");
+        assert_eq!(t.widgets[2].date().style, "calendar");
+        assert_eq!(t.widgets[3].weather().count, 5);
+        assert_eq!(t.widgets[4].visualizer().bands, 48);
+        assert_eq!(t.widgets[5].slideshow().files.len(), 2);
+        assert_eq!(t.widgets[6].info().target.as_deref(), Some("2026-12-25T00:00"));
+        assert_eq!(Widget::default().sensor(), SensorProps::default());
     }
 }
