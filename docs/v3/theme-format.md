@@ -180,3 +180,37 @@ also run it ... and fine tune".
   picture live (engine calibration mode, 1680x756, re-sent ~5x/s; a single live frame is NOT shown by the device),
   four rows Top/Right/Bottom/Left with − / + buttons (one sent pixel ≈ 1.4 screen px) and the value, Save/Undo. Works
   whether or not live is on (opens a temporary live session for the page, then hands back). Terse wording.
+
+## v1.6 (user, 2026-10-18): "the widgets and live features are very lacking … expand it by all the regular ones"
+
+Basis: research of comparable apps (NZXT CAM, L-Connect, iCUE, TRCC, AIDA64 SensorPanel, Rainmeter, Turing smart
+screen, Wallpaper Engine). Panel rules still apply: no vertical motion (tears) — animate with fades or horizontal
+movement; numbers large (≥ 48 px on the 2400 canvas); a missing source shows "–" greyed, never 0.
+
+New widget types (props; unknown ignored, missing = default):
+- `sensor`: one reading in one style.
+  `metric`: "cpu.load" | "cpu.core" (+`core` index) | "cpu.temp" | "cpu.clock" | "gpu.load" | "gpu.temp" | "gpu.clock" |
+  "gpu.vram" | "gpu.power" | "gpu.fan" | "ram.used" | "net.down" | "net.up" | "disk.used" (+`drive` "C:") |
+  "disk.activity". `style`: "number" | "bar" | "ring" | "gauge" (270° arc) | "graph" (area/line history) |
+  "sparkline". Options: `label` (string or null = default name, "" = none), `unit` "C"|"F" for temps, `decimals`,
+  `min`/`max` (null = auto per metric), `thresholds` [{ "at": 70, "color": "#f0b43c" }, { "at": 85, "color": "#ff6b6b" }]
+  (default per metric), `color` (base), `history` seconds for graph/sparkline (default 60), `rate` Hz (1|2|4).
+  Network auto-scales B/s→MB/s; `adapter` null = busiest.
+- `clock`: + `style` "digital" (today) | "analog" | "minimal" (huge time only); analog hands move smoothly (rotation is
+  fine: no straight horizontal edges moving vertically).
+- `date`: `style` "line" ("Sunday, 18 October") | "calendar" (month grid with today marked) | "big" (day number + weekday).
+- `weather`: Open-Meteo (no key, non-commercial). Location from settings `weather.place` {name, lat, lon, tz} chosen by
+  typing a city (Geocoding API) — never IP-based; cache 15 min; offline → last value greyed. `style` "now" (icon,
+  temp, condition) | "forecast" (now + next 3–5 days or 12 h). `unit` C/F. Off by default until a place is set.
+- `visualizer`: WASAPI loopback spectrum, `bands` 16–64, `style` "bars-h" (horizontal bars from the left — no vertical
+  motion) | "ring" | "wave-fade"; `color`, `sensitivity`. Silent → idle flat.
+- `slideshow`: `files` [relative paths in the theme folder], `seconds` per image, `fade` s, `fit`; GIF animates.
+- `info`: `kind` "uptime" | "cpuName" | "gpuName" | "countdown" (+`target` ISO time, `label`) | "topProcesses"
+  (+`by` "cpu"|"ram", `count` 3–5).
+- Existing `stats` panel stays (it's a preset group of rows).
+
+Engine: a shared sampler (one thread) feeding all sensor widgets with ring-buffer history; poll only metrics in use;
+NVML/sysinfo/PDH as researched (docs/roadmap/2026-10-12-v3-data-sources.md). Budget: still ~1–2 % CPU with a typical
+layout. App: palette grouped (Time · Sensors · Media · Info · Decoration), property panels per type with live
+preview, sensible default sizes per style, "Add the Standard layout" kept. Settings: Weather place picker; °C/°F
+default.
