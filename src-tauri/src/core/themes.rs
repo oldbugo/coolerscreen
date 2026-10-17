@@ -73,7 +73,7 @@ fn short_hash(s: &str) -> String {
 
 /// A path inside the theme folder that stays inside it ("assets/logo.png"); anything else is dropped.
 /// The engine keeps numbers as f32: round every number to 4 decimals so 0.8 stays 0.8 in theme.json and in the page.
-fn tidy(v: Value) -> Value {
+pub(crate) fn tidy(v: Value) -> Value {
     match v {
         Value::Number(n) if n.is_f64() => json!((n.as_f64().unwrap_or(0.0) * 10000.0).round() / 10000.0),
         Value::Array(a) => Value::Array(a.into_iter().map(tidy).collect()),
@@ -84,6 +84,12 @@ fn tidy(v: Value) -> Value {
 
 fn theme_value(t: &Theme) -> Value {
     tidy(serde_json::to_value(t).unwrap_or(Value::Null))
+}
+
+/// The corner radius a version was made with (0 = none).
+fn version_radius(v: &Value) -> f64 {
+    let c = &super::library::effective_settings(v)["corners"];
+    if c["on"] == true { c["r"].as_f64().unwrap_or(0.0) } else { 0.0 }
 }
 
 fn safe_rel(rel: &str) -> bool {
@@ -141,6 +147,7 @@ impl App {
             .and_then(|v| self.lib.find_version(v).filter(|(_, r)| r["status"] == "ready").map(|(o, _)| (o, v.to_string())));
         tl.base_video = base.as_ref().and_then(|(_, v)| self.lib.device_path(v));
         let owner = base.map(|(o, _)| o).unwrap_or_else(|| oid.to_string());
+        tl.theme.corners = Some(self.corner_radius_of(&theme) as f32); // the engine gets the radius in effect (theme or default)
         let o = self.lib.read_original(&owner);
         tl.fallback_video = o.as_ref().filter(|o| !truthy(o.get("isImage"))).and_then(|o| self.lib.source_path(o));
         tl
@@ -156,6 +163,11 @@ impl App {
             None => ThemeLive::new(Theme::standard_preset(), PathBuf::new()),
         };
         self.live.set_theme(tl);
+    }
+
+    /// The corner radius in px that applies to a theme: its own, or the default from Settings (0 = none).
+    pub fn corner_radius_of(&self, t: &Theme) -> f64 {
+        t.corners.map(|c| (c as f64).round()).unwrap_or_else(|| self.settings.load().corner_radius()).clamp(0.0, 300.0)
     }
 
     /// Fingerprint of what the baked items look like (None = nothing is baked into the base).
@@ -183,12 +195,15 @@ impl App {
         let standby = self.settings.load().slot("standby").and_then(|s| s["versionId"].as_str().map(String::from));
         // A base was chosen (Base settings) that is not what the screen holds yet.
         let unstored = current && base.is_some() && standby != t.base_version_id;
-        let stale = current && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key);
+        let radius = self.corner_radius_of(&t);
+        let stale = current && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key || (version_radius(v) - radius).abs() > 0.5);
         let owner = base.as_ref().and_then(|(boid, _)| self.lib.read_original(boid).map(|bo| json!({ "originalId": boid, "name": bo["name"] })));
         let kinds: Vec<&str> = t.widgets.iter().map(|w| w.kind.as_str()).collect();
         Ok(json!({
             "originalId": oid, "name": o["name"], "theme": theme_value(&t),
             "current": current, "baseVersionId": t.base_version_id, "baseExists": base.is_some(),
+            "cornersDefault": self.settings.load().corner_radius(), "cornersEffective": radius,
+            "guides": super::settings::guides_value(&crate::live::theme::Guides::from_value(&self.settings.load().screen_guides()).effective(&t.guides_offset)),
             "baseStale": stale, "baseUnstored": unstored, "baseOwner": owner, "hasBaseItems": t.has_base_items(), "widgetKinds": kinds,
             "canPreview": self.lib.source_path(&o).is_some() || base.is_some(),
         }))
@@ -471,7 +486,10 @@ impl App {
         if let Some(ov) = &overlay {
             body["overlay"] = ov.clone();
         }
-        let reuse = existing.as_ref().filter(|(_, bv)| bv["overlay"]["key"].as_str().map(String::from) == want_key).map(|(_, bv)| bv["id"].as_str().unwrap_or("").to_string());
+        // rounded corners: the theme's radius, or the default from Settings (0 = none)
+        let radius = self.corner_radius_of(&t);
+        body["corners"] = json!({ "on": radius > 0.0, "r": radius });
+        let reuse = existing.as_ref().filter(|(_, bv)| bv["overlay"]["key"].as_str().map(String::from) == want_key && (version_radius(bv) - radius).abs() <= 0.5).map(|(_, bv)| bv["id"].as_str().unwrap_or("").to_string());
         let created = if reuse.is_some() { Err(CoreError::coded("duplicate", "reuse").with("versionId", json!(reuse))) } else { self.lib.create_version(&src_oid, &body) };
         let oid_for_version = src_oid.as_str();
         let vid = match created {

@@ -574,3 +574,74 @@ fn a_theme_can_use_a_version_of_another_clip_as_its_base() {
     // a restart keeps who is current (themeId lives in the slot record)
     assert_eq!(app.current_theme_oid().as_deref(), Some(a.as_str()));
 }
+
+// ---------- theme format v1.2 / v1.3 ----------
+
+#[test]
+fn default_corner_radius_guides_and_snap_settings_round_trip() {
+    let (_d, app, _rec, _g) = setup();
+    // old files: on:false means no radius, on:true keeps its r
+    assert_eq!(app.settings.load().corner_radius(), 0.0);
+    app.settings.update(|s| s["mask"]["corners"] = json!({ "on": true, "r": 50 })).unwrap();
+    assert_eq!(app.settings.load().corner_radius(), 50.0);
+    let st = app.settings_update(&json!({ "cornerRadius": 0 })).unwrap();
+    assert_eq!(st["cornerRadius"], json!(0.0), "0 = none");
+    assert_eq!(st["mask"]["corners"]["on"], json!(false));
+    let st = app.settings_update(&json!({ "cornerRadius": 120.4, "editor": { "snap": false },
+        "screenGuides": { "curve": { "right": 90, "left": -5 }, "zones": [{ "name": "RAM", "edge": "right", "size": 180 }, { "edge": "sideways", "size": 99999 }] } })).unwrap();
+    assert_eq!(st["cornerRadius"], json!(120.0));
+    assert_eq!(st["editorSnap"], json!(false));
+    assert_eq!(st["screenGuides"]["curve"]["right"], json!(90.0));
+    assert_eq!(st["screenGuides"]["curve"]["left"], json!(0.0), "negative curve is clamped");
+    assert_eq!(st["screenGuides"]["zones"][0]["id"], "z1");
+    assert_eq!(st["screenGuides"]["zones"][1]["edge"], "right", "a bad edge becomes right");
+    assert!(st["screenGuides"]["zones"][1]["size"].as_f64().unwrap() <= 1080.0);
+    // survives a reload from disk; an untouched file stays free of the new keys
+    let again = app.app_state();
+    assert_eq!(again["screenGuides"], st["screenGuides"]);
+    let (_d2, app2, _r2, _g2) = setup();
+    app2.settings.update(|_| {}).unwrap();
+    let raw = std::fs::read_to_string(_d2.path().join("home/settings.json")).unwrap();
+    assert!(!raw.contains("screenGuides") && !raw.contains("editor"), "{raw}");
+}
+
+#[test]
+fn a_themes_own_corner_radius_is_applied_to_the_base_and_marks_it_stale_when_changed() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Round.mp4");
+    app.settings_update(&json!({ "cornerRadius": 60 })).unwrap();
+    let v = app.theme_get(&oid).unwrap();
+    assert_eq!(v["cornersEffective"], json!(60.0));
+    assert_eq!(v["cornersDefault"], json!(60.0));
+    let r = app.theme_apply(&oid).unwrap();
+    let j = wait_job(&app, r["jobId"].as_str().unwrap());
+    assert_eq!(j["state"], "done", "{j}");
+    let vid = j["result"]["versionId"].as_str().unwrap().to_string();
+    let base = app.lib.find_version(&vid).unwrap().1;
+    assert_eq!(base["settings"]["corners"], json!({ "on": true, "r": 60 }), "the default radius went into the base");
+    assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(false));
+    // this theme: no rounding at all -> the stored base is out of date
+    let v = app.theme_set(&oid, &json!({ "corners": 0 })).unwrap();
+    assert_eq!(v["cornersEffective"], json!(0.0));
+    assert_eq!(v["baseStale"], json!(true));
+    // changing the default does not matter for a theme with its own value, and does for one without
+    assert_eq!(app.theme_get(&oid).unwrap()["cornersDefault"], json!(60.0));
+    app.settings_update(&json!({ "cornerRadius": 20 })).unwrap();
+    assert_eq!(app.theme_get(&oid).unwrap()["cornersEffective"], json!(0.0));
+    let v = app.theme_set(&oid, &json!({ "corners": null })).unwrap();
+    assert_eq!(v["cornersEffective"], json!(20.0));
+    assert_eq!(v["baseStale"], json!(true), "60 on the screen, 20 wanted");
+    // applying again makes a new base with the new radius
+    let r = app.theme_apply(&oid).unwrap();
+    let j = wait_job(&app, r["jobId"].as_str().unwrap());
+    assert_eq!(j["state"], "done", "{j}");
+    let vid2 = j["result"]["versionId"].as_str().unwrap();
+    assert_ne!(vid2, vid);
+    assert_eq!(app.lib.find_version(vid2).unwrap().1["settings"]["corners"]["r"], json!(20));
+    assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(false));
+    // the theme's guide offsets and effective guides
+    app.settings_update(&json!({ "screenGuides": { "curve": { "right": 50 }, "zones": [{ "id": "z1", "name": "RAM", "edge": "right", "size": 180 }] } })).unwrap();
+    let v = app.theme_set(&oid, &json!({ "guidesOffset": { "curve": { "right": -20 }, "zones": { "z1": 30 } } })).unwrap();
+    assert_eq!(v["guides"]["curve"]["right"], json!(30.0));
+    assert_eq!(v["guides"]["zones"][0]["size"], json!(210.0));
+}

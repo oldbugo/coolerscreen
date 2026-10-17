@@ -104,7 +104,8 @@ impl App {
         json!({
             "appVersion": self.app_version, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
-            "mask": s.mask(), "cornersDefault": s.mask()["corners"], "maxSeconds": s.0["maxSeconds"],
+            "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
+            "screenGuides": s.screen_guides(), "editorSnap": s.editor_snap(),
             "budget": num(b.loop_bytes), "total": num(b.total), "budgetMeasured": b.measured, "capacityAt": b.capacity_at,
             "uploadRate": s.upload_rate().map(num).unwrap_or(json!(50000)),
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
@@ -118,7 +119,20 @@ impl App {
     pub fn settings_update(&self, body: &Value) -> CoreResult<Value> {
         let mask = body.get("mask").filter(|m| truthy(Some(m))).cloned();
         let max = body.get("maxSeconds").filter(|m| !m.is_null()).cloned();
+        // 3.0: the default corner radius (0 = none), the screen guides and the editor's snap switch
+        let radius = body.get("cornerRadius").and_then(Value::as_f64).filter(|r| r.is_finite()).map(|r| r.clamp(0.0, 300.0).round());
+        let guides = body.get("screenGuides").filter(|g| g.is_object()).map(|g| super::settings::guides_value(&crate::live::theme::Guides::from_value(g)));
+        let snap = body.get("editor").and_then(|e| e["snap"].as_bool());
         self.settings.update(|s| {
+            if let Some(r) = radius {
+                s["mask"]["corners"] = json!({ "on": r > 0.0, "r": r });
+            }
+            if let Some(g) = guides {
+                s["screenGuides"] = g;
+            }
+            if let Some(b) = snap {
+                s["editor"] = json!({ "snap": b });
+            }
             if let Some(mut m) = mask {
                 m["corners"] = s["mask"]["corners"].clone();
                 s["mask"] = m;

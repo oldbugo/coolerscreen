@@ -13,6 +13,19 @@ impl Settings {
     pub fn mask(&self) -> &Value {
         &self.0["mask"]
     }
+    /// Default corner radius in px on the 2400x1080 canvas; 0 = no rounded corners (stored as { on, r }, like 2.0).
+    pub fn corner_radius(&self) -> f64 {
+        let c = &self.0["mask"]["corners"];
+        if c["on"] == true { c["r"].as_f64().unwrap_or(0.0) } else { 0.0 }
+    }
+    /// The global screen guides (curve + avoid zones), always a full object.
+    pub fn screen_guides(&self) -> Value {
+        self.0.get("screenGuides").cloned().unwrap_or_else(|| guides_value(&crate::live::theme::Guides::default()))
+    }
+    /// Gentle snapping in the theme editor (default on).
+    pub fn editor_snap(&self) -> bool {
+        self.0["editor"]["snap"] != false
+    }
     pub fn max_seconds(&self) -> f64 {
         self.0["maxSeconds"].as_f64().unwrap_or(10.0)
     }
@@ -131,6 +144,11 @@ fn str80(v: Option<&Value>, n: usize) -> Option<String> {
         Some(Value::String(s)) if !s.is_empty() => Some(s.chars().take(n).collect()),
         _ => None,
     }
+}
+
+/// Guides as JSON with tidy numbers (the engine keeps f32).
+pub fn guides_value(g: &crate::live::theme::Guides) -> Value {
+    super::themes::tidy(serde_json::to_value(g).unwrap_or(Value::Null))
 }
 
 fn clean_slot(v: Option<&Value>) -> Value {
@@ -279,6 +297,14 @@ pub fn sanitize(s: &Value) -> Settings {
         "slots": { "startup": clean_slot(slots.and_then(|x| x.get("startup"))), "standby": clean_slot(slots.and_then(|x| x.get("standby"))) },
         "sources": clean_sources(s.get("sources")),
     });
+    // 3.0: screen guides and the editor's snap switch, written only when they differ from the defaults.
+    let guides = crate::live::theme::Guides::from_value(s.get("screenGuides").unwrap_or(&Value::Null));
+    if guides != crate::live::theme::Guides::default() {
+        out["screenGuides"] = guides_value(&guides);
+    }
+    if s.get("editor").and_then(|e| e.get("snap")) == Some(&Value::Bool(false)) {
+        out["editor"] = json!({ "snap": false });
+    }
     // 3.0 prototype B: written only when switched on, so a settings.json that never used it stays identical to 2.0.
     // 3.0 live screen: written only when something differs from the defaults, so a settings.json that never used it stays
     // identical to 2.0.
