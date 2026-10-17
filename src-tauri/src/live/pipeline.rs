@@ -6,11 +6,12 @@
 //! playing) when paused or stopped. While there is no connection nothing is rendered.
 use super::encode::{frame_budget, rotate_cw, JpegEncoder};
 use super::mask::Mask;
-use super::render::Renderer;
+use super::render::{HandTarget, Renderer};
 use super::sensors::Sampler;
 use super::nowplaying::MusicWatcher;
 use super::session::{Ending, LiveSession};
-use super::theme::ThemeLive;
+use super::theme::{HandoverEnd, Theme, ThemeLive};
+use std::path::PathBuf;
 use super::video::VideoBg;
 use super::{Config, PH, PW};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering::Relaxed};
@@ -144,6 +145,11 @@ pub struct Shared {
     /// Current theme (set through `set_theme`); the render thread picks it up when `theme_gen` changes.
     pub theme: Mutex<Option<ThemeLive>>,
     pub theme_gen: AtomicU64,
+    /// Hand-over at stop: 0 = none, 1 = fade onto the loop's first frame, 2 = fade to black. Set by `stop()` while the stream runs.
+    pub stop_mode: AtomicU8,
+    /// The render thread has put the final hand-over frame in the slot; `hand_sent_mark` is the sent-frame count at that moment.
+    pub hand_done: AtomicBool,
+    pub hand_sent_mark: AtomicU64,
     pub stats: Stats,
 }
 
@@ -176,6 +182,9 @@ impl Pipeline {
             cfg_gen: AtomicU64::new(0),
             theme: Mutex::new(None),
             theme_gen: AtomicU64::new(0),
+            stop_mode: AtomicU8::new(0),
+            hand_done: AtomicBool::new(false),
+            hand_sent_mark: AtomicU64::new(0),
             stats: Stats::default(),
         });
         let rgba_slot: Arc<Latest<Vec<u8>>> = Arc::new(Latest::new());
@@ -198,26 +207,41 @@ impl Pipeline {
                 }
                 let mut cfg = sh.cfg.lock().unwrap().clone();
                 let mut seen_gen = sh.cfg_gen.load(Relaxed);
+                let mut seen_theme_gen = u64::MAX;
                 let mut music: Option<MusicWatcher> = None;
                 let mut video_on = false;
-                let mut applied_bg: (Option<String>, String) = (None, String::new());
+                // What the background decodes: (file, is the stored portrait base, decode mode).
+                let mut applied_src: Option<(PathBuf, bool, String)> = None;
+                let mut fade_in_secs = 0.8f32;
                 let mut last_mask_check = Instant::now();
                 let mut next = Instant::now();
                 let mut last_emit = Instant::now();
                 let mut force_apply = true;
+                let mut was_active = false;
+                let mut fade_in_start: Option<Instant> = None;
+                let mut hand_start: Option<Instant> = None;
                 while !sh.quit.load(Relaxed) {
-                    // Runtime config changes (reload_config / set_background / set_fps).
+                    // Runtime changes (reload_config / set_background / set_fps / set_theme).
                     let g = sh.cfg_gen.load(Relaxed);
-                    if g != seen_gen {
+                    let tg = sh.theme_gen.load(Relaxed);
+                    if g != seen_gen || tg != seen_theme_gen {
                         seen_gen = g;
+                        seen_theme_gen = tg;
                         cfg = sh.cfg.lock().unwrap().clone();
+                        let eff = effective_theme(&cfg, sh.theme.lock().unwrap().clone());
+                        fade_in_secs = eff.theme.handover.fade_in;
+                        r.set_theme(eff);
                         force_apply = true;
                     }
                     let active = !sh.paused.load(Relaxed) && sh.connected.load(Relaxed);
+                    if active && !was_active {
+                        fade_in_start = Some(Instant::now());
+                    }
+                    was_active = active;
                     if force_apply {
                         force_apply = false;
-                        // Music: start/stop the watcher, or just change the preferred app.
-                        match (cfg.music.enabled, music.is_some()) {
+                        // Music: start/stop the watcher, or just change the preferred app. Only when the theme has a music widget.
+                        match (cfg.music.enabled && r.has_widget("music"), music.is_some()) {
                             (true, false) => {
                                 let m = MusicWatcher::start(cfg.music.preferred_app.clone());
                                 r.set_music_source(Some(m.data.clone()));
@@ -231,19 +255,32 @@ impl Pipeline {
                             _ => {}
                         }
                         r.set_mask(if cfg.notch == "off" { Mask::none() } else { Mask::from_app_settings() });
-                        // A changed clip: drop the old decoder now, the block below starts the new one.
-                        let key = (cfg.background.clone(), cfg.video_decode.clone());
-                        if key != applied_bg {
-                            applied_bg = key;
+                        // A changed background source: drop the old decoder now, the block below starts the new one.
+                        let src = background_source(r.theme());
+                        let key = src.map(|(p, portrait)| (p, portrait, cfg.video_decode.clone()));
+                        if key != applied_src {
+                            applied_src = key;
                             r.set_video(None);
                             video_on = false;
+                            let portrait = applied_src.as_ref().is_some_and(|k| k.1);
+                            r.set_bg_is_base(portrait);
+                            // The first frame of the stored base, for the hand-over (one short ffmpeg run, off this thread).
+                            let slot_first = r.first_frame_slot();
+                            *slot_first.lock().unwrap() = None;
+                            if let Some((p, true, _)) = applied_src.clone() {
+                                std::thread::spawn(move || match super::video::first_frame(&p, true) {
+                                    Ok(f) => *slot_first.lock().unwrap() = Some(Arc::new(f)),
+                                    Err(e) => log(&format!("hand-over: no first frame of the base ({e}); widgets only fade out")),
+                                });
+                            }
                         }
                     }
                     // The decoder only runs while frames are being streamed (an idle ffmpeg would burn CPU for nothing).
-                    let want_video = active && cfg.background.as_deref().is_some_and(|b| !b.is_empty());
+                    let want_video = active && applied_src.is_some();
                     if want_video && !video_on {
-                        let b = cfg.background.clone().unwrap_or_default();
-                        match VideoBg::start(std::path::Path::new(&b), &cfg.video_decode) {
+                        let (p, portrait, dec) = applied_src.clone().unwrap();
+                        let res = if portrait { VideoBg::start_base(&p) } else { VideoBg::start(&p, &dec) };
+                        match res {
                             Ok(v) => {
                                 publish_video_info(&v, &vc, &vd);
                                 r.set_video(Some(v));
@@ -261,14 +298,41 @@ impl Pipeline {
                         next = Instant::now();
                         continue;
                     }
+                    // Hand-over finished: the last frame is out, wait for the stop.
+                    if sh.hand_done.load(Relaxed) {
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
                     if cfg.notch != "off" && last_mask_check.elapsed() > Duration::from_secs(3) {
                         last_mask_check = Instant::now();
                         r.set_mask(Mask::from_app_settings()); // picks up a notch change made in the app
                     }
+                    // Live-layer opacity: fade in after the session starts; at a stop with a hand-over, fade out while the
+                    // background cross-fades to the stored loop's first frame (or to black).
+                    let mut alpha = match fade_in_start {
+                        Some(t0) if fade_in_secs > 0.0 => smooth((t0.elapsed().as_secs_f32() / fade_in_secs).min(1.0)),
+                        _ => 1.0,
+                    };
+                    let mode = sh.stop_mode.load(Relaxed);
+                    let mut finishing = false;
+                    if mode != 0 {
+                        let hs = *hand_start.get_or_insert_with(Instant::now);
+                        let p = (hs.elapsed().as_secs_f32() / HANDOVER_FADE_S).min(1.0);
+                        alpha *= 1.0 - smooth(p);
+                        let target = if mode == 2 {
+                            Some(HandTarget::Black)
+                        } else if r.has_first_frame() {
+                            Some(HandTarget::FirstFrame)
+                        } else {
+                            None
+                        };
+                        r.set_handover(target.map(|t| (t, smooth(p))));
+                        finishing = p >= 1.0;
+                    }
+                    r.set_live_alpha(alpha);
                     let period = Duration::from_secs_f64(1.0 / sh.fps.load(Relaxed).max(1) as f64);
                     let t = Instant::now();
-                    let show_seconds = sh.show_seconds.load(Relaxed);
-                    let (frame, changed) = r.render(show_seconds);
+                    let (frame, changed) = r.render();
                     let t1 = Instant::now();
                     // Nothing changed since the last frame (the renderer says so without redrawing): skip rotate, encode and send.
                     // The screen keeps the last picture (keepalives continue), and one frame per half second is still sent as a safety net.
@@ -295,6 +359,12 @@ impl Pipeline {
                     if let Some(old) = slot.put(buf) {
                         sh.stats.dropped_before_encode.fetch_add(1, Relaxed);
                         pool.put(old);
+                    }
+                    if finishing {
+                        // The final frame (the loop's first frame, or black) is in the slot: tell the stopper.
+                        sh.hand_sent_mark.store(sh.stats.sent.load(Relaxed), Relaxed);
+                        sh.hand_done.store(true, Relaxed);
+                        continue;
                     }
                     next += period;
                     let now = Instant::now();
@@ -474,9 +544,37 @@ impl Pipeline {
         self.shared.cfg_gen.fetch_add(1, Relaxed);
     }
 
-    /// Stop with the default ending (the loop clip plays, 2.0 behaviour). Waits for the threads.
+    /// Stop the normal way. With a theme set, the theme's hand-over decides how it ends:
+    ///   loopStart  the widgets fade out while the background cross-fades to the stored loop's first frame, that frame is sent,
+    ///              then the loop clip ending (the screen continues from its first frame); about 1.2 s in all
+    ///   screenOff  fade to black, then the screen-off ending
+    ///   instant    (and without a theme, or when no session is open) the plain stop: loop clip ending at once
+    /// Waits for the threads.
     pub fn stop(&self) {
-        self.stop_with(Ending::LoopClip);
+        let end = self.shared.theme.lock().unwrap().as_ref().map(|t| t.theme.handover.end);
+        let mode = match end {
+            Some(HandoverEnd::LoopStart) => 1,
+            Some(HandoverEnd::ScreenOff) => 2,
+            _ => 0,
+        };
+        if mode != 0 && self.shared.connected.load(Relaxed) && !self.shared.paused.load(Relaxed) && !self.shared.quit.load(Relaxed) {
+            self.shared.stop_mode.store(mode, Relaxed);
+            let t0 = Instant::now();
+            while !self.shared.hand_done.load(Relaxed) && t0.elapsed() < Duration::from_millis(1000) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // Give the sender a moment to put the final frame on the wire before the end-of-stream marker.
+            if self.shared.hand_done.load(Relaxed) {
+                let mark = self.shared.hand_sent_mark.load(Relaxed);
+                let t1 = Instant::now();
+                while self.shared.stats.sent.load(Relaxed) <= mark && t1.elapsed() < Duration::from_millis(250) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            self.stop_with(if mode == 2 { Ending::ScreenOff } else { Ending::LoopClip });
+        } else {
+            self.stop_with(if mode == 2 { Ending::ScreenOff } else { Ending::LoopClip });
+        }
     }
 
     /// Stop and end the stream as `ending` says. Waits for the threads; safe to call more than once from any thread.
@@ -508,6 +606,39 @@ impl Pipeline {
         }
     }
 }
+
+/// Length of the hand-over fade at stop: widgets fade out while the background cross-fades (seconds).
+const HANDOVER_FADE_S: f32 = 0.45;
+
+fn smooth(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// The theme the renderer uses: the one set through `set_theme`, else the Standard layout over the config's background clip
+/// (the 2.0-style companion), with the clock seconds taken from the config.
+fn effective_theme(cfg: &Config, set: Option<ThemeLive>) -> ThemeLive {
+    if let Some(t) = set {
+        return t;
+    }
+    let mut th = Theme::standard_preset();
+    if let Some(c) = th.widgets.iter_mut().find(|w| w.kind == "clock") {
+        c.props["seconds"] = serde_json::json!(cfg.show_seconds);
+    }
+    let mut t = ThemeLive::new(th, PathBuf::new());
+    t.fallback_video = cfg.background.clone().filter(|b| !b.is_empty()).map(PathBuf::from);
+    t
+}
+
+/// Where the live background comes from: the stored base (portrait, true), else the original clip (false), else nothing
+/// (the animated gradient).
+fn background_source(t: &ThemeLive) -> Option<(PathBuf, bool)> {
+    if let Some(p) = t.base_video.as_ref().filter(|p| p.exists()) {
+        return Some((p.clone(), true));
+    }
+    t.fallback_video.as_ref().filter(|p| p.exists()).map(|p| (p.clone(), false))
+}
+
 
 /// Mirror the decoder's process handle and method for the measurer once ffmpeg has started.
 fn publish_video_info(v: &VideoBg, vc: &Arc<Mutex<Option<usize>>>, vd: &Arc<Mutex<String>>) {
@@ -564,5 +695,40 @@ mod tests {
         p.stop();
         assert_eq!(p.shared.ending.load(Relaxed), 0);
         assert_eq!(Ending::default(), Ending::LoopClip);
+    }
+}
+
+#[cfg(test)]
+mod handover_tests {
+    use super::*;
+
+    #[test]
+    fn themed_stop_fades_out_within_the_budget() {
+        let mut c = Config::default();
+        c.music.enabled = false;
+        c.notch = "off".into();
+        let p = Pipeline::start(&c, Sink::Null);
+        p.set_theme(ThemeLive::new(Theme::standard_preset(), PathBuf::new()));
+        std::thread::sleep(Duration::from_millis(1200));
+        let t = Instant::now();
+        p.stop();
+        let e = t.elapsed();
+        assert!(e >= Duration::from_millis(350) && e < Duration::from_millis(1200), "themed stop took {e:?}");
+        assert!(p.shared.hand_done.load(Relaxed));
+    }
+
+    #[test]
+    fn instant_end_stops_at_once() {
+        let mut c = Config::default();
+        c.music.enabled = false;
+        c.notch = "off".into();
+        let p = Pipeline::start(&c, Sink::Null);
+        let mut t = ThemeLive::new(Theme::standard_preset(), PathBuf::new());
+        t.theme.handover.end = HandoverEnd::Instant;
+        p.set_theme(t);
+        std::thread::sleep(Duration::from_millis(500));
+        let s = Instant::now();
+        p.stop();
+        assert!(s.elapsed() < Duration::from_millis(300));
     }
 }

@@ -10,7 +10,7 @@ use cs_core::live::encode::{frame_budget, rotate_cw, JpegEncoder};
 use cs_core::live::pipeline::{Pipeline, Sink, StatsSnap};
 use cs_core::live::render::Renderer;
 use cs_core::live::sensors::Sampler;
-use cs_core::live::{Config, LH, LW, PH, PW};
+use cs_core::live::{Config, Theme, ThemeLive, LH, LW, PH, PW};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -87,6 +87,9 @@ USAGE
 
 OPTIONS
   --video FILE        use a clip as animated background (overrides companion.json)
+  --theme FILE        use this theme.json (its folder is the theme folder for image widgets)
+  --preset standard   use the Standard preset (clock, music, stats) as the theme
+  --base FILE         the stored base (portrait MJPEG 1080x2400) as the theme background and hand-over target
   --fps 30|60         live frame rate (overrides companion.json)
   --decode MODE       auto (GPU first, software fallback) or software
   --notch MODE        app (follow the CoolerScreen notch setting) or off
@@ -104,7 +107,7 @@ fn main() {
         return;
     }
     const FLAGS: [&str; 8] = ["--dry-run", "--no-device", "--help", "-h", "--video-only", "--fake-music", "--music", "--no-music"];
-    const WITH_VALUE: [&str; 6] = ["--video", "--fps", "--measure", "--decode", "--notch", "--frames"];
+    const WITH_VALUE: [&str; 9] = ["--video", "--fps", "--measure", "--decode", "--notch", "--frames", "--theme", "--preset", "--base"];
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if WITH_VALUE.contains(&a.as_str()) {
@@ -132,12 +135,13 @@ fn main() {
     if let Some(f) = arg_val(&args, "--fps").and_then(|v| v.parse().ok()) {
         cfg.fps = f;
     }
+    let theme = build_theme(&args, &cfg);
     let code = if args.iter().any(|a| a == "--dry-run") {
-        dry_run(&cfg)
+        dry_run(&cfg, theme)
     } else if let Some(secs) = arg_val(&args, "--measure").and_then(|v| v.parse::<u64>().ok()) {
-        measure(&cfg, secs, !args.iter().any(|a| a == "--no-device"))
+        measure(&cfg, theme, secs, !args.iter().any(|a| a == "--no-device"))
     } else {
-        run_tray(cfg, !args.iter().any(|a| a == "--no-device"))
+        run_tray(cfg, theme, !args.iter().any(|a| a == "--no-device"))
     };
     std::process::exit(code);
 }
@@ -148,24 +152,74 @@ fn work_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("work").join("companion-dry")
 }
 
-fn dry_run(cfg: &Config) -> i32 {
+/// The theme from --theme / --preset / --base / --video (None: the classic companion, Standard layout over companion.json).
+fn build_theme(args: &[String], cfg: &Config) -> Option<ThemeLive> {
+    let mut t = if let Some(p) = arg_val(args, "--theme") {
+        let path = std::path::Path::new(p);
+        let text = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("cannot read {p}: {e}");
+                std::process::exit(2);
+            }
+        };
+        let theme = match Theme::from_json(&text) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
+        let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+        ThemeLive::new(theme, dir)
+    } else if arg_val(args, "--preset") == Some("standard") || arg_val(args, "--base").is_some() {
+        ThemeLive::new(Theme::standard_preset(), std::env::current_dir().unwrap_or_default())
+    } else {
+        return None;
+    };
+    t.base_video = arg_val(args, "--base").map(std::path::PathBuf::from);
+    t.fallback_video = cfg.background.clone().filter(|b| !b.is_empty()).map(std::path::PathBuf::from);
+    Some(t)
+}
+
+fn write_jpeg(path: std::path::PathBuf, rgba: &[u8]) {
+    let mut lj = Vec::new();
+    let mut le = jpeg_encoder::Encoder::new(&mut lj, 90);
+    le.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
+    le.encode(rgba, LW as u16, LH as u16, jpeg_encoder::ColorType::Rgba).unwrap();
+    std::fs::write(path, &lj).unwrap();
+}
+
+fn dry_run(cfg: &Config, theme: Option<ThemeLive>) -> i32 {
+    use cs_core::live::render::HandTarget;
     let dir = work_dir();
     let _ = std::fs::create_dir_all(&dir);
     let sampler = Sampler::start();
     std::thread::sleep(Duration::from_millis(1300)); // first sensor sample
-    let video = cfg.background.as_deref().and_then(|b| match cs_core::live::video::VideoBg::start(std::path::Path::new(b), &cfg.video_decode) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            eprintln!("video background not used: {e}");
-            None
-        }
+    let mut tl = theme.unwrap_or_else(|| {
+        let mut t = ThemeLive::new(Theme::standard_preset(), std::env::current_dir().unwrap_or_default());
+        t.fallback_video = cfg.background.clone().filter(|b| !b.is_empty()).map(std::path::PathBuf::from);
+        t
     });
+    if let Some(b) = tl.base_video.as_ref().filter(|b| !b.exists()) {
+        eprintln!("base not found: {}", b.display());
+        tl.base_video = None;
+    }
+    let (video, is_base) = if let Some(b) = tl.base_video.clone() {
+        (cs_core::live::video::VideoBg::start_base(&b).map_err(|e| eprintln!("base not used: {e}")).ok(), true)
+    } else if let Some(f) = tl.fallback_video.clone() {
+        (cs_core::live::video::VideoBg::start(&f, &cfg.video_decode).map_err(|e| eprintln!("video background not used: {e}")).ok(), false)
+    } else {
+        (None, false)
+    };
     if video.is_some() {
         std::thread::sleep(Duration::from_millis(1500)); // let ffmpeg deliver its first frames
     }
     let me: HANDLE = unsafe { GetCurrentProcess() };
     let ws0 = mem(me).0;
     let mut r = Renderer::new(sampler.data.clone(), video);
+    r.set_theme(tl.clone());
+    r.set_bg_is_base(is_base);
     let args: Vec<String> = std::env::args().collect();
     let _watcher;
     if args.iter().any(|a| a == "--fake-music") {
@@ -184,6 +238,7 @@ fn dry_run(cfg: &Config) -> i32 {
     if cfg.notch != "off" {
         r.set_mask(cs_core::live::mask::Mask::from_app_settings());
     }
+    println!("theme: {} widget(s), background: {}", tl.theme.widgets.len(), if is_base { "stored base (portrait, rotated back)" } else if tl.fallback_video.is_some() { "original clip" } else { "gradient" });
     println!("working set: {:.1} MB before the renderer, {:.1} MB after loading fonts and buffers", ws0, mem(me).0);
     if !r.has_fonts() {
         eprintln!("warning: no system font found, text will be missing");
@@ -191,26 +246,72 @@ fn dry_run(cfg: &Config) -> i32 {
     let (mut portrait, mut jpeg) = (Vec::new(), Vec::new());
     let mut enc = JpegEncoder::default();
     for i in 0..4 {
-        let rgba = r.render(i % 2 == 1).0.to_vec();
+        let rgba = r.render().0.to_vec();
         // landscape preview (what the user sees on the mounted screen)
-        let mut lj = Vec::new();
-        let mut le = jpeg_encoder::Encoder::new(&mut lj, 90);
-        le.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
-        le.encode(&rgba, LW as u16, LH as u16, jpeg_encoder::ColorType::Rgba).unwrap();
-        std::fs::write(dir.join(format!("frame{i}-landscape.jpg")), &lj).unwrap();
+        write_jpeg(dir.join(format!("frame{i}-landscape.jpg")), &rgba);
         // the exact frame that would be sent
         rotate_cw(&rgba, &mut portrait);
         let n = enc.encode(&portrait, PW, PH, frame_budget(cfg.max_kb, cfg.fps), &mut jpeg).unwrap();
         std::fs::write(dir.join(format!("frame{i}-portrait.jpg")), &jpeg).unwrap();
-        println!("frame {i}: landscape {} KB, portrait (as sent) {} KB at quality {}", lj.len() / 1000, n / 1000, enc.quality);
+        println!("frame {i}: portrait (as sent) {} KB at quality {}", n / 1000, enc.quality);
         std::thread::sleep(Duration::from_millis(1100));
     }
+    // hand-over: widgets fade out while the background cross-fades to the base's first frame
+    if let (Some(b), true) = (tl.base_video.as_ref(), is_base) {
+        match cs_core::live::video::first_frame(b, true) {
+            Ok(f) => {
+                let first = std::sync::Arc::new(f);
+                *r.first_frame_slot().lock().unwrap() = Some(first.clone());
+                for (name, p) in [("handover-25", 0.25f32), ("handover-50", 0.5), ("handover-100", 1.0)] {
+                    r.set_live_alpha(1.0 - p);
+                    r.set_handover(Some((HandTarget::FirstFrame, p)));
+                    let f = r.render().0.to_vec();
+                    write_jpeg(dir.join(format!("{name}.jpg")), &f);
+                    if p >= 1.0 {
+                        // the final frame must equal the base's first frame (outside the notch mask)
+                        let same = f.chunks_exact(4).zip(first.chunks_exact(4)).filter(|(a, b)| a[..3] == b[..3]).count();
+                        println!("hand-over end frame: {:.2} % of pixels identical to the base's first frame", 100.0 * same as f64 / (LW * LH) as f64);
+                    }
+                }
+                r.set_live_alpha(1.0);
+                r.set_handover(None);
+            }
+            Err(e) => eprintln!("no first frame: {e}"),
+        }
+    }
+    // preview and base overlay without a device (the app's editor calls)
+    let t = Instant::now();
+    match cs_core::live::render_preview(&tl, 1280, 576, true) {
+        Ok(png) => {
+            std::fs::write(dir.join("preview-live.png"), &png).unwrap();
+            println!("render_preview with live layer 1280x576: {} KB PNG in {} ms (first call, includes the first-frame decode)", png.len() / 1000, t.elapsed().as_millis());
+        }
+        Err(e) => eprintln!("render_preview failed: {e}"),
+    }
+    let t = Instant::now();
+    if let Ok(png) = cs_core::live::render_preview(&tl, 1280, 576, true) {
+        println!("render_preview again: {} ms ({} KB)", t.elapsed().as_millis(), png.len() / 1000);
+    }
+    match cs_core::live::render_preview(&tl, 1280, 576, false) {
+        Ok(png) => std::fs::write(dir.join("preview-base-only.png"), &png).unwrap(),
+        Err(e) => eprintln!("render_preview (base only) failed: {e}"),
+    }
+    let t = Instant::now();
+    match cs_core::live::render_base_overlay(&tl) {
+        Ok(Some(png)) => {
+            std::fs::write(dir.join("base-overlay.png"), &png).unwrap();
+            println!("render_base_overlay: {} KB PNG in {} ms", png.len() / 1000, t.elapsed().as_millis());
+        }
+        Ok(None) => println!("render_base_overlay: none (no onBase items)"),
+        Err(e) => eprintln!("render_base_overlay failed: {e}"),
+    }
     // timing of the stages, single thread, 120 frames
+    r.timing_us = [0; 3];
     let (mut tr, mut tt, mut te, mut bytes) = (0u128, 0u128, 0u128, 0usize);
     for _ in 0..120 {
         let t = Instant::now();
         r.invalidate();
-        let f = r.render(true).0.to_vec();
+        let f = r.render().0.to_vec();
         tr += t.elapsed().as_micros();
         let t = Instant::now();
         rotate_cw(&f, &mut portrait);
@@ -219,7 +320,7 @@ fn dry_run(cfg: &Config) -> i32 {
         bytes += enc.encode(&portrait, PW, PH, frame_budget(cfg.max_kb, cfg.fps), &mut jpeg).unwrap();
         te += t.elapsed().as_micros();
     }
-    println!("render stages avg: background {:.2} ms, clock {:.2} ms, panel {:.2} ms", r.timing_us[0] as f64 / 120000.0, r.timing_us[1] as f64 / 120000.0, r.timing_us[2] as f64 / 120000.0);
+    println!("render stages avg: background {:.2} ms, widgets {:.2} ms, composite+mask {:.2} ms", r.timing_us[0] as f64 / 120000.0, r.timing_us[1] as f64 / 120000.0, r.timing_us[2] as f64 / 120000.0);
     println!("per frame (avg of 120, one thread): render {:.2} ms (includes a 5 MB copy), rotate {:.2} ms, encode {:.2} ms, {:.0} KB, quality {}", tr as f64 / 120000.0, tt as f64 / 120000.0, te as f64 / 120000.0, bytes as f64 / 120000.0, enc.quality);
     println!("wrote frames to {}", dir.display());
     0
@@ -244,13 +345,13 @@ fn mem(h: HANDLE) -> (f64, f64) {
     (m.WorkingSetSize as f64 / 1048576.0, m.PagefileUsage as f64 / 1048576.0)
 }
 
-fn measure(base: &Config, secs: u64, use_device: bool) -> i32 {
+fn measure(base: &Config, theme: Option<ThemeLive>, secs: u64, use_device: bool) -> i32 {
     let cores: f64 = std::env::var("NUMBER_OF_PROCESSORS").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
     let me: HANDLE = unsafe { GetCurrentProcess() };
     println!("measuring {secs} s per run, {} (cores: {cores})", if use_device { "WITH the screen" } else { "no screen (frames are discarded)" });
     let video_only = std::env::args().any(|a| a == "--video-only");
     let mut runs: Vec<(u32, bool)> = if video_only { vec![] } else { vec![(30, false), (60, false)] };
-    if base.background.is_some() {
+    if base.background.is_some() || theme.as_ref().is_some_and(|t| t.base_video.is_some() || t.fallback_video.is_some()) {
         runs.extend([(30, true), (60, true)]);
     } else {
         println!("(no --video given: only the gradient background is measured)");
@@ -262,6 +363,14 @@ fn measure(base: &Config, secs: u64, use_device: bool) -> i32 {
             cfg.background = None;
         }
         let p = Pipeline::start(&cfg, if use_device { Sink::Device } else { Sink::Null });
+        if let Some(t) = &theme {
+            let mut t = t.clone();
+            if !video {
+                t.base_video = None;
+                t.fallback_video = None;
+            }
+            p.set_theme(t);
+        }
         std::thread::sleep(Duration::from_secs(4)); // warm up (connect, caches, quality settles)
         let s0 = p.shared.stats.snap();
         let (c0, w0) = (ft(me), Instant::now());
@@ -358,7 +467,7 @@ fn tray_icon_image() -> tray_icon::Icon {
     tray_icon::Icon::from_rgba(px, n as u32, n as u32).expect("icon")
 }
 
-fn run_tray(mut cfg: Config, use_device: bool) -> i32 {
+fn run_tray(mut cfg: Config, theme: Option<ThemeLive>, use_device: bool) -> i32 {
     use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     // One companion at a time.
     let name: Vec<u16> = "Local\\CoolerScreenCompanion\0".encode_utf16().collect();
@@ -377,6 +486,9 @@ fn run_tray(mut cfg: Config, use_device: bool) -> i32 {
     make_session_window();
 
     let pipeline = Arc::new(Pipeline::start(&cfg, if use_device { Sink::Device } else { Sink::Null }));
+    if let Some(t) = theme {
+        pipeline.set_theme(t);
+    }
     let _ = PIPELINE.set(pipeline.clone());
 
     let menu = Menu::new();

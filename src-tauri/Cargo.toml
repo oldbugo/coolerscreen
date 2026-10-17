@@ -31,7 +31,7 @@ getrandom = "0.3"
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_WinRT", "Media_Control", "Storage_Streams", "Graphics_Imaging", "Foundation", "Foundation_Collections"] }
 windows-capture = "2.0.1"
 jpeg-encoder = { version = "0.6", features = ["simd"] }
-tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd"] }
+tiny-skia = { version = "0.11", default-features = false, features = ["std", "simd", "png-format"] }
 ab_glyph = "0.2"
 tray-icon = "0.25"
 
