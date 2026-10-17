@@ -1,5 +1,5 @@
 //! `cs2 edge-tune`: temporary tool to find how much of each screen edge is really visible.
-//! Streams a plain tuning picture live at FULL resolution (landscape 2400x1080, 1 canvas px = 1 screen px), rotated 90 deg
+//! Streams a plain tuning picture live at the known-good size (landscape 1680x756 = the 2400x1080 design x 0.7; `--scale 1.0` = full 2400x1080, which the screen does NOT show), rotated 90 deg
 //! clockwise into a 1080x2400 portrait 4:2:0 JPEG exactly like the real engine (live/encode.rs rotate_cw), no notch or
 //! corner mask. Four offsets (top, right, bottom, left, in px) shrink the content rectangle from the full canvas inward.
 //! Sends only: FF D9 FF D9, 0x15 [00 0A], 0x11 keepalives, frames, and the normal ending (0x0E [1], 0x14 [1,0]).
@@ -8,10 +8,11 @@ use super::live::{encode_fit, glyph, Canvas};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const W: usize = 2400;
-const H: usize = 1080;
-const MAX_OFFSET: i32 = 200;
-const MAX_BYTES: usize = 250_000;
+const MAX_OFFSET: i32 = 200; // screen px
+const DEFAULT_SCALE: f64 = 0.7; // 1680x756 landscape = the known-good live size (vendor profile)
+fn max_bytes(k: f64) -> usize {
+    if k < 1.0 { 200_000 } else { 250_000 }
+}
 const NAMES: [&str; 4] = ["TOP", "RIGHT", "BOTTOM", "LEFT"];
 const KEYS: [&str; 4] = ["top", "right", "bottom", "left"];
 
@@ -28,6 +29,7 @@ struct State {
     off: [i32; 4], // top, right, bottom, left
     sel: usize,
     grid: bool,
+    k: f64, // sent pixels per screen pixel (offsets in `off` are in SENT pixels)
 }
 
 // ------------------------------------------------------------------ drawing
@@ -110,14 +112,16 @@ impl Rect {
 }
 
 fn draw(st: &State) -> Canvas {
-    let mut c = Canvas::blank(1.0, [0, 0, 0]);
-    let r = Rect { x0: st.off[3] as i64, y0: st.off[0] as i64, x1: W as i64 - st.off[1] as i64, y1: H as i64 - st.off[2] as i64 };
+    let mut c = Canvas::blank(st.k, [0, 0, 0]);
+    let (cw, ch) = (c.w as i64, c.h as i64);
+    let r = Rect { x0: st.off[3] as i64, y0: st.off[0] as i64, x1: cw - st.off[1] as i64, y1: ch - st.off[2] as i64 };
     if st.grid {
-        for x in (0..W as i64).step_by(20) {
-            fill(&mut c, x, 0, x + 1, H as i64, if x % 100 == 0 { [120, 120, 120] } else { [55, 55, 55] });
+        let gs = ((20.0 * st.k).round() as usize).max(2);
+        for x in (0..cw).step_by(gs) {
+            fill(&mut c, x, 0, x + 1, ch, if (x / gs as i64) % 5 == 0 { [120, 120, 120] } else { [55, 55, 55] });
         }
-        for y in (0..H as i64).step_by(20) {
-            fill(&mut c, 0, y, W as i64, y + 1, if y % 100 == 0 { [120, 120, 120] } else { [55, 55, 55] });
+        for y in (0..ch).step_by(gs) {
+            fill(&mut c, 0, y, cw, y + 1, if (y / gs as i64) % 5 == 0 { [120, 120, 120] } else { [55, 55, 55] });
         }
     }
 
@@ -125,7 +129,7 @@ fn draw(st: &State) -> Canvas {
     // a long white tick with a number every 10 px. d = pixels inward from the content edge.
     for e in 0..4 {
         let (a0, a1) = r.span(e);
-        for frac in [15i64, 50, 85] {
+        for frac in if e == 0 || e == 2 { [15i64, 50, 85] } else { [6, 42, 76] } {
             let along = a0 + (a1 - a0) * frac / 100;
             for d in (0..=60i64).step_by(2) {
                 let long = d % 10 == 0;
@@ -138,7 +142,7 @@ fn draw(st: &State) -> Canvas {
                     px(&mut c, x, y, col);
                 }
                 if long {
-                    let label = d.to_string();
+                    let label = ((d as f64) / st.k).round().to_string();
                     let lw = text_w(2, &label) - 2;
                     let (tx, ty) = r.at(e, along, d);
                     let (lx, ly) = match e {
@@ -178,16 +182,18 @@ fn draw(st: &State) -> Canvas {
     }
 
     // big readout in the middle, the selected value on a yellow box
-    let s = 6usize;
-    let parts: Vec<String> = (0..4).map(|i| format!("{} {}", NAMES[i], st.off[i])).collect();
+    let s = if st.k < 1.0 { 4usize } else { 6 };
+    let hs = if st.k < 1.0 { 2usize } else { 3 };
+    let ss = s * 2 / 3;
+    let parts: Vec<String> = (0..4).map(|i| format!("{} {}", NAMES[i], scr(st, i))).collect();
     let gap = 3 * 6 * s as i64;
     let total: i64 = parts.iter().map(|p| text_w(s, p)).sum::<i64>() + gap * 3;
-    let mut x = (W as i64 - total) / 2;
-    let y = H as i64 / 2 - 21;
+    let mut x = (cw - total) / 2;
+    let y = ch / 2 - (7 * s as i64) / 2;
     for (i, p) in parts.iter().enumerate() {
         let w = text_w(s, p);
         if i == st.sel {
-            fill(&mut c, x - 12, y - 12, x + w + 6, y + 7 * s as i64 + 12, YELLOW);
+            fill(&mut c, x - 2 * s as i64, y - 2 * s as i64, x + w + s as i64, y + 9 * s as i64, YELLOW);
             text(&mut c, x, y, s, p, [0, 0, 0]);
         } else {
             text(&mut c, x, y, s, p, WHITE);
@@ -195,13 +201,13 @@ fn draw(st: &State) -> Canvas {
         x += w + gap;
     }
     let sel_line = format!("SELECTED: {}   (1-4 OR T R B L)", NAMES[st.sel]);
-    text(&mut c, (W as i64 - text_w(4, &sel_line)) / 2, y - 80, 4, &sel_line, RED);
+    text(&mut c, (cw - text_w(ss, &sel_line)) / 2, y - (s as i64 * 10 + 20), ss, &sel_line, RED);
     let help = [
-        "UP OR + = 1 PX INWARD   DOWN OR - = 1 PX BACK   SHIFT OR PGUP/PGDN = 10 PX   0 = RESET EDGE",
+        "UP OR + = EDGE INWARD   DOWN OR - = BACK   (STEPS OF ABOUT 1.4 PX)   SHIFT OR PGUP/PGDN = 10 STEPS   0 = RESET",
         "S = SAVE AND PRINT   G = GRID   Q OR ESC = QUIT",
     ];
     for (i, h) in help.iter().enumerate() {
-        text(&mut c, (W as i64 - text_w(3, h)) / 2, y + 110 + i as i64 * 40, 3, h, WHITE);
+        text(&mut c, (cw - text_w(hs, h)) / 2, y + 7 * s as i64 + 40 + i as i64 * (hs as i64 * 13), hs, h, WHITE);
     }
     c
 }
@@ -212,6 +218,7 @@ fn json_path() -> PathBuf {
     cs_core::core::paths::base().join("edge-offsets.json")
 }
 
+/// Offsets in screen px as saved; the caller converts to sent px.
 fn load() -> Option<[i32; 4]> {
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(json_path()).ok()?).ok()?;
     let mut o = [0i32; 4];
@@ -227,8 +234,8 @@ fn save(st: &State) -> Result<PathBuf, String> {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
     let v = serde_json::json!({
-        "top": st.off[0], "right": st.off[1], "bottom": st.off[2], "left": st.off[3],
-        "note": "pixels hidden at each edge of the 2400x1080 landscape picture (top = top as you look at the screen); content rectangle = canvas inset by these"
+        "top": scr(st, 0), "right": scr(st, 1), "bottom": scr(st, 2), "left": scr(st, 3),
+        "note": "screen pixels (2400x1080 space) hidden at each edge of the landscape picture (top = top as you look at the screen); content rectangle = canvas inset by these"
     });
     std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap()).map_err(|e| e.to_string())?;
     Ok(p)
@@ -237,7 +244,7 @@ fn save(st: &State) -> Result<PathBuf, String> {
 fn describe(st: &State) -> String {
     format!(
         "Top {} | Right {} | Bottom {} | Left {}   (selected: {})",
-        st.off[0], st.off[1], st.off[2], st.off[3], NAMES[st.sel].to_lowercase()
+        scr(st, 0), scr(st, 1), scr(st, 2), scr(st, 3), NAMES[st.sel].to_lowercase()
     )
 }
 
@@ -358,7 +365,7 @@ fn dry_run(args: &[String], mut st: State) -> i32 {
             return 2;
         }
         for i in 0..4 {
-            st.off[i] = v[i].clamp(0, MAX_OFFSET);
+            st.off[i] = ((v[i].clamp(0, MAX_OFFSET) as f64) * st.k).round() as i32;
         }
     }
     if let Some(s) = arg_val(args, "--select") {
@@ -374,7 +381,7 @@ fn dry_run(args: &[String], mut st: State) -> i32 {
     let c = draw(&st);
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("work");
     let _ = std::fs::create_dir_all(&dir);
-    match encode_fit(c.w, c.h, &c.rgb, 95, MAX_BYTES) {
+    match encode_fit(c.w, c.h, &c.rgb, 95, max_bytes(st.k)) {
         Ok((j, _)) => {
             let p = dir.join("edge-tune.jpg");
             std::fs::write(&p, &j).unwrap();
@@ -395,7 +402,7 @@ fn dry_run(args: &[String], mut st: State) -> i32 {
     }
     // the portrait frame as the screen would get it
     let (pw, ph, rgb) = c.pixels(true);
-    match encode_fit(pw, ph, &rgb, 95, MAX_BYTES) {
+    match encode_fit(pw, ph, &rgb, 95, max_bytes(st.k)) {
         Ok((j, q)) => println!("Portrait frame {pw}x{ph}: {} KB at quality {q}.", j.len() / 1000),
         Err(e) => eprintln!("{e}"),
     }
@@ -407,7 +414,9 @@ pub fn edge_tune(args: &[String]) -> i32 {
     unsafe {
         windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(on_ctrl), 1);
     }
-    let mut st = State { off: load().unwrap_or([0; 4]), sel: 0, grid: false };
+    let k = scale_arg(args);
+    let off = load().map(|o| o.map(|v| ((v as f64) * k).round() as i32)).unwrap_or([0; 4]);
+    let mut st = State { off, sel: 0, grid: false, k };
     if args.iter().any(|a| a == "--dry-run") {
         return dry_run(args, st);
     }
@@ -415,15 +424,17 @@ pub fn edge_tune(args: &[String]) -> i32 {
     println!("Find how much of each edge of the screen is really visible. The screen shows a black picture with a thin");
     println!("line on each edge of a 'content rectangle' and rulers going inward. Move an edge inward until its line");
     println!("(and the 0 of its ruler) is just visible: that offset is the number of hidden pixels on that edge.");
-    println!("Top means the top of the picture as you look at the screen.");
+    println!("Top means the top of the picture as you look at the screen. The picture is sent at 1680x756, so one key press");
+    println!("is one sent pixel = about 1.4 screen pixels; all printed and saved values are in screen pixels (2400x1080 space).");
+    println!("If the screen stays black, press Q and tell Claude.");
     println!();
     println!("  1 2 3 4 or T R B L         choose Top, Right, Bottom, Left (Tab also cycles)");
-    println!("  Up or +                    move the chosen edge inward by 1 pixel");
-    println!("  Down or -                  move it back out by 1 pixel (lowest value is 0)");
+    println!("  Up or +                    move the chosen edge inward one step (about 1.4 screen pixels)");
+    println!("  Down or -                  move it back out one step (lowest value is 0)");
     println!("  Shift+Up/Down, PgUp/PgDn   the same in steps of 10");
     println!("  0                          reset the chosen edge to 0");
     println!("  S                          save to {} and print the values", json_path().display());
-    println!("  G                          show or hide a 20-pixel grid over the whole screen");
+    println!("  G                          show or hide a grid (every 20 screen pixels) over the whole screen");
     println!("  Q, Esc or Ctrl+C           quit (the screen goes back to its stored loop clip)");
     println!();
     let mut session = match cs_core::live::session::LiveSession::connect() {
@@ -453,11 +464,11 @@ pub fn edge_tune(args: &[String]) -> i32 {
             match k {
                 Key::Select(i) => st.sel = i,
                 Key::Next => st.sel = (st.sel + 1) % 4,
-                Key::Step(d) => st.off[st.sel] = (st.off[st.sel] + d).clamp(0, MAX_OFFSET),
+                Key::Step(d) => st.off[st.sel] = (st.off[st.sel] + d).clamp(0, max_sent(st.k)),
                 Key::Reset => st.off[st.sel] = 0,
                 Key::Grid => st.grid = !st.grid,
                 Key::Save => match save(&st) {
-                    Ok(p) => println!("SAVED to {}: top {}, right {}, bottom {}, left {}", p.display(), st.off[0], st.off[1], st.off[2], st.off[3]),
+                    Ok(p) => println!("SAVED to {}: top {}, right {}, bottom {}, left {}", p.display(), scr(&st, 0), scr(&st, 1), scr(&st, 2), scr(&st, 3)),
                     Err(e) => println!("Could not save: {e}"),
                 },
                 Key::Quit => quit = true,
@@ -476,7 +487,7 @@ pub fn edge_tune(args: &[String]) -> i32 {
         }
         if dirty {
             let (pw, ph, rgb) = draw(&st).pixels(true);
-            let r = encode_fit(pw, ph, &rgb, 95, MAX_BYTES).and_then(|(j, _)| session.send_frame(&j));
+            let r = encode_fit(pw, ph, &rgb, 95, max_bytes(st.k)).and_then(|(j, _)| session.send_frame(&j));
             if let Err(e) = r {
                 eprintln!("Error: {e}");
                 code = 1;
@@ -494,4 +505,17 @@ pub fn edge_tune(args: &[String]) -> i32 {
     session.stop();
     println!("Screen restored to the loop clip.");
     code
+}
+
+/// An offset in screen pixels (2400x1080 space), rounded, from the sent-pixel value kept in the state.
+fn scr(st: &State, i: usize) -> i32 {
+    (st.off[i] as f64 / st.k).round() as i32
+}
+
+fn max_sent(k: f64) -> i32 {
+    (MAX_OFFSET as f64 * k).round() as i32
+}
+
+fn scale_arg(args: &[String]) -> f64 {
+    arg_val(args, "--scale").and_then(|s| s.parse().ok()).filter(|k: &f64| *k > 0.2 && *k <= 1.0).unwrap_or(DEFAULT_SCALE)
 }
