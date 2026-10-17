@@ -2653,7 +2653,20 @@ const FIT_ROWS = [['top', 'Top'], ['right', 'Right'], ['bottom', 'Bottom'], ['le
   ['shiftY', 'Up / down', 'Moves the whole picture: − up, + down', true], ['shiftX', 'Left / right', 'Moves the whole picture: − left, + right', true]];
 const fitSent = v => Math.sign(v) * Math.floor((Math.abs(v) * 7 + 5) / 10);   // screen px -> sent px (x 0.7, rounded)
 const fitScreen = p => Math.sign(p) * Math.round(Math.abs(p) * 10 / 7);        // sent px -> screen px
+// The current theme's stored base was made with another fit: say so here, with the way to fix it.
+async function refreshFitStale() {
+  const note = $('fitStale');
+  note.hidden = true;
+  if (!S.currentTheme) return;
+  try {
+    const t = await call('theme_get', { originalId: S.currentTheme });
+    note.hidden = !(t.baseStale || t.baseUnstored);
+    note.dataset.oid = S.currentTheme; note.dataset.name = t.name || '';
+  } catch { /* the note stays hidden */ }
+}
+$('fitStore').onclick = () => { closeDrawer(); applyTheme($('fitStale').dataset.oid, $('fitStale').dataset.name); };
 function loadFitForm() {
+  refreshFitStale();
   FC.saved = { ...FIT0, ...((S.app && S.app.screenFit) || {}) };
   FC.cur = { ...FC.saved };
   renderFitRows();
@@ -2724,9 +2737,10 @@ $('fitSave').onclick = async () => {
   try {
     S.app = await call('settings_update', { screenFit: FC.cur });
     FC.saved = { ...FIT0, ...S.app.screenFit };
-    $('fitMsg').textContent = 'Saved. Store your theme again to update the loop.';
+    $('fitMsg').textContent = 'Saved.';
     await loadOriginals().catch(() => {});
     if (typeof themes !== 'undefined') themes.appChanged();
+    refreshFitStale();
   } catch (e) { $('fitMsg').textContent = e.message; }
 };
 // ---------- themes: the On screen editor and the Apply dialog ----------

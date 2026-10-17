@@ -808,8 +808,7 @@ impl App {
 
     /// Our own live session has the screen open right now (so opening it a second time would fail as "busy").
     fn live_holds_screen(&self) -> bool {
-        let st = self.live.status();
-        st["running"] == true && st["connected"] == true && st["paused"] == false && st["deviceHold"] == false && st["systemHold"] == false && self.device.fake_mode().is_none()
+        self.live.streaming()
     }
 
     pub fn device_state(&self) -> CoreResult<Value> {
@@ -830,11 +829,11 @@ impl App {
         }
         // Live on the screen: it is connected, so the last answer stands (no second open, no pause of the picture).
         if self.live_holds_screen() {
-            if let Some(mut info) = self.last_info.lock().unwrap().clone() {
-                info["_live"] = json!(true);
-                info.as_object_mut().map(|o| o.remove("_capacity"));
-                return Ok(info);
-            }
+            // the last answer of a real check, or (nothing checked yet) what a live session proves: a WinUSB screen that answers
+            let mut info = self.last_info.lock().unwrap().clone().unwrap_or_else(|| json!({ "model": "(live)", "_transport": "winusb", "_needsSetup": false }));
+            info["_live"] = json!(true);
+            info.as_object_mut().map(|o| o.remove("_capacity"));
+            return Ok(info);
         }
         let app = self.arc();
         let mut info = self.run_task(TaskSpec::new("check", "Checking the screen", Resources::one(Res::Device)), move |ctx| {

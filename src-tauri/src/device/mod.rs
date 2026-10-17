@@ -70,7 +70,7 @@ pub fn friendly(e: DevErr) -> DevErr {
         return DevErr::coded("notFound", "Screen not found. Check the USB cable and that the cooler is powered.");
     }
     if has(&["access denied", "busy", "in use", "ebusy", "eacces", "cannot open", "cannot claim", "opening"]) {
-        return DevErr::coded("busy", format!("Could not open the screen. Close \"LOVINGCOOL MONITOR\" (and any other program using the screen), then try again. ({m})"));
+        return DevErr::coded("busy", format!("Could not open the screen: another program may be using it. ({m})"));
     }
     if has(&["timed out", "time out", "timeout", "timedout", "stalled"]) {
         return DevErr::coded("stalled", format!("The screen stopped responding. Press Reconnect (or unplug and replug its USB cable), then send again. ({m})"));

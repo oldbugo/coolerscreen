@@ -508,6 +508,9 @@ impl Pipeline {
                             std::thread::sleep(Duration::from_millis(100));
                             continue;
                         }
+                        // A connect in progress counts as an open session: a device task asking live to step aside waits for it
+                        // (and for the pause to end it), instead of opening the screen at the same moment.
+                        sh.session_active.store(true, Relaxed);
                         match LiveSession::connect() {
                             Ok(s) => {
                                 log("connected, live stream started");
@@ -519,6 +522,7 @@ impl Pipeline {
                                 backoff = 1;
                             }
                             Err(e) => {
+                                sh.session_active.store(false, Relaxed);
                                 log(&format!("cannot connect ({e}); retry in {backoff} s"));
                                 next_try = Instant::now() + Duration::from_secs(backoff);
                                 backoff = (backoff * 2).min(15);

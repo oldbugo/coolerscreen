@@ -1064,3 +1064,44 @@ fn a_busy_screen_names_who_holds_it_and_the_check_reports_it() {
     assert!(st["build"]["hash"].as_str().is_some_and(|h| !h.is_empty()) && st["build"]["builtAt"].as_u64().unwrap_or(0) > 1_700_000_000, "{}", st["build"]);
     assert!(super::buildinfo::startup_line("2.9.0").contains(&format!("pid {}", std::process::id())));
 }
+
+#[test]
+fn live_keeps_streaming_through_checks_edits_and_conversions_and_pauses_once_for_an_upload() {
+    use crate::live::Config;
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Live all along.mp4");
+    app.live.set_no_device(true);
+    app.live.set_config_override(Some(Config::default()));
+    app.live.start();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(app.live.streaming(), "live runs");
+    let (p0, r0) = (app.live.pause_count(), app.live.resume_count());
+
+    // routine checks, state, theme edits, a base being made (media work): the stream is never touched
+    for i in 0..3 {
+        let c = app.device_check().unwrap();
+        assert_eq!(c["_live"], json!(true), "answered from the live session");
+        assert_eq!(app.device_state().unwrap()["live"], json!(true));
+        app.theme_set(&oid, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3, "props": { "seconds": i % 2 == 0 } }] })).unwrap();
+        app.refresh_live_theme();
+    }
+    let r = app.version_create(&oid, &json!({ "start": 1, "length": 5, "quality": "auto" })).unwrap();
+    let j = wait_job(&app, r["jobId"].as_str().unwrap());
+    assert_eq!(j["status"], "done", "{j}");
+    app.device_check().unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!((app.live.pause_count(), app.live.resume_count()), (p0, r0), "no pause for checks, edits or a conversion");
+    assert!(app.live.streaming());
+
+    // an upload is a real device write: exactly one pause and one resume
+    let vid = r["versionId"].as_str().unwrap().to_string();
+    let s = app.version_send(&vid).unwrap();
+    let j = wait_job(&app, s["jobId"].as_str().unwrap());
+    assert_eq!(j["status"], "done", "{j}");
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!((app.live.pause_count(), app.live.resume_count()), (p0 + 1, r0 + 1), "one pause and one resume for the upload");
+    assert!(app.live.streaming(), "live is back");
+    let log = std::fs::read_to_string(crate::device::log::base_dir().join("device.log")).unwrap_or_default();
+    assert!(log.contains("device task: send"), "the reason is logged");
+    app.live.stop();
+}

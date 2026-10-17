@@ -89,6 +89,7 @@ export function createThemes(ctx) {
     if (seq !== E.loadSeq) return;
     Object.assign(E, { oid, info, theme: fixTheme(info.theme), selIds: [], selGroup: null, anchor: null, rev: 0, saved: 0, saveErr: null, liveUrl: null, baseUrl: null, baseSig: null, previewOk: true });
     E.snap = !S.app || S.app.editorSnap !== false;
+    E.fitKey = JSON.stringify((S.app && S.app.screenFit) || {});
     buildEditor();
     paintAll();
     schedulePreview(0);
@@ -121,6 +122,10 @@ export function createThemes(ctx) {
   /** The app settings changed (guides, default radius): redraw what depends on them. */
   function appChanged() {
     if (!E.ui) return;
+    // a new screen fit makes the stored base stale: read the editor's view again so the banner shows
+    const fk = JSON.stringify((S.app && S.app.screenFit) || {});
+    if (E.fitKey !== undefined && E.fitKey !== fk) syncFromServer();
+    E.fitKey = fk;
     paintStage(); paintProps();
   }
 
@@ -240,7 +245,7 @@ export function createThemes(ctx) {
         el('button', { class: 'btn primary', text: 'Store it on the screen', onclick: run })));
     } else if (E.info.baseStale) {
       u.banner.append(el('div', { class: 'base-banner', role: 'status' },
-        el('p', { text: 'Base needs re-storing: the text, pictures or rounded corners that are part of the base changed since it was stored on the screen. The live layer already shows the change.' }),
+        el('p', { text: 'Base needs re-storing: the screen fit, corners, text or pictures changed since it was stored. Live already shows the change.' }),
         el('button', { class: 'btn primary', text: 'Store the base again', onclick: run })));
     }
   }

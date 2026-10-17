@@ -1050,6 +1050,13 @@ impl Shared {
             let busy = Self::device_active(&g);
             device_change = if busy != g.device_busy_reported {
                 g.device_busy_reported = busy;
+                if busy {
+                    // why live is about to step aside (device.log)
+                    let kinds: Vec<String> = g.entries.values().filter(|e| e.spec.resources.get(Res::Device) > 0).map(|e| format!("{} \"{}\"", e.spec.kind, e.spec.label)).collect();
+                    crate::device::log(&format!("device task: {} (live steps aside until it is done)", kinds.join(", ")));
+                } else {
+                    crate::device::log("device tasks: none left");
+                }
                 Some(busy)
             } else {
                 None

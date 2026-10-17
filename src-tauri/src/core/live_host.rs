@@ -51,6 +51,30 @@ pub struct LiveHost {
     tune_temp: AtomicBool,
     /// Called when something the UI and the tray show changes (theme, idle state).
     on_change: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
+    /// How many times live was paused (holds went from none to some) and brought back since the app started (tests, log).
+    pauses: AtomicU64,
+    resumes: AtomicU64,
+}
+
+/// Why a hold bit is set, in words for device.log.
+fn reason(bits: u32) -> String {
+    let mut v = Vec::new();
+    for (b, t) in [
+        (USER, "user pause"),
+        (DEVICE, "device task"),
+        (SLEEP, "sleep"),
+        (LOCK, "lock"),
+        (LAYER, "no live items or live layer off: the screen plays its own base"),
+        (FITCAL, "screen fit rulers"),
+    ] {
+        if bits & b != 0 {
+            v.push(t);
+        }
+    }
+    v.join(", ")
+}
+fn hlog(msg: &str) {
+    crate::device::log(&format!("live: {msg}"));
 }
 
 impl Default for LiveHost {
@@ -70,6 +94,8 @@ impl Default for LiveHost {
             fit_tune: Mutex::new(None),
             tune_temp: AtomicBool::new(false),
             on_change: Mutex::new(Vec::new()),
+            pauses: AtomicU64::new(0),
+            resumes: AtomicU64::new(0),
         }
     }
 }
@@ -88,6 +114,31 @@ impl LiveHost {
         let fs = self.on_change.lock().unwrap().clone();
         for f in fs {
             f();
+        }
+    }
+
+    pub fn pause_count(&self) -> u64 {
+        self.pauses.load(SeqCst)
+    }
+    pub fn resume_count(&self) -> u64 {
+        self.resumes.load(SeqCst)
+    }
+
+    /// Streaming right now: running, nothing holds it, and (with the real screen) the session is connected. A check or state
+    /// request is answered from this instead of opening the screen again.
+    pub fn streaming(&self) -> bool {
+        let Some(p) = self.pipeline() else { return false };
+        self.holds.load(SeqCst) == 0 && !p.shared.paused.load(SeqCst) && (self.no_device.load(SeqCst) || p.shared.connected.load(SeqCst))
+    }
+
+    /// Set a hold bit, counting and logging the pause when it is the first one.
+    fn add_hold(&self, bit: u32) {
+        let was = self.holds.fetch_or(bit, SeqCst);
+        if was == 0 {
+            self.pauses.fetch_add(1, SeqCst);
+        }
+        if was & bit == 0 {
+            hlog(&format!("pause: {} (holds now: {})", reason(bit), reason(was | bit)));
         }
     }
 
@@ -234,6 +285,7 @@ impl LiveHost {
     pub fn set_theme(self: &Arc<Self>, t: crate::live::theme::ThemeLive) {
         *self.theme.lock().unwrap() = Some(t.clone());
         if let Some(p) = self.pipeline() {
+            hlog("theme changed: reloaded in place, the stream goes on");
             p.set_theme(t);
         }
         self.evaluate_idle();
@@ -265,7 +317,12 @@ impl LiveHost {
 
     fn apply_pause(&self) {
         if let Some(p) = self.pipeline() {
-            p.shared.paused.store(self.holds.load(SeqCst) != 0, SeqCst);
+            let hold = self.holds.load(SeqCst) != 0;
+            if !hold && p.shared.paused.load(SeqCst) {
+                self.resumes.fetch_add(1, SeqCst);
+                hlog("resume");
+            }
+            p.shared.paused.store(hold, SeqCst);
         } else if self.holds.load(SeqCst) == 0 && self.off_stopped.swap(false, SeqCst) {
             let cfg = self.last_cfg.lock().unwrap().clone();
             if let Some(c) = cfg {
@@ -289,6 +346,7 @@ impl LiveHost {
         self.off_stopped.store(false, SeqCst);
         *self.last_cfg.lock().unwrap() = Some(cfg.clone());
         let sink = if self.no_device.load(SeqCst) { Sink::Null } else { Sink::Device };
+        hlog(&format!("start (holds: {})", if self.holds.load(SeqCst) == 0 { "none".to_string() } else { reason(self.holds.load(SeqCst)) }));
         let p = Arc::new(Pipeline::start(&cfg, sink));
         if let Some(t) = self.theme.lock().unwrap().clone() {
             p.set_theme(t);
@@ -307,6 +365,7 @@ impl LiveHost {
         self.off_stopped.store(false, SeqCst);
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
+            hlog("stop (live switched off or the app is closing)");
             p.stop();
         }
     }
@@ -336,9 +395,11 @@ impl LiveHost {
                     p.pause_with_handover(); // blocks up to ~1.3 s: call from a worker thread
                 }
             }
-            self.holds.fetch_or(USER, SeqCst);
+            self.add_hold(USER);
         } else {
-            self.holds.fetch_and(!USER, SeqCst);
+            if self.holds.fetch_and(!USER, SeqCst) & USER != 0 {
+                hlog("release: user pause");
+            }
         }
         self.apply_pause();
     }
@@ -390,9 +451,10 @@ impl LiveHost {
     /// when all holds are released.
     pub fn hold_screen_off(&self, bit: u32) {
         self.resume_gen.fetch_add(1, SeqCst);
-        self.holds.fetch_or(bit, SeqCst);
+        self.add_hold(bit);
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
+            hlog("stop with the screen off (sleep or lock)");
             self.off_stopped.store(true, SeqCst);
             p.stop_with(Ending::ScreenOff);
         }
@@ -401,7 +463,7 @@ impl LiveHost {
     /// Pause live for a reason (DEVICE, SLEEP, LOCK) and wait until the stream has ended and the screen is free.
     pub fn hold(&self, bit: u32, max: Duration) {
         self.resume_gen.fetch_add(1, SeqCst);
-        self.holds.fetch_or(bit, SeqCst);
+        self.add_hold(bit);
         if let Some(p) = self.pipeline() {
             p.shared.paused.store(true, SeqCst);
             self.wait_stream_ended(&p, max);
@@ -410,7 +472,10 @@ impl LiveHost {
 
     /// End a hold; live resumes after `delay` unless another reason still holds it.
     pub fn release(self: &Arc<Self>, bit: u32, delay: Duration) {
-        self.holds.fetch_and(!bit, SeqCst);
+        let was = self.holds.fetch_and(!bit, SeqCst);
+        if was & bit != 0 {
+            hlog(&format!("release: {} (still held: {}); resume in {} ms", reason(bit), if was & !bit == 0 { "nothing".to_string() } else { reason(was & !bit) }, delay.as_millis()));
+        }
         let gen = self.resume_gen.fetch_add(1, SeqCst) + 1;
         let me = self.clone();
         std::thread::spawn(move || {

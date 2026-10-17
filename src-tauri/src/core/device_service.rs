@@ -42,7 +42,7 @@ fn friendly_fake(code: &str) -> CoreError {
     let m = match code {
         "notFound" => "Screen not found. Check the USB cable and that the cooler is powered.",
         "failedUsb" => "Windows could not connect to the screen at startup (a known quirk). Click Reconnect (needs one administrator approval).",
-        "busy" => "Could not open the screen. Close \"LOVINGCOOL MONITOR\" (and any other program using the screen), then try again.",
+        "busy" => "Could not open the screen: another program may be using it.",
         "noReply" => "The screen is not responding (it keeps playing, but doesn't answer). Restart the screen to bring it back.",
         _ => "Screen error",
     };
