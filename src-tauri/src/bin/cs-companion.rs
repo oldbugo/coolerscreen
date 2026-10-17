@@ -280,7 +280,7 @@ fn dry_run(cfg: &Config, theme: Option<ThemeLive>) -> i32 {
         }
     }
     // calibration overlay (screen guides) as it appears on the real screen
-    r.set_calibration(Some(cs_core::live::Guides::from_value(&serde_json::json!({ "curve": { "left": 60, "right": 220, "top": 0, "bottom": 40 }, "zones": [{ "id": "z1", "name": "RAM", "edge": "right", "size": 180 }] }))));
+    r.set_calibration(Some(cs_core::live::Guides::from_value(&serde_json::json!({ "left": { "size": 160 }, "right": { "size": 180 }, "curve": { "offset": -40, "left": 60, "right": 80 } }))));
     write_jpeg(dir.join("calibration.jpg"), r.render().0);
     r.set_calibration(None);
     // preview and base overlay without a device (the app's editor calls)

@@ -896,13 +896,15 @@ mod tests {
         let mut r = Renderer::new(Arc::new(Mutex::new(Sensors::default())), None);
         r.set_theme(ThemeLive::new(Theme::default(), PathBuf::new()));
         let plain = r.render().0.to_vec();
-        let g = Guides::from_value(&serde_json::json!({ "curve": { "right": 200 }, "zones": [{ "name": "RAM", "edge": "right", "size": 180 }] }));
+        let g = Guides::from_value(&serde_json::json!({ "left": { "size": 100 }, "right": { "size": 180 }, "curve": { "offset": 0, "left": 60, "right": 140 } }));
         r.set_calibration(Some(g));
         let (f, changed) = r.render();
         assert!(changed, "a change redraws at once");
-        // the curve line is yellow at 2400-200 px = canvas x 1540
-        let i = (300 * LW + 1540) * 4;
+        // the curve band edge line is yellow at canvas x 1200+140 = 1340 (engine x 938); the right band tint changes the frame
+        let i = (300 * LW + 938) * 4;
         assert_eq!(&f[i..i + 3], &[255, 235, 0]);
+        let j = (300 * LW + LW - 20) * 4;
+        assert_ne!(&f[j..j + 3], &plain[j..j + 3]);
         r.set_calibration(None);
         let back = r.render().0.to_vec();
         assert_eq!(back.len(), plain.len());

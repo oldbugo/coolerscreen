@@ -10,6 +10,8 @@ use std::path::PathBuf;
 pub const THEME_VERSION: u32 = 1;
 /// Smallest widget box side (fraction of the canvas).
 pub const MIN_BOX: f32 = 0.02;
+/// Default theme gap (px on the 2400x1080 canvas).
+pub const DEFAULT_GAP: f32 = 24.0;
 
 /// Widget types the engine draws. "weather" is reserved (a labelled placeholder).
 pub const WIDGET_TYPES: [&str; 6] = ["clock", "music", "stats", "text", "image", "weather"];
@@ -29,12 +31,14 @@ pub struct Theme {
     pub guides_offset: GuidesOffset,
     /// Corner radius in px on 2400x1080: None = use the settings default, 0 = none for this theme.
     pub corners: Option<f32>,
+    /// Snap distance in px on 2400x1080 (editor): spacing from canvas edges, guide bands and between boxes.
+    pub gap: f32,
     pub handover: Handover,
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), groups: Vec::new(), live_layer: true, guides_offset: GuidesOffset::default(), corners: None, handover: Handover::default() }
+        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), groups: Vec::new(), live_layer: true, guides_offset: GuidesOffset::default(), corners: None, gap: DEFAULT_GAP, handover: Handover::default() }
     }
 }
 
@@ -255,91 +259,136 @@ pub fn parse_color(s: &str, fallback: [u8; 3]) -> [u8; 3] {
 pub const GUIDE_W: f32 = 2400.0;
 pub const GUIDE_H: f32 = 1080.0;
 
-/// How far in from each edge the curve starts (px on the 2400x1080 canvas; 0 = flat).
+/// A band along the left or right edge (px wide).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Curve {
-    pub left: f32,
-    pub right: f32,
-    pub top: f32,
-    pub bottom: f32,
-}
-
-/// An "avoid" band along an edge (something in front of the screen, e.g. the RAM).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Zone {
-    pub id: String,
-    pub name: String,
-    /// "left" | "right" | "top" | "bottom"
-    pub edge: String,
+pub struct Side {
     pub size: f32,
 }
 
-impl Default for Zone {
-    fn default() -> Self {
-        Zone { id: String::new(), name: String::new(), edge: "right".into(), size: 0.0 }
+/// The vertical curve band: `offset` px from the canvas centre (negative = left); `left`/`right` = px from that centre
+/// line to the band's left/right edge.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CurveBand {
+    pub offset: f32,
+    pub left: f32,
+    pub right: f32,
+}
+
+/// Global screen guides (settings.json `screenGuides`, v1.4). Guides are hints, never masks.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct Guides {
+    pub left: Side,
+    pub right: Side,
+    pub curve: CurveBand,
+}
+
+/// Per-theme offsets (theme.json `guidesOffset`): same keys as `Guides`, values are deltas and may be negative.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct GuidesOffset {
+    pub left: Side,
+    pub right: Side,
+    pub curve: CurveBand,
+}
+
+fn num(v: Option<&Value>) -> f32 {
+    v.and_then(|v| v.as_f64()).map(|f| f as f32).filter(|f| f.is_finite()).unwrap_or(0.0)
+}
+
+/// Reads `{left:{size}, right:{size}, curve:{offset,left,right}}`. v1.2 shapes (curve edges top/bottom, `zones`) are migrated:
+/// the curve edges are dropped, a right-edge zone becomes `right.size`, a left-edge zone `left.size`.
+fn parse_parts(v: &Value, deltas: bool) -> (Side, Side, CurveBand) {
+    let side = |k: &str| Side { size: num(v.get(k).and_then(|s| s.get("size"))) };
+    let (mut left, mut right) = (side("left"), side("right"));
+    let c = v.get("curve").filter(|c| c.is_object());
+    let old_curve = c.is_some_and(|c| c.get("top").is_some() || c.get("bottom").is_some())
+        || v.get("zones").is_some()
+        || (!deltas && c.is_some_and(|c| c.get("offset").is_none()) && v.get("left").is_none() && v.get("right").is_none());
+    let curve = match c {
+        Some(c) if !old_curve => CurveBand { offset: num(c.get("offset")), left: num(c.get("left")), right: num(c.get("right")) },
+        _ => CurveBand::default(),
+    };
+    if !deltas {
+        // v1.2 global: an array of zones. (Per-theme v1.2 zone offsets were keyed by id and are dropped.)
+        for z in v.get("zones").and_then(|z| z.as_array()).into_iter().flatten() {
+            let size = num(z.get("size"));
+            match z.get("edge").and_then(|e| e.as_str()) {
+                Some("left") if left.size == 0.0 => left.size = size,
+                Some("right") | None if right.size == 0.0 => right.size = size,
+                _ => {}
+            }
+        }
+    }
+    (left, right, curve)
+}
+
+impl<'de> Deserialize<'de> for Guides {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Guides::from_value(&Value::deserialize(d)?))
     }
 }
 
-/// Global screen guides (settings.json `screenGuides`). Guides are hints, never masks.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Guides {
-    pub curve: Curve,
-    pub zones: Vec<Zone>,
+impl<'de> Deserialize<'de> for GuidesOffset {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(GuidesOffset::from_value(&Value::deserialize(d)?))
+    }
 }
 
-/// Per-theme offsets (theme.json `guidesOffset`): values added to the global ones, may be negative; zones by id.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct GuidesOffset {
-    pub curve: Curve,
-    pub zones: std::collections::HashMap<String, f32>,
-}
-
-fn edge_len(edge: &str) -> f32 {
-    if edge == "top" || edge == "bottom" { GUIDE_H } else { GUIDE_W }
+impl GuidesOffset {
+    pub fn from_value(v: &Value) -> GuidesOffset {
+        let (left, right, curve) = parse_parts(v, true);
+        let mut o = GuidesOffset { left, right, curve };
+        o.clamp();
+        o
+    }
+    /// Finite deltas within +-the canvas.
+    pub fn clamp(&mut self) {
+        let fix = |v: &mut f32| *v = if v.is_finite() { v.clamp(-GUIDE_W, GUIDE_W) } else { 0.0 };
+        fix(&mut self.left.size);
+        fix(&mut self.right.size);
+        fix(&mut self.curve.offset);
+        fix(&mut self.curve.left);
+        fix(&mut self.curve.right);
+    }
 }
 
 impl Guides {
     pub fn from_value(v: &Value) -> Guides {
-        let mut g: Guides = serde_json::from_value(v.clone()).unwrap_or_default();
+        let (left, right, curve) = parse_parts(v, false);
+        let mut g = Guides { left, right, curve };
         g.clamp();
         g
     }
 
-    /// Finite values, curve 0..half the canvas, zone size 0..the canvas across, valid edges, ids filled.
+    /// Finite values; sides 0..half the canvas; the curve centre inside the canvas and its band kept inside the canvas.
     pub fn clamp(&mut self) {
-        let fix = |v: &mut f32, max: f32| *v = if v.is_finite() { v.clamp(0.0, max) } else { 0.0 };
-        fix(&mut self.curve.left, GUIDE_W / 2.0);
-        fix(&mut self.curve.right, GUIDE_W / 2.0);
-        fix(&mut self.curve.top, GUIDE_H / 2.0);
-        fix(&mut self.curve.bottom, GUIDE_H / 2.0);
-        for (i, z) in self.zones.iter_mut().enumerate() {
-            if !["left", "right", "top", "bottom"].contains(&z.edge.as_str()) {
-                z.edge = "right".into();
-            }
-            let max = edge_len(if z.edge == "left" || z.edge == "right" { "top" } else { "left" }) ;
-            fix(&mut z.size, max);
-            if z.id.trim().is_empty() {
-                z.id = format!("z{}", i + 1);
-            }
-        }
+        let fix = |v: &mut f32, lo: f32, hi: f32| *v = if v.is_finite() { v.clamp(lo, hi) } else { 0.0f32.clamp(lo, hi) };
+        let half = GUIDE_W / 2.0;
+        fix(&mut self.left.size, 0.0, half);
+        fix(&mut self.right.size, 0.0, half);
+        fix(&mut self.curve.offset, -half, half);
+        let centre = half + self.curve.offset;
+        fix(&mut self.curve.left, 0.0, centre);
+        fix(&mut self.curve.right, 0.0, GUIDE_W - centre);
     }
 
     /// The guides in effect for a theme: global values plus the theme's offsets, clamped.
     pub fn effective(&self, off: &GuidesOffset) -> Guides {
         let mut g = self.clone();
+        g.left.size += off.left.size;
+        g.right.size += off.right.size;
+        g.curve.offset += off.curve.offset;
         g.curve.left += off.curve.left;
         g.curve.right += off.curve.right;
-        g.curve.top += off.curve.top;
-        g.curve.bottom += off.curve.bottom;
-        for z in g.zones.iter_mut() {
-            z.size += off.zones.get(&z.id).copied().unwrap_or(0.0);
-        }
         g.clamp();
         g
+    }
+
+    /// The curve band's left and right edge x on the 2400 canvas.
+    pub fn curve_edges(&self) -> (f32, f32) {
+        let c = GUIDE_W / 2.0 + self.curve.offset;
+        (c - self.curve.left, c + self.curve.right)
     }
 }
 
@@ -383,6 +432,8 @@ impl Theme {
     pub fn clamp(&mut self) {
         self.v = THEME_VERSION;
         self.corners = self.corners.filter(|c| c.is_finite()).map(|c| c.clamp(0.0, 300.0));
+        self.gap = if self.gap.is_finite() { self.gap.clamp(0.0, 200.0) } else { DEFAULT_GAP };
+        self.guides_offset.clamp();
         self.handover.fade_in = if self.handover.fade_in.is_finite() { self.handover.fade_in.clamp(0.0, 3.0) } else { 0.8 };
         let mut gids = std::collections::HashSet::new();
         for (i, g) in self.groups.iter_mut().enumerate() {
@@ -596,17 +647,38 @@ mod tests {
     }
 
     #[test]
-    fn guides_offsets_and_corners() {
-        let g = Guides::from_value(&json!({ "curve": { "right": 40 }, "zones": [{ "name": "RAM", "edge": "right", "size": 180 }, { "id": "q", "edge": "weird", "size": -5 }] }));
-        assert_eq!(g.zones[0].id, "z1");
-        assert_eq!(g.zones[1].edge, "right");
-        assert_eq!(g.zones[1].size, 0.0);
-        let t = Theme::from_json(r#"{"guidesOffset":{"curve":{"right":-60},"zones":{"z1":30}},"corners":999}"#).unwrap();
-        assert_eq!(t.corners, Some(300.0));
+    fn guides_parse_migrate_effective() {
+        let g = Guides::from_value(&json!({ "left": { "size": 160 }, "right": { "size": 180 }, "curve": { "offset": -100, "left": 60, "right": 70 } }));
+        assert_eq!((g.left.size, g.right.size, g.curve.offset, g.curve.left, g.curve.right), (160.0, 180.0, -100.0, 60.0, 70.0));
+        assert_eq!(g.curve_edges(), (1040.0, 1170.0));
+        // v1.2 migration: curve edges dropped, zones -> sides
+        let m = Guides::from_value(&json!({ "curve": { "left": 10, "right": 90, "top": 0, "bottom": 0 }, "zones": [{ "edge": "right", "size": 180 }, { "edge": "left", "size": 120 }, { "edge": "top", "size": 50 }] }));
+        assert_eq!((m.left.size, m.right.size), (120.0, 180.0));
+        assert_eq!(m.curve, CurveBand::default());
+        // old curve {left,right} without zones is also dropped
+        assert_eq!(Guides::from_value(&json!({ "curve": { "right": 90 } })).curve, CurveBand::default());
+        // clamping: band stays inside the canvas, garbage becomes 0
+        let c = Guides::from_value(&json!({ "left": { "size": -5 }, "right": { "size": 99999 }, "curve": { "offset": 1100, "left": 5000, "right": 5000 } }));
+        assert_eq!((c.left.size, c.right.size), (0.0, 1200.0));
+        let (l, r) = c.curve_edges();
+        assert!(l >= 0.0 && r <= 2400.0, "{l} {r}");
+        assert_eq!(Guides::from_value(&json!("junk")), Guides::default());
+        // effective = global + theme offset, clamped
+        let t = Theme::from_json(r#"{"guidesOffset":{"left":{"size":-200},"right":{"size":30},"curve":{"offset":50,"right":-90}},"corners":999,"gap":5000}"#).unwrap();
+        assert_eq!((t.corners, t.gap), (Some(300.0), 200.0));
         let e = g.effective(&t.guides_offset);
-        assert_eq!(e.curve.right, 0.0, "clamped at 0");
-        assert_eq!(e.zones[0].size, 210.0);
+        assert_eq!(e.left.size, 0.0, "clamped at 0");
+        assert_eq!(e.right.size, 210.0);
+        assert_eq!((e.curve.offset, e.curve.left, e.curve.right), (-50.0, 60.0, 0.0));
+        // old per-theme offsets (zones by id) are dropped harmlessly
+        let old = Theme::from_json(r#"{"guidesOffset":{"curve":{"top":3},"zones":{"z1":30}}}"#).unwrap();
+        assert_eq!(old.guides_offset, GuidesOffset::default());
         assert_eq!(Theme::from_json(r#"{"corners":null}"#).unwrap().corners, None);
         assert_eq!(Theme::from_json(r#"{"corners":0}"#).unwrap().corners, Some(0.0));
+        assert_eq!(Theme::from_json("{}").unwrap().gap, 24.0);
+        assert_eq!(Theme::from_json(r#"{"gap":-3}"#).unwrap().gap, 0.0);
+        // round trip
+        let back = Theme::from_json(&t.to_json()).unwrap();
+        assert_eq!(back.guides_offset, t.guides_offset);
     }
 }

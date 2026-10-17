@@ -18,9 +18,9 @@ impl Settings {
         let c = &self.0["mask"]["corners"];
         if c["on"] == true { c["r"].as_f64().unwrap_or(0.0) } else { 0.0 }
     }
-    /// The global screen guides (curve + avoid zones), always a full object.
+    /// The global screen guides (left, right, curve band), always a full object.
     pub fn screen_guides(&self) -> Value {
-        self.0.get("screenGuides").cloned().unwrap_or_else(|| guides_value(&crate::live::theme::Guides::default()))
+        guides_value(&crate::live::theme::Guides::from_value(self.0.get("screenGuides").unwrap_or(&Value::Null)))
     }
     /// Gentle snapping in the theme editor (default on).
     pub fn editor_snap(&self) -> bool {

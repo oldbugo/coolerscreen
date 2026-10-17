@@ -588,14 +588,18 @@ fn default_corner_radius_guides_and_snap_settings_round_trip() {
     assert_eq!(st["cornerRadius"], json!(0.0), "0 = none");
     assert_eq!(st["mask"]["corners"]["on"], json!(false));
     let st = app.settings_update(&json!({ "cornerRadius": 120.4, "editor": { "snap": false },
-        "screenGuides": { "curve": { "right": 90, "left": -5 }, "zones": [{ "name": "RAM", "edge": "right", "size": 180 }, { "edge": "sideways", "size": 99999 }] } })).unwrap();
+        "screenGuides": { "left": { "size": -5 }, "right": { "size": 180 }, "curve": { "offset": 1100, "left": 5000, "right": 60 } } })).unwrap();
     assert_eq!(st["cornerRadius"], json!(120.0));
     assert_eq!(st["editorSnap"], json!(false));
-    assert_eq!(st["screenGuides"]["curve"]["right"], json!(90.0));
-    assert_eq!(st["screenGuides"]["curve"]["left"], json!(0.0), "negative curve is clamped");
-    assert_eq!(st["screenGuides"]["zones"][0]["id"], "z1");
-    assert_eq!(st["screenGuides"]["zones"][1]["edge"], "right", "a bad edge becomes right");
-    assert!(st["screenGuides"]["zones"][1]["size"].as_f64().unwrap() <= 1080.0);
+    assert_eq!(st["screenGuides"]["left"]["size"], json!(0.0), "negative size is clamped");
+    assert_eq!(st["screenGuides"]["right"]["size"], json!(180.0));
+    assert_eq!(st["screenGuides"]["curve"]["offset"], json!(1100.0));
+    assert_eq!(st["screenGuides"]["curve"]["left"], json!(2300.0), "the band stays inside the canvas");
+    assert_eq!(st["screenGuides"]["curve"]["right"], json!(60.0));
+    // a v1.2 settings value is migrated: curve edges dropped, zones -> sides
+    let st2 = app.settings_update(&json!({ "screenGuides": { "curve": { "right": 90, "left": 5, "top": 0, "bottom": 0 }, "zones": [{ "edge": "right", "size": 180 }, { "edge": "left", "size": 120 }] } })).unwrap();
+    assert_eq!(st2["screenGuides"], json!({ "left": { "size": 120.0 }, "right": { "size": 180.0 }, "curve": { "offset": 0.0, "left": 0.0, "right": 0.0 } }));
+    let st = app.settings_update(&json!({ "screenGuides": st["screenGuides"].clone() })).unwrap();
     // survives a reload from disk; an untouched file stays free of the new keys
     let again = app.app_state();
     assert_eq!(again["screenGuides"], st["screenGuides"]);
@@ -640,8 +644,14 @@ fn a_themes_own_corner_radius_is_applied_to_the_base_and_marks_it_stale_when_cha
     assert_eq!(app.lib.find_version(vid2).unwrap().1["settings"]["corners"]["r"], json!(20));
     assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(false));
     // the theme's guide offsets and effective guides
-    app.settings_update(&json!({ "screenGuides": { "curve": { "right": 50 }, "zones": [{ "id": "z1", "name": "RAM", "edge": "right", "size": 180 }] } })).unwrap();
-    let v = app.theme_set(&oid, &json!({ "guidesOffset": { "curve": { "right": -20 }, "zones": { "z1": 30 } } })).unwrap();
+    app.settings_update(&json!({ "screenGuides": { "left": { "size": 100 }, "right": { "size": 180 }, "curve": { "offset": 0, "left": 50, "right": 50 } } })).unwrap();
+    let v = app.theme_set(&oid, &json!({ "gap": 40, "guidesOffset": { "right": { "size": 30 }, "curve": { "offset": 20, "right": -20 } } })).unwrap();
+    assert_eq!(v["guides"]["right"]["size"], json!(210.0));
+    assert_eq!(v["guides"]["curve"]["offset"], json!(20.0));
     assert_eq!(v["guides"]["curve"]["right"], json!(30.0));
-    assert_eq!(v["guides"]["zones"][0]["size"], json!(210.0));
+    assert_eq!(v["theme"]["gap"], json!(40.0));
+    assert_eq!(v["theme"]["guidesOffset"]["right"]["size"], json!(30.0));
+    let v = app.theme_set(&oid, &json!({ "gap": 99999 })).unwrap();
+    assert_eq!(v["theme"]["gap"], json!(200.0));
+    assert_eq!(app.theme_get(&oid).unwrap()["theme"]["gap"], json!(200.0));
 }
