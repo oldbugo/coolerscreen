@@ -49,7 +49,7 @@ CoolerScreen 2.0 is a new engine under the same library; your clips, versions an
 - **A proper window:** seamless frameless look with Windows 11 Snap Layouts on the maximise button, remembers its size and
   position, and asks inside the app before closing during an upload.
 - **Installer and portable zip**, a real app icon, and the recovery tools bundled as `cs2.exe`.
-- **My clips and Browse** tabs, with filter and sort; Browse lists the clips you already have first.
+- **On screen, My themes and Browse** pages (3.0): see "Using it".
 - **Smarter loops:** the loop finder scores every start and end as it will look on the screen, with a cross-fade where
   nothing repeats exactly (random particles, rain); loops are found in the background as soon as a clip arrives.
 - **Automatic Wallpaper Engine recording:** stops once it holds a seamless loop, otherwise records 2 minutes.
@@ -61,11 +61,27 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## Using it
 
-The app opens on **Browse**: your clips ("My clips": every clip as a large picture, hover to play it, with "On screen",
-"File missing" or "Needs re-make" where it applies, and an **Add clip** tile) plus any **sources** you turned on, each with
-a checkbox at the top so you can show or hide it. Click a clip to open it: a preview shaped like the screen, the **Loop**
-choices, **Size and position**, and the space it needs; the clip list stays on the left and "‹ Gallery" goes back.
-The bar at the top shows the screen's status and what is **on screen now**; the gear opens **Settings**.
+Everything you put on the screen is a **theme**: a **base** (the loop stored on the screen, which keeps playing when
+CoolerScreen is closed) plus an optional **live layer** (clock, music, PC stats, text, pictures that CoolerScreen draws on
+top while it runs, if Live is on). The top bar has three pages:
+
+- **On screen**: the theme that is on the screen now, as an editor. Drag items (Clock, Music, PC stats, Text, Picture) from
+  the left onto the preview, or click them; move and resize them with the mouse; set their details on the right. Switch
+  the preview between **With live layer**, **Base only** and **Hand-over** (how the live layer fades in, and what happens
+  when CoolerScreen stops: by default it fades out onto the first frame of the stored loop, so nothing jumps). Edits are
+  saved as you go and show on the live screen at once. Text and pictures can also be drawn into the stored base ("Also on
+  the stored base"); changing those shows **Base needs re-storing**.
+- **My themes**: every theme in your library as a picture (the base with its live layer), labelled "Base only" or
+  "Base + live: clock · music · stats". Click one, then **Apply to screen**: a window that cannot be clicked past shows
+  the steps (prepare the picture, store it on the screen, switch the live layer) with a progress bar; **Stop and keep the
+  previous theme** ends it (the part that is writing to the screen finishes first, so the screen is never left half-written).
+  **Base settings…** opens the loop finder, quality and saved versions of that theme's base picture (what "My clips" used
+  to show). **Add file…** and dropping files work as before.
+- **Browse**: sources you turned on (Wallpaper Engine, Lively, the LOVINGCOOL themes...). **Add to My themes** makes an
+  independent copy; adding again makes "Name (2)".
+
+The right of the top bar shows the screen's status together with the **Live** switch (the same as Settings > Live screen);
+the gear opens **Settings**.
 
 - **Sources** (Settings > Sources; all off until you turn them on, then they get a checkbox in Browse; see
   [docs/sources.md](docs/sources.md)):
@@ -125,8 +141,9 @@ Settings and versions live in `%APPDATA%\CoolerScreen\`; your original clips are
 
 ### Live screen (3.0, optional, off by default)
 
-Settings > **Live screen** makes the screen show a live clock and PC stats (CPU, memory, graphics card) drawn by
-CoolerScreen, over a moving background or a clip from your Gallery. Nothing changes until you turn it on.
+The **Live** switch in the top bar (or Settings > **Live screen**) makes the screen show the live layer of your On screen
+theme (clock, music, PC stats, text, pictures) drawn by CoolerScreen over the theme's own base. Nothing changes until you
+turn it on. What is shown, and how it fades in and out, is set per theme in On screen; Settings keeps the global choices.
 
 - With it on, closing the window leaves CoolerScreen running in the tray (the icon near the clock). Its menu has Open,
   Pause, 30 / 60 frames per second (60 by default) and **Quit**. Quit stops live and the screen plays its normal clip again.

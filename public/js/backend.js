@@ -78,6 +78,11 @@ export const backend = {
     try { return await T.invoke('import_bytes', await file.arrayBuffer(), { headers: { 'x-cs-name': encodeURIComponent(file.name) } }); }
     catch (x) { throw tauriError(x); }
   },
+  /** A picture for an image item: copied into the theme's folder. -> { file } (relative to the theme folder) */
+  async themeAsset(originalId, file) {
+    try { return await T.invoke('theme_asset_add', await file.arrayBuffer(), { headers: { 'x-cs-oid': originalId, 'x-cs-name': encodeURIComponent(file.name) } }); }
+    catch (x) { throw tauriError(x); }
+  },
   /** Called with AppState.mediaBase (the core media server root). */
   setMediaBase(base) { if (base) mediaBase = String(base).replace(/\/+$/, ''); },
   /** Cached media: kind 'o' (original: thumb.jpg, frame.jpg, proxy.mp4, ...) or 'v' (version: preview.mp4, thumb.jpg). */

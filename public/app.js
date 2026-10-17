@@ -1,8 +1,9 @@
-// CoolerScreen UI: Library (originals) | Detail (preview, Tune, Versions) | Activity strip | Settings drawer.
+// CoolerScreen UI (3.0): On screen (theme editor) | My themes | Browse | Base settings (a clip's loop, quality, versions) | Activity strip | Settings drawer.
 import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, styleCorners } from './js/frame.js';
 import { openDialog } from './js/dialog.js';
 import './js/titlebar.js';
 import { backend } from './js/backend.js';
+import { createThemes, initApply, runApply } from './js/themes.js';
 
 // ---------- small helpers ----------
 const $ = id => document.getElementById(id);
@@ -70,8 +71,10 @@ const S = {
   showing: null, // null = the tuning (original), or a version id
   draft: null, est: { state: 'idle' }, adding: [],
   missingDismissed: false, outcomes: new Map(), dismissed: new Set(), loadedAt: Date.now(),
-  view: null, // 'mine' (My clips) | 'browse' (Browse) | 'detail' (one clip)
-  home: 'mine', // the home view the open clip was reached from ('mine' | 'browse')
+  view: null, // 'screen' (On screen) | 'mine' (My themes) | 'browse' (Browse) | 'detail' (a theme's base settings)
+  home: 'screen', // the view the open base settings were reached from ('screen' | 'mine')
+  currentTheme: null, // the original whose version is in the screen's loop slot
+  selTheme: null, // the card selected in My themes
   manualLoop: false, // "Edit loop manually…" panel open
 };
 const DEFAULT_FRAME = { zoom: 1, x: 0.5, y: 0.5 };
@@ -90,24 +93,22 @@ function renderTop() {
   const st = pillState();
   $('pill').dataset.state = st;
   $('pillText').textContent = PILL[st] || st;
-  const os = S.app && S.app.onScreen;
-  const b = $('onScreen');
-  if (!os) { b.hidden = true; return; }
-  b.hidden = false;
-  const img = $('onScreenThumb');
-  if (os.thumbUrl) { img.src = os.thumbUrl; img.hidden = false; } else { img.removeAttribute('src'); img.hidden = true; }
-  let name;
-  if (!os.known) name = 'unknown (sent with another app or an older version)';
-  else name = `${os.originalName} · ${os.label || ''}` + (os.exists ? '' : ' (deleted from library)');
-  if (os.incomplete) name += ' – last upload didn\'t finish';
-  $('onScreenName').textContent = name;
-  b.title = os.known ? `${name}\nSent ${fmtWhen(os.at)}` : name;
-  b.disabled = !os.exists;
+  renderLiveSwitch();
 }
-$('onScreen').onclick = () => {
-  const os = S.app && S.app.onScreen;
-  if (os && os.exists && os.originalId) { select(os.originalId, os.versionId); }
-};
+// The Live switch sits in the same indicator as the screen status; it is the same setting as Settings > Live screen.
+function renderLiveSwitch() {
+  const l = (S.app && S.app.live) || {}, c = l.settings || {}, stt = l.status || {};
+  const sw = $('liveSwitch'), box = sw.closest('.live-switch');
+  sw.checked = !!c.inApp;
+  sw.disabled = !S.app;
+  const hold = stt.paused || stt.deviceHold || stt.systemHold;
+  box.dataset.state = !c.inApp ? 'off' : hold ? 'paused' : 'on';
+  box.title = !c.inApp ? 'Live is off: the screen plays its stored loop. Turn it on to draw the clock, music and PC stats of the theme on top.'
+    : stt.deviceHold ? 'Live is paused while the screen is being updated.' : stt.systemHold ? 'Live is paused while the PC sleeps or is locked.' : stt.paused ? 'Live is paused from the tray.'
+    : stt.connected ? 'Live is on the screen.' : 'Live is on; connecting to the screen…';
+  sw.setAttribute('aria-label', 'Live on the screen: ' + (c.inApp ? 'on' : 'off'));
+}
+$('liveSwitch').onchange = () => liveSet({ inApp: $('liveSwitch').checked });
 $('pill').onclick = () => openDrawer('setScreen');
 $('gear').onclick = () => openDrawer();
 
@@ -183,12 +184,14 @@ async function loadApp() {
 }
 async function loadOriginals() {
   const r = await call('originals_list');
-  S.originals = r.originals; S.longMissing = r.longMissing; S.rev = r.rev;
+  S.originals = r.originals; S.longMissing = r.longMissing; S.rev = r.rev; S.currentTheme = r.currentTheme || null;
+  if (S.selTheme && !S.originals.some(o => o.id === S.selTheme)) S.selTheme = null;
   if (S.sel && !S.originals.find(o => o.id === S.sel)) { S.sel = null; S.detail = null; if (S.view === 'detail') setView(S.home); }
   renderLibrary();
   renderBanners();
   renderGallery();
   if (S.view === 'detail') await loadDetail();
+  if (S.view === 'screen') themes.enter();
 }
 let detailFor = null;
 async function loadDetail() {
@@ -293,7 +296,11 @@ async function importFiles(files) {
     S.adding.splice(S.adding.indexOf(it), 1);
   }
   await loadOriginals();
-  if (lastId) await select(lastId);
+  if (lastId) {
+    S.selTheme = lastId;
+    if (S.view !== 'mine' && S.view !== 'detail') goHome('mine'); else renderGallery();
+    toast('Added to My themes.');
+  }
 }
 let dragDepth = 0;
 window.addEventListener('dragenter', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { dragDepth++; $('dropHint').hidden = false; } });
@@ -308,7 +315,7 @@ window.addEventListener('drop', e => {
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable: the choice just isn't remembered */ } }
 const HOME_KEY = 'cs.home';
-const NAV = { mine: 'navMine', browse: 'navBrowse' };
+const NAV = { screen: 'navScreen', mine: 'navMine', browse: 'navBrowse' };
 function setView(v) {
   const prev = S.view;
   S.view = v;
@@ -316,30 +323,35 @@ function setView(v) {
   for (const [name, id] of Object.entries(NAV)) {
     const b = $(id);
     if (v === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
-    b.classList.toggle('parent', v === 'detail' && S.home === name); // the view the open clip came from
+    b.classList.toggle('parent', v === 'detail' && S.home === name); // the view the open base settings came from
   }
+  $('screenView').hidden = v !== 'screen';
   $('mineView').hidden = v !== 'mine';
   $('browseView').hidden = v !== 'browse';
   document.querySelector('.panes').hidden = v !== 'detail';
   if (v !== 'detail') stopPreviewLoop();
+  if (prev === 'screen' && v !== 'screen') themes.flush();
+  if (v === 'screen' && prev !== 'screen') themes.enter();
   // Entering a home view is when its order is (re)computed; while you stay there, background updates never reorder cards.
   if (v === 'mine' && prev !== 'mine') freezeMine();
   if (v === 'browse' && prev !== 'browse') freezeBrowse();
   if (v !== 'detail') renderGallery();
 }
-function goHome(v) { // the user picked a home view in the top bar
+function goHome(v) { // the user picked a view in the top bar
   S.userNavigated = true;
   lsSet(HOME_KEY, v);
   if (S.view !== v) setView(v);
 }
+$('navScreen').onclick = () => goHome('screen');
 $('navMine').onclick = () => goHome('mine');
 $('navBrowse').onclick = () => goHome('browse');
-// Back from anywhere in a clip to the view it was opened from: Esc, Backspace or Alt+Left (never while typing, or over a
+// Back from a theme's base settings to the view they were opened from: Esc, Backspace or Alt+Left (never while typing, or over a
 // dialog / the drawer). On a home view, Ctrl+F or / focuses its filter field.
 window.addEventListener('keydown', e => {
   if (e.defaultPrevented) return;
   if (document.querySelector('.backdrop') || !$('drawerBack').hidden) return;
   const t = e.target, typing = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+  if (S.view === 'screen') return;
   if (S.view === 'mine' || S.view === 'browse') {
     if ((e.ctrlKey && !e.altKey && (e.key === 'f' || e.key === 'F')) || (!typing && e.key === '/')) {
       e.preventDefault();
@@ -360,13 +372,14 @@ function showGallery() {
   setView(S.home);
   let f = null;
   if (S.home === 'mine') f = (S.sel && mineUI.box.querySelector(`.g-card[data-id="${CSS.escape(S.sel)}"]`)) || mineUI.box.querySelector('.g-card');
+  else if (S.home === 'screen') f = null;
   else {
     const card = BV.lastKey && browseUI.box.querySelector(`.s-card[data-key="${CSS.escape(BV.lastKey)}"]`);
     f = (card && card.querySelector('button')) || browseUI.box.querySelector('.g-grid button');
   }
   if (f) f.focus();
 }
-const backLabel = () => (S.home === 'browse' ? '‹ Browse' : '‹ My clips');
+const backLabel = () => (S.home === 'browse' ? '‹ Browse' : S.home === 'mine' ? '‹ My themes' : '‹ On screen');
 
 const B = { sources: [], ticked: ['mine'], desktopApp: false, data: new Map(), jobs: new Map(), loaded: false };
 const enabledSources = () => B.sources.filter(s => s.enabled && s.kind !== 'action');
@@ -406,7 +419,7 @@ async function loadSourcePage(id, refresh = false) {
     const added = [];
     for (const it of [...r.items].sort(byNewest)) {
       const old = known.get(it.id);
-      if (old) Object.assign(old, it, old.inGallery && !it.inGallery ? { inGallery: old.inGallery } : {});
+      if (old) Object.assign(old, it);
       else { known.set(it.id, it); added.push(it); }
     }
     if (reload) d.items.unshift(...added); else d.items.push(...added);
@@ -449,9 +462,7 @@ async function addFromSource(src, item, { record = false } = {}) {
     const { jobId } = await call('source_add', { sourceId: src.id, itemId: item.id, record, seconds, title: item.title });
     const r = await pollJob(jobId, j => { st.progress = j.progress || 0; st.status = j.status === 'waiting' ? plainWait(j.message) : j.message || 'Working'; updateSourceCard(key); });
     B.jobs.delete(key);
-    item.inGallery = r.originalId;
-    BV.stick.add(key); // stays visible under "Not added" (and in place) until the view is re-entered
-    toast(`"${item.title}" is in your gallery.`);
+    toast(`"${item.title}" was added to My themes as its own copy.`);
     await loadOriginals();
   } catch (e) { st.error = e.message; }
   renderGallery();
@@ -462,14 +473,14 @@ async function addFromLink() {
   const ok = await openDialog({ title: 'Add from link', body: el('div', {},
     el('div', { class: 'field' }, el('label', { for: 'linkUrl', text: 'Direct link to a video, GIF, image or theme (.ht) file' }), input),
     el('p', { class: 'muted small', text: 'The link must open the file itself (up to 500 MB), not a web page.' })),
-    actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Add to gallery', value: true, kind: 'primary' }],
+    actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Add to My themes', value: true, kind: 'primary' }],
     onOpen: ({ close }) => input.addEventListener('keydown', e => { if (e.key === 'Enter') close(true); }) });
   if (!ok || !input.value.trim()) return;
   try {
     const { jobId } = await call('link_add', { url: input.value.trim() });
     toast('Downloading…');
     const r = await pollJob(jobId, () => {});
-    toast(`Added "${r.name}" to your gallery.`);
+    toast(`Added "${r.name}" to My themes.`);
     await loadOriginals();
   } catch (e) { openDialog({ title: 'Couldn\'t add that link', body: e.message, actions: [{ label: 'OK', value: true, kind: 'primary' }] }); }
 }
@@ -482,13 +493,12 @@ function sourceAction(src, item) {
     return el('div', { class: 'th-action' }, el('div', { class: 'progress th-progress', role: 'progressbar', 'aria-label': `Adding ${item.title}`, 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(pct) }, el('div', { style: `width:${pct}%` })),
       el('span', { class: 'small muted num one-line th-pct', text: `${job.status} ${pct}%` }));
   }
-  if (item.inGallery) return el('div', { class: 'th-action' }, el('span', { class: 'chip ok', text: 'In your gallery' }), el('button', { class: 'btn ghost', text: 'Open', 'aria-label': `Open ${item.title}`, onclick: () => { BV.lastKey = key; select(item.inGallery); } }));
   if (item.action === 'none') return el('div', { class: 'th-action' }, el('span', { class: 'chip', text: 'Not supported', title: item.note || '' }), el('span', { class: 'small muted one-line', text: item.note || '' }));
   const rec = item.action === 'record';
   const canRec = !rec || B.desktopApp;
   return el('div', { class: 'th-action' },
-    el('span', { class: 'chip ' + (rec ? 'warn' : ''), text: rec ? 'Needs recording' : 'Not added' }),
-    el('button', { class: 'btn secondary', text: job && job.error ? 'Try again' : rec ? 'Record…' : 'Add to gallery', disabled: !canRec,
+    rec ? el('span', { class: 'chip warn', text: 'Needs recording' }) : null,
+    el('button', { class: 'btn secondary', text: job && job.error ? 'Try again' : rec ? 'Record…' : 'Add to My themes', disabled: !canRec,
       title: canRec ? '' : 'Recording needs the desktop app (CoolerScreen.exe)', onclick: () => addFromSource(src, item, { record: rec }) }),
     job && job.error ? el('span', { class: 'small one-line th-err', text: job.error, title: job.error }) : null);
 }
@@ -555,6 +565,11 @@ function renderGallery() {
 
 // ----- My clips -----
 const MINE_SORTS = [['added', 'Recently added'], ['name', 'Name (A–Z)'], ['longest', 'Longest first'], ['shortest', 'Shortest first'], ['onscreen', 'On screen first']];
+const KIND_NAMES = { clock: 'clock', music: 'music', stats: 'stats', text: 'text', image: 'picture', weather: 'weather' };
+const themeLabel = o => {
+  const w = (o.theme && o.theme.widgets) || [];
+  return w.length ? 'Base + live: ' + [...new Set(w)].map(k => KIND_NAMES[k] || k).join(' · ') : 'Base only';
+};
 const M = { q: '', sort: MINE_SORTS.some(([v]) => v === lsGet('cs.mineSort')) ? lsGet('cs.mineSort') : 'added', order: [] };
 function mineCmp(sort) {
   const name = (a, b) => byName(a.name, b.name);
@@ -592,8 +607,9 @@ function mineOrdered() {
 const mineUI = (() => {
   const box = $('mineView');
   const count = el('span', { class: 'muted num g-count' });
+  const bar = el('div', { class: 'sel-bar', hidden: true, role: 'region', 'aria-label': 'Selected theme' });
   const linkBtn = el('button', { class: 'btn secondary', text: 'Add from link…', onclick: addFromLink, hidden: true });
-  const head = el('div', { class: 'g-head' }, el('h1', { class: 'g-title', id: 'mineTitle', text: 'My clips' }), count, el('span', { class: 'grow' }),
+  const head = el('div', { class: 'g-head' }, el('h1', { class: 'g-title', id: 'mineTitle', text: 'My themes' }), count, el('span', { class: 'grow' }),
     el('div', { class: 'g-actions' },
       el('button', { class: 'btn secondary', text: 'Add file…', onclick: () => $('fileInput').click() }), linkBtn,
       el('button', { class: 'btn ghost', text: 'Open Gallery folder', onclick: () => $('openFolder').click() })));
@@ -603,12 +619,12 @@ const mineUI = (() => {
   const sort = el('select', { id: 'mineSort' }, MINE_SORTS.map(([value, text]) => el('option', { value, text })));
   sort.value = M.sort;
   sort.onchange = () => { M.sort = sort.value; lsSet('cs.mineSort', M.sort); freezeMine(); renderGallery(); };
-  const tools = el('div', { class: 'g-tools', role: 'search', 'aria-label': 'Filter and sort my clips' },
-    el('label', { class: 'g-tool g-tool-q' }, el('span', { class: 'sr-only', text: 'Filter my clips by name' }), q),
+  const tools = el('div', { class: 'g-tools', role: 'search', 'aria-label': 'Filter and sort my themes' },
+    el('label', { class: 'g-tool g-tool-q' }, el('span', { class: 'sr-only', text: 'Filter my themes by name' }), q),
     el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Sort' }), sort));
   const body = el('div');
-  box.append(head, tools, body);
-  return { box, count, linkBtn, q, tools, body };
+  box.append(head, tools, body, bar);
+  return { box, count, linkBtn, q, tools, body, bar };
 })();
 function renderMine() {
   const u = mineUI;
@@ -619,45 +635,73 @@ function renderMine() {
     const all = mineOrdered();
     const q = M.q.trim().toLowerCase();
     const list = q ? all.filter(o => matches(o.name, q) || matches(o.fileName, q)) : all;
-    u.count.textContent = !all.length ? '' : q ? `${list.length} of ${all.length}` : `${all.length} clip${all.length > 1 ? 's' : ''}`;
+    u.count.textContent = !all.length ? '' : q ? `${list.length} of ${all.length}` : `${all.length} theme${all.length > 1 ? 's' : ''}`;
     u.tools.hidden = all.length < 2 && !q; // nothing to sort or filter yet
-    if (!all.length && !S.adding.length) u.body.append(el('p', { class: 'muted g-empty' }, 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). You\'ll pick the loop and preview it before anything is sent. ',
+    if (!all.length && !S.adding.length) u.body.append(el('p', { class: 'muted g-empty' }, 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). Every item here is a theme: pick one and apply it, then design its live layer in On screen. ',
       'Or ', el('button', { class: 'btn ghost inline-btn', text: 'browse your sources', onclick: () => goHome('browse') }), '.'));
     const entries = [];
     if (!q) entries.push({ key: 'add-tile', sig: 'x', make: () => el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
       el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
-      el('div', { class: 'g-name', text: 'Add clip' }), el('div', { class: 'small muted', text: 'or drop files anywhere' })) });
+      el('div', { class: 'g-name', text: 'Add a file' }), el('div', { class: 'small muted', text: 'or drop files anywhere' })) });
     for (const a of S.adding) {
       if (!addingIds.has(a)) addingIds.set(a, ++addingSeq);
       entries.push({ key: 'adding:' + addingIds.get(a), sig: a.name, make: () => el('div', { class: 'g-card adding', 'aria-busy': 'true' }, el('div', { class: 'g-thumb skeleton' }),
         el('div', { class: 'g-name', text: a.name }), el('div', { class: 'g-chips' }, el('span', { class: 'spinner', 'aria-hidden': 'true' }), el('span', { class: 'small muted', text: 'Adding…' }))) });
     }
-    for (const o of list) entries.push({ key: 'o:' + o.id, sig: JSON.stringify(o), make: () => myClipCard(o) });
+    for (const o of list) entries.push({ key: 'o:' + o.id, sig: JSON.stringify([o, S.selTheme === o.id]), make: () => themeCard(o) });
     const g = gridSection('mine');
     g.title.hidden = true;
     g.note.hidden = !(q && !list.length);
     g.note.textContent = '';
-    if (q && !list.length) g.note.append(`No clips match "${M.q.trim()}". `, el('button', { class: 'btn ghost inline-btn', text: 'Clear filter', onclick: () => { u.q.value = ''; M.q = ''; renderGallery(); u.q.focus(); } }));
+    if (q && !list.length) g.note.append(`No themes match "${M.q.trim()}". `, el('button', { class: 'btn ghost inline-btn', text: 'Clear filter', onclick: () => { u.q.value = ''; M.q = ''; renderGallery(); u.q.focus(); } }));
     reconcile(g, entries, new Set(all.map(o => 'o:' + o.id)));
     u.body.append(g.wrap);
+    renderSelBar();
   });
 }
 
+// The selected theme's actions: Apply (the main one), its base settings, rename, delete.
+function renderSelBar() {
+  const bar = mineUI.bar, o = S.originals.find(x => x.id === S.selTheme);
+  bar.hidden = !o;
+  bar.textContent = '';
+  if (!o) return;
+  const cur = S.currentTheme === o.id;
+  bar.append(el('span', { class: 'sel-name', text: o.name, title: o.name }),
+    cur ? el('span', { class: 'chip ok', text: 'On screen' }) : null,
+    el('span', { class: 'small muted', text: themeLabel(o) }),
+    el('button', { class: 'btn primary big', text: cur ? 'Apply again' : 'Apply to screen', disabled: o.missing && !o.versionCount, title: 'Make its base, store it on the screen and switch the live layer', onclick: () => applyTheme(o.id, o.name) }),
+    el('button', { class: 'btn secondary', text: 'Base settings…', title: 'Loop, quality and saved versions of the base picture', onclick: () => select(o.id) }),
+    el('button', { class: 'btn secondary', text: 'Rename…', onclick: () => renameTheme(o) }),
+    el('button', { class: 'btn danger', text: o.missing ? 'Remove…' : 'Delete…', onclick: () => deleteTheme(o) }));
+}
+async function renameTheme(o) {
+  const input = el('input', { type: 'text', value: o.name, id: 'thRename', autofocus: true, maxLength: 80 });
+  const err = el('div', { class: 'field-err', role: 'alert' });
+  const v = await openDialog({ title: 'Rename theme', body: el('div', {}, el('div', { class: 'field' }, el('label', { for: 'thRename', text: 'Name' }), input), err),
+    actions: [{ label: 'Cancel', value: null, kind: 'secondary' }, { label: 'Save', value: 'save', kind: 'primary' }],
+    onOpen: ({ close }) => input.addEventListener('keydown', e => { if (e.key === 'Enter') close('save'); }) });
+  if (v !== 'save' || !input.value.trim() || input.value.trim() === o.name) return;
+  try { await call('original_patch', { originalId: o.id, name: input.value.trim() }); await loadOriginals(); } catch (e) { toast(e.message, true); }
+}
+async function deleteTheme(o) {
+  try { S.detail = await call('original_get', { originalId: o.id }); S.sel = o.id; } catch (e) { toast(e.message, true); return; }
+  await confirmDeleteOriginal();
+  S.detail = null; S.sel = null; detailFor = null;
+}
+
 // ----- Browse -----
-// Within each source, clips already in your gallery come first. That split (and the Name sort) is applied when you
-// enter Browse, change Show/Sort or press Refresh; a clip you add while you are here keeps its place.
-const BROWSE_SHOW = [['all', 'All'], ['in', 'In my gallery'], ['out', 'Not added']];
+// Adding from Browse makes an independent copy in My themes (no link back, no "already added"). The Name sort is applied
+// when you enter Browse, change Sort or press Refresh.
 const BROWSE_SORTS = [['default', 'Source order'], ['name', 'Name (A–Z)']];
 const pick = (list, v, dflt) => (list.some(([x]) => x === v) ? v : dflt);
-const BV = { q: '', show: pick(BROWSE_SHOW, lsGet('cs.browseShow'), 'all'), sort: pick(BROWSE_SORTS, lsGet('cs.browseSort'), 'default'),
-  frozen: new Map(), stick: new Set(), lastKey: null, refreshing: false };
+const BV = { q: '', sort: pick(BROWSE_SORTS, lsGet('cs.browseSort'), 'default'), frozen: new Map(), lastKey: null, refreshing: false };
 function arrangeBrowse(items) {
   const list = [...items];
   if (BV.sort === 'name') list.sort((a, b) => byName(a.title, b.title));
-  return [...list.filter(i => i.inGallery), ...list.filter(i => !i.inGallery)];
+  return list;
 }
 function freezeBrowse() {
-  BV.stick.clear();
   BV.frozen.clear();
   for (const [sid, d] of B.data) if (d.items.length) BV.frozen.set(sid, arrangeBrowse(d.items).map(i => i.id));
 }
@@ -687,21 +731,18 @@ const browseUI = (() => {
   const head = el('div', { class: 'g-head' }, el('h1', { class: 'g-title', id: 'browseTitle', text: 'Browse' }), el('span', { class: 'grow' }),
     el('div', { class: 'g-actions' }, linkBtn, refresh));
   const chips = el('div', { class: 'src-chips', role: 'group', 'aria-label': 'Show clips from' });
+  const note = el('p', { class: 'muted small browse-note', text: 'Adding puts an independent copy in My themes; the original stays here.' });
   const q = el('input', { type: 'search', id: 'browseQ', class: 'g-filter', placeholder: 'Filter by title', autocomplete: 'off' });
   q.spellcheck = false;
   q.addEventListener('input', () => { BV.q = q.value; renderGallery(); });
-  const show = el('select', { id: 'browseShow' }, BROWSE_SHOW.map(([value, text]) => el('option', { value, text })));
-  show.value = BV.show;
-  show.onchange = () => { BV.show = show.value; lsSet('cs.browseShow', BV.show); freezeBrowse(); renderGallery(); };
   const sort = el('select', { id: 'browseSort' }, BROWSE_SORTS.map(([value, text]) => el('option', { value, text })));
   sort.value = BV.sort;
   sort.onchange = () => { BV.sort = sort.value; lsSet('cs.browseSort', BV.sort); freezeBrowse(); renderGallery(); };
   const tools = el('div', { class: 'g-tools', role: 'search', 'aria-label': 'Filter and sort Browse' },
     el('label', { class: 'g-tool g-tool-q' }, el('span', { class: 'sr-only', text: 'Filter Browse by title' }), q),
-    el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Show' }), show),
     el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Sort' }), sort));
   const body = el('div');
-  box.append(head, chips, tools, body);
+  box.append(head, note, chips, tools, body);
   return { box, linkBtn, refresh, chips, q, tools, body };
 })();
 function renderBrowse() {
@@ -729,23 +770,22 @@ function renderBrowse() {
     u.tools.hidden = !ticked.length;
     if (!B.loaded) return;
     if (!srcs.length) {
-      u.body.append(el('p', { class: 'muted g-empty' }, 'Browse shows clips from sources such as Wallpaper Engine, Lively or the LOVINGCOOL theme library. ',
+      u.body.append(el('p', { class: 'muted g-empty' }, 'Browse shows themes and clips from sources such as Wallpaper Engine, Lively or the LOVINGCOOL theme library. ',
         el('button', { class: 'btn ghost inline-btn', text: 'Turn on sources…', onclick: () => openDrawer('setSources') })));
       return;
     }
     if (!ticked.length) { u.body.append(el('p', { class: 'muted g-empty', text: 'Tick a source above to see its clips.' })); return; }
     const q = BV.q.trim().toLowerCase();
-    const filtering = !!q || BV.show !== 'all';
+    const filtering = !!q;
     const shown = [], notes = [];
     for (const s of ticked) {
       const d = B.data.get(s.id);
       if (!d) continue;
       const all = browseOrdered(s.id, d);
-      const list = all.filter(it => matches(it.title, q) && (BV.show === 'all' || (BV.show === 'in'
-        ? !!it.inGallery : !it.inGallery || BV.stick.has(`${s.id}/${it.id}`))));
+      const list = all.filter(it => matches(it.title, q));
       const entries = list.map(it => {
         const job = B.jobs.get(`${s.id}/${it.id}`);
-        return { key: `${s.id}/${it.id}`, sig: JSON.stringify([it.title, it.thumb, it.badge, it.inGallery, it.action, it.note, job ? (job.error ? 'e:' + job.error : 'run') : '']),
+        return { key: `${s.id}/${it.id}`, sig: JSON.stringify([it.title, it.thumb, it.badge, it.action, it.note, job ? (job.error ? 'e:' + job.error : 'run') : '']),
           make: () => {
             const thumb = el('div', { class: 'g-thumb' }, it.thumb ? el('img', { src: it.thumb, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null,
               el('span', { class: 'src-badge', text: it.badge ? `${s.name} · ${it.badge}` : s.name }));
@@ -777,18 +817,21 @@ function renderBrowse() {
   });
 }
 
-function myClipCard(o) {
-  const thumb = el('div', { class: 'g-thumb' + (o.assets === 'pending' ? ' skeleton' : '') },
-    o.frameUrl ? el('img', { src: o.frameUrl, alt: '', loading: 'lazy' }) : null);
+// A theme card: the picture shows the base with its live layer (when it has one), the line below says which.
+function themeCard(o) {
+  const t = o.theme || {};
+  const pic = (t.card || o.frameUrl);
+  const thumb = el('div', { class: 'g-thumb' + (o.assets === 'pending' ? ' skeleton' : '') }, pic ? el('img', { src: pic, alt: '', loading: 'lazy' }) : null);
   const chips = el('div', { class: 'g-chips' });
-  if (o.onScreen) chips.append(el('span', { class: 'chip ok', text: 'On screen' }));
+  if (S.currentTheme === o.id) chips.append(el('span', { class: 'chip ok', text: 'On screen' }));
   if (o.missing) chips.append(el('span', { class: 'chip warn', text: 'File missing' }));
   if (o.needsRemake) chips.append(el('span', { class: 'chip warn', text: 'Needs re-make' }));
   if (o.busy) chips.append(el('span', { class: 'chip accent', text: 'Preparing…' }));
   if (o.assets === 'error' && !o.versionCount) chips.append(el('span', { class: 'chip danger', text: 'Can\'t read this file' }));
-  if (!chips.childElementCount) chips.append(el('span', { class: 'small muted', text: o.versionCount ? `${o.versionCount} version${o.versionCount > 1 ? 's' : ''}` : 'Not sent yet' }));
-  const card = el('button', { class: 'g-card', 'data-id': o.id, 'aria-label': `${o.name}${o.onScreen ? ', on screen' : ''}`, onclick: () => select(o.id) },
-    thumb, el('div', { class: 'g-name', text: o.name, title: o.name }), chips);
+  const sel = S.selTheme === o.id;
+  const card = el('button', { class: 'g-card' + (sel ? ' sel' : ''), 'data-id': o.id, 'aria-pressed': String(sel), 'aria-label': `${o.name}, ${themeLabel(o)}${S.currentTheme === o.id ? ', on screen' : ''}`,
+    onclick: () => { S.selTheme = S.selTheme === o.id ? null : o.id; renderGallery(); const c = mineUI.box.querySelector(`.g-card[data-id="${CSS.escape(o.id)}"]`); if (c) c.focus({ preventScroll: true }); } },
+    thumb, el('div', { class: 'g-name', text: o.name, title: o.name }), el('div', { class: 'g-sub', text: themeLabel(o) }), chips);
   let v = null; // hover (or keyboard focus) plays a muted preview
   const play = () => {
     if (v || !o.previewUrl || o.isImage) return;
@@ -800,6 +843,7 @@ function myClipCard(o) {
   const stop = () => { if (v) { v.remove(); v = null; } };
   card.addEventListener('mouseenter', play); card.addEventListener('mouseleave', stop);
   card.addEventListener('focus', play); card.addEventListener('blur', stop);
+  card.addEventListener('dblclick', () => applyTheme(o.id, o.name));
   return card;
 }
 
@@ -2255,7 +2299,7 @@ async function onActivity(a) {
           reloadApp = true;
           if (j.status === 'done') S.screen = { ...S.screen, state: j.result && j.result.serialWarning ? 'setup' : 'ready' };
         }
-        if (j.kind === 'setup') { reloadApp = true; }
+        if (j.kind === 'setup' || j.kind === 'apply') { reloadApp = true; }
       }
     }
     if (a.rev !== S.rev || reloadApp) await loadOriginals();
@@ -2389,38 +2433,25 @@ function renderLiveSettings() {
   const st = l.status || {};
   $('lvOn').checked = !!c.inApp;
   $('lvFps').value = String(st.fps >= 45 || !st.fps ? 60 : 30);
-  const bg = $('lvBg');
-  bg.textContent = '';
-  bg.append(el('option', { value: '', text: 'Plain (moving colours)' }));
-  const clips = (S.originals || []).filter(o => !o.isImage);
-  for (const o of clips) bg.append(el('option', { value: o.id, text: o.name }));
-  if (c.background && !clips.some(o => o.id === c.background)) bg.append(el('option', { value: c.background, text: '(clip no longer in the Gallery)' }));
-  bg.value = c.background || '';
-  const cur = clips.find(o => o.id === c.background);
-  const th = $('lvBgThumb');
-  if (cur && cur.assets === 'ready') { th.src = backend.mediaUrl(cur.id, 'thumb.jpg') + `?r=${encodeURIComponent(cur.created)}`; th.hidden = false; } else { th.removeAttribute('src'); th.hidden = true; }
-  $('lvSec').checked = !!c.showSeconds;
-  $('lvMusic').checked = !!c.music;
   $('lvDestroy').checked = c.destroyWindow !== false;
   $('lvSleep').value = c.onSleep || 'loop';
   $('lvLock').value = c.onLock || 'loop';
   $('lvShut').checked = !!c.screenOffOnShutdown;
   $('lvAuto').checked = !!l.autostart;
   $('lvAuto').disabled = !c.inApp && !l.autostart;
-  for (const id of ['lvFps', 'lvBg', 'lvSec', 'lvMusic', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut']) $(id).disabled = !c.inApp;
+  renderLiveSwitch();
+  for (const id of ['lvFps', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut']) $(id).disabled = !c.inApp;
   $('lvMsg').textContent = !c.inApp ? '' : st.deviceHold ? 'Paused while the screen is busy.' : st.systemHold ? 'Paused while the PC sleeps or is locked.' : st.paused ? 'Paused from the tray.' : st.connected ? 'Live on the screen.' : 'Connecting to the screen…';
 }
 async function liveSet(patch) {
   try { S.app = await call('live_set', { patch }); }
   catch (e) { toast(e.message, true); }
   renderLiveSettings();
+  renderLiveSwitch();
 }
 const liveBind = (id, key, get) => { $(id).onchange = () => liveSet({ [key]: get($(id)) }); };
 liveBind('lvOn', 'inApp', e => e.checked);
 liveBind('lvFps', 'fps', e => Number(e.value));
-liveBind('lvBg', 'background', e => e.value);
-liveBind('lvSec', 'showSeconds', e => e.checked);
-liveBind('lvMusic', 'music', e => e.checked);
 liveBind('lvDestroy', 'destroyWindow', e => e.checked);
 liveBind('lvSleep', 'onSleep', e => e.value);
 liveBind('lvLock', 'onLock', e => e.value);
@@ -2495,16 +2526,30 @@ $('aSave').onclick = async () => {
   catch (e) { toast(e.message, true); }
 };
 
+// ---------- themes: the On screen editor and the Apply dialog ----------
+async function applyTheme(oid, name) {
+  await themes.flush(); // unsaved edits first, so the base is made from the saved theme
+  const r = await runApply(oid, name);
+  await loadApp().catch(() => {});
+  await loadOriginals().catch(() => {});
+  if (r === 'done') { S.selTheme = null; goHome('screen'); toast(`"${name}" is on the screen.`); }
+  else if (r === 'stopped') toast('Stopped. The previous theme is still on the screen.');
+  return r;
+}
+const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openDetail: id => select(id), applyTheme });
+initApply({ call, backend, plainWait });
+
 // ---------- start ----------
 (async function init() {
-  // Opens on the home view chosen last time (My clips by default); with no clips yet, on Browse when a source is on.
+  // Opens on the view chosen last time (On screen by default); with nothing on the screen yet, on My themes (or Browse).
   const stored = lsGet(HOME_KEY);
-  setView(stored === 'browse' ? 'browse' : 'mine');
+  setView(['screen', 'mine', 'browse'].includes(stored) ? stored : 'screen');
   await loadApp();
   const sourcesLoaded = loadSources();
   await loadOriginals();
   await sourcesLoaded;
-  if (!S.userNavigated && S.view === 'mine' && !S.originals.length && !S.adding.length && enabledSources().length) setView('browse');
+  if (!S.userNavigated && S.view === 'screen' && !S.currentTheme) setView(S.originals.length || !enabledSources().length ? 'mine' : 'browse');
+  else if (!S.userNavigated && S.view === 'mine' && !S.originals.length && !S.adding.length && enabledSources().length) setView('browse');
   renderActivity();
   backend.start();
   checkScreen(); // once at launch (opens the screen briefly); never polled

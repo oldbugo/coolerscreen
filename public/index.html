@@ -7,26 +7,32 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="topbar">
+<header class="topbar" id="topbar">
   <span class="appname">CoolerScreen</span>
   <nav class="topnav" aria-label="Main">
-    <button type="button" id="navMine" class="home-btn" title="My clips: the clips in your gallery">
-      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2 0v2h2V5zm10 0v2h2V5zM6 9v2h2V9zm10 0v2h2V9zM6 13v2h2v-2zm10 0v2h2v-2zM6 17v2h2v-2zm10 0v2h2v-2zM10 5v14h4V5z"/></svg>
-      <span>My clips</span>
+    <button type="button" id="navScreen" class="home-btn" title="On screen: the theme on your screen now, with its editor">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H8v-2h2v-2H5a2 2 0 0 1-2-2zm2 0v10h14V5z"/></svg>
+      <span>On screen</span>
     </button>
-    <button type="button" id="navBrowse" class="home-btn" title="Browse: clips from your sources">
+    <button type="button" id="navMine" class="home-btn" title="My themes: the themes in your library">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2 0v2h2V5zm10 0v2h2V5zM6 9v2h2V9zm10 0v2h2V9zM6 13v2h2v-2zm10 0v2h2v-2zM6 17v2h2v-2zm10 0v2h2v-2zM10 5v14h4V5z"/></svg>
+      <span>My themes</span>
+    </button>
+    <button type="button" id="navBrowse" class="home-btn" title="Browse: themes and clips from your sources">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 11.5 12 4l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
       <span>Browse</span>
     </button>
   </nav>
-  <button type="button" id="pill" class="pill" data-state="checking" aria-describedby="pillHint"><span class="dot" aria-hidden="true"></span><span id="pillText">Checking screen…</span></button>
-  <span id="pillHint" class="sr-only">Opens the screen settings</span>
   <span class="spacer"></span>
-  <button type="button" id="onScreen" class="onscreen" hidden>
-    <span class="onscreen-label">On screen now</span>
-    <img id="onScreenThumb" alt="" width="48" height="22">
-    <span id="onScreenName"></span>
-  </button>
+  <div class="status-combo" role="group" aria-label="Screen and live">
+    <button type="button" id="pill" class="pill" data-state="checking" aria-describedby="pillHint"><span class="dot" aria-hidden="true"></span><span id="pillText">Checking screen…</span></button>
+    <span id="pillHint" class="sr-only">Opens the screen settings</span>
+    <label class="live-switch" for="liveSwitch" title="Show live information (clock, music, PC stats) on the screen while CoolerScreen runs">
+      <span class="live-label">Live</span>
+      <input type="checkbox" id="liveSwitch" role="switch" aria-label="Live on the screen">
+      <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+    </label>
+  </div>
   <button type="button" id="gear" class="iconbtn" aria-label="Settings">
     <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
   </button>
@@ -34,6 +40,7 @@
 
 <div id="banners" class="banners"></div>
 
+<main id="screenView" class="screen-view" aria-labelledby="screenTitle" hidden></main>
 <main id="mineView" class="gallery-view" aria-labelledby="mineTitle" hidden></main>
 <main id="browseView" class="gallery-view" aria-labelledby="browseTitle" hidden></main>
 
@@ -57,6 +64,16 @@
 
 <div id="activity" class="activity" role="status" aria-live="polite" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<div id="applyBack" class="apply-back" hidden>
+  <div id="applyBox" class="dialog apply-box" role="dialog" aria-modal="true" aria-labelledby="applyTitle" aria-describedby="applyNote" tabindex="-1">
+    <h2 id="applyTitle">Applying</h2>
+    <ol id="applySteps" class="apply-steps"></ol>
+    <div class="progress apply-bar" id="applyBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Progress"><div></div></div>
+    <p id="applyNote" class="muted small apply-note" role="status" aria-live="polite"></p>
+    <div class="dialog-actions"><button type="button" id="applyStop" class="btn secondary">Stop and keep the previous theme</button></div>
+  </div>
+</div>
 
 <div id="drawerBack" class="drawer-back" hidden>
   <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1">
@@ -129,20 +146,14 @@
 
       <section id="setLive" aria-labelledby="hLive">
         <h3 id="hLive">Live screen</h3>
-        <p class="muted small">Off by default. When on, the screen shows a live clock and PC stats drawn by CoolerScreen. Closing the window then keeps CoolerScreen running in the tray (the icon near the clock); use Quit in its menu to end it, and the screen goes back to its normal clip. Sending a clip or restarting the screen pauses live and brings it back afterwards.</p>
+        <p class="muted small">Off by default. When on, the screen shows the live layer of your On screen theme (clock, music, PC stats, text and pictures) drawn by CoolerScreen. What is shown is set per theme, in On screen. Closing the window then keeps CoolerScreen running in the tray (the icon near the clock); use Quit in its menu to end it, and the screen goes back to its stored loop. Sending a theme or restarting the screen pauses live and brings it back afterwards.</p>
         <div class="src-row">
-          <div class="src-top"><label for="lvOn" class="src-name">Show live information on the screen</label><input type="checkbox" id="lvOn" role="switch"></div>
+          <div class="src-top"><label for="lvOn" class="src-name">Live on the screen</label><input type="checkbox" id="lvOn" role="switch"></div>
           <p id="lvMsg" class="muted small" role="status"></p>
         </div>
         <div id="lvOpts">
           <div class="field"><label for="lvFps">Smoothness</label>
             <select id="lvFps"><option value="60">60 frames per second</option><option value="30">30 frames per second</option></select></div>
-          <div class="field"><label for="lvBg">Background</label>
-            <select id="lvBg"></select>
-            <img id="lvBgThumb" class="lv-thumb" alt="" hidden>
-            <p class="muted small">A clip from your Gallery plays behind the clock. Plain uses a slowly moving colour background.</p></div>
-          <div class="src-row"><div class="src-top"><label for="lvSec" class="src-name">Show seconds on the clock</label><input type="checkbox" id="lvSec" role="switch"></div></div>
-          <div class="src-row"><div class="src-top"><label for="lvMusic" class="src-name">Show the music that is playing</label><input type="checkbox" id="lvMusic" role="switch"></div></div>
           <div class="src-row"><div class="src-top"><label for="lvDestroy" class="src-name">Free memory when the window is closed</label><input type="checkbox" id="lvDestroy" role="switch"></div>
             <p class="muted small">Recommended. The window takes a moment longer to come back from the tray.</p></div>
           <div class="field"><label for="lvSleep">When the PC goes to sleep</label>
