@@ -2385,6 +2385,7 @@ function openDrawer(section) {
 function closeDrawer() {
   $('drawerBack').hidden = true;
   calibrate(null); // the guide lines leave the real screen
+  fitEnd(); // the rulers leave the real screen
   draftMask = null; // unsaved notch/corner changes are dropped
   applyLiveMask();
   if (drawerReturn && document.contains(drawerReturn)) drawerReturn.focus();
@@ -2461,6 +2462,7 @@ function fillSettings() {
   $('gDir').value = a.galleryDir; $('gMsg').textContent = '';
   $('cornerR').value = a.cornerRadius || 0; $('edSnap').checked = a.editorSnap !== false; $('thMsg').textContent = '';
   loadGuidesForm();
+  loadFitForm();
   $('nMsg').textContent = '';
   const bg = $('notchBg');
   if (S.detail && S.detail.assets === 'ready') { bg.src = backend.mediaUrl(S.detail.id, 'frame.jpg'); bg.hidden = false; } else { bg.removeAttribute('src'); bg.hidden = true; }
@@ -2583,6 +2585,66 @@ $('gcSave').onclick = async () => {
     if (typeof themes !== 'undefined') themes.appChanged();
     paintDetailGuides();
   } catch (e) { $('gcMsg').textContent = e.message; }
+};
+// Settings > Screen fit: how many pixels the panel hides at each edge. While this section is in use the screen shows rulers
+// (fit_cal); one press of - or + moves an edge by one sent pixel (about 1.4 screen pixels), the numbers are screen pixels.
+// Leaving the section, or closing the settings, gives the screen back.
+const FC = { saved: { top: 0, right: 0, bottom: 0, left: 0 }, cur: { top: 0, right: 0, bottom: 0, left: 0 }, sel: 0, on: false, t: 0 };
+const FIT_EDGES = [['top', 'Top'], ['right', 'Right'], ['bottom', 'Bottom'], ['left', 'Left']];
+const fitSent = v => Math.floor((v * 7 + 5) / 10);   // screen px -> sent px (x 0.7, rounded)
+const fitScreen = p => Math.round(p * 10 / 7);        // sent px -> screen px
+function loadFitForm() {
+  FC.saved = { top: 0, right: 0, bottom: 0, left: 0, ...((S.app && S.app.screenFit) || {}) };
+  FC.cur = { ...FC.saved };
+  renderFitRows();
+}
+function renderFitRows() {
+  const rows = $('fitRows');
+  rows.textContent = '';
+  FIT_EDGES.forEach(([key, label], i) => {
+    const step = d => { FC.sel = i; FC.cur[key] = clamp(fitScreen(clamp(fitSent(FC.cur[key]) + d, 0, 140)), 0, 200); $('fitMsg').textContent = ''; paintFit(); fitSend(); };
+    const minus = el('button', { type: 'button', class: 'iconbtn', 'aria-label': `${label} less`, text: '−' });
+    const plus = el('button', { type: 'button', class: 'iconbtn', 'aria-label': `${label} more`, text: '+' });
+    minus.onclick = () => step(-1);
+    plus.onclick = () => step(1);
+    const row = el('div', { class: 'fit-row' }, el('span', { class: 'small', text: label }), minus, el('output', { class: 'fit-val', 'data-key': key }), plus);
+    row.addEventListener('focusin', () => { if (FC.sel !== i) { FC.sel = i; paintFit(); fitSend(); } });
+    rows.append(row);
+  });
+  paintFit();
+}
+// The numbers and the marked row, in place (so the focused button stays).
+function paintFit() {
+  [...$('fitRows').children].forEach((row, i) => {
+    row.classList.toggle('sel', FC.sel === i);
+    row.querySelector('output').textContent = String(FC.cur[FIT_EDGES[i][0]]);
+  });
+}
+function fitSend() {
+  clearTimeout(FC.t);
+  FC.t = setTimeout(() => {
+    call('fit_cal', { action: 'start', fit: FC.cur, sel: FC.sel }).then(r => { FC.on = !!r.calibrating; }).catch(e => { $('fitMsg').textContent = e.message; });
+  }, 60);
+}
+function fitEnd() {
+  clearTimeout(FC.t);
+  if (!FC.on) return;
+  FC.on = false;
+  call('fit_cal', { action: 'end' }).catch(() => {});
+}
+document.querySelector('#drawer .drawer-body').addEventListener('focusin', e => {
+  if ($('setFit').contains(e.target)) { if (!FC.on) { FC.on = true; fitSend(); } }
+  else fitEnd();
+});
+$('fitRevert').onclick = () => { FC.cur = { ...FC.saved }; paintFit(); fitSend(); $('fitMsg').textContent = 'Undone.'; };
+$('fitSave').onclick = async () => {
+  try {
+    S.app = await call('settings_update', { screenFit: FC.cur });
+    FC.saved = { ...S.app.screenFit };
+    $('fitMsg').textContent = 'Saved. Store your theme again to update the loop.';
+    await loadOriginals().catch(() => {});
+    if (typeof themes !== 'undefined') themes.appChanged();
+  } catch (e) { $('fitMsg').textContent = e.message; }
 };
 // ---------- themes: the On screen editor and the Apply dialog ----------
 async function applyTheme(oid, name) {
