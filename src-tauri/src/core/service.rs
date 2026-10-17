@@ -1072,6 +1072,10 @@ impl App {
                 }
                 self.lib.media_path_o(oid, file).map(|p| (p, false))
             }
+            // a picture of a theme (slideshow thumbnails in the editor): plain file names inside its assets folder only
+            ["media", "o", oid, "assets", file] if !file.is_empty() && !file.contains(['\\', '/', ':']) && *file != ".." && *file != "." && self.lib.read_original(oid).is_some() => {
+                Some(self.theme_dir(oid).join("assets").join(file)).filter(|p| p.is_file()).map(|p| (p, false))
+            }
             ["media", "v", vid, file] => self.lib.media_path_v(vid, file).map(|p| (p, false)),
             ["sources", sid, "thumb"] => {
                 let item = super::media_server::query_param(query, "item")?;

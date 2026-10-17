@@ -1029,3 +1029,16 @@ fn weather_place_and_unit_are_stored_in_settings() {
     let st = app.weather_set_place(&Value::Null).unwrap();
     assert!(st["weather"]["place"].is_null() && st["weather"]["unit"] == "F");
 }
+
+#[test]
+fn theme_pictures_are_served_only_from_the_assets_folder() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "t.mp4");
+    let a = app.theme_asset_add_bytes(&oid, "pic.png", &super::fake_media::png(4, 4, [1, 2, 3])).unwrap();
+    assert_eq!(a["file"], "assets/pic.png");
+    assert!(app.resolve_media(&format!("/media/o/{oid}/assets/pic.png"), "").is_some());
+    assert!(app.resolve_media(&format!("/media/o/{oid}/assets/missing.png"), "").is_none());
+    assert!(app.resolve_media(&format!("/media/o/{oid}/assets/..%5Cx"), "").is_none());
+    assert!(app.resolve_media(&format!("/media/o/{oid}/assets/.."), "").is_none());
+    assert!(app.resolve_media("/media/o/nosuchid1/assets/pic.png", "").is_none());
+}
