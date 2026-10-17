@@ -124,3 +124,14 @@ and in their case the **right edge is partly hidden behind the RAM** (colours st
   live is on, the engine draws the guide lines and labels on the REAL screen in real time
   (`Pipeline::set_calibration(Option<Guides>)` — draws over everything, temporary, cleared when leaving the page), so
   the user can line them up with the physical curve and the RAM. Save = global defaults.
+
+## v1.3 additions (user, 2026-10-17): corner radius per theme, settings clean-up
+
+- **Corner radius:** settings `mask.corners.r` becomes the DEFAULT radius in px on the 2400x1080 canvas, where
+  **0 = no rounded corners** (replaces the separate on/off; migrate: `on:false` → 0, `on:true` → its r). Per theme:
+  theme.json `corners`: null (= use default) or a number (0 = none for this theme). Applied to the base when it is made
+  (as today's corner mask) and drawn by the engine on the live frames (with the notch mask). Remove the per-clip
+  corners toggle in Tune; the theme setting replaces it. A changed radius marks the base as needing re-storing.
+- **Remove "Longest clip (seconds)"** (`maxSeconds`) from Settings: the maximum loop/trim length is derived
+  automatically from what fits on the screen (the loop finder's existing "auto"). Keep reading the old value harmlessly.
+- Smoothness stays 30/60 fps (60 = default and max; the panel is very likely 60 Hz).
