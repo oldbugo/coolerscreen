@@ -184,3 +184,11 @@ Mock-ups: private design canvas "CoolerScreen 3.0 themes" (claude.ai artifact 47
   isn't built out yet.
 - Keep the user's installed library (My themes) clearly separate from where pre-built themes come from (Browse).
   Adding from Browse creates an independent local copy, with no link back; adding again makes a duplicate.
+
+### Mock-up round 2 (user, 2026-10-17)
+
+Approved: nav On screen · My themes · Browse. Combine the "Screen connected" badge with the Live on/off indicator on
+the right. **On screen = the theme editor** for the installed theme (preview takes most of the space); no Edit/Change
+theme buttons (changing happens in My themes) and no info cards. "With live layer / Base only / Hand-over" are
+options inside the editor. Then: implement as part of 3.0 and open it for the user to try.
+Implementation contract: `docs/v3/theme-format.md`.
