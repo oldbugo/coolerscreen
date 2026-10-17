@@ -10,6 +10,7 @@ use super::render::Renderer;
 use super::sensors::Sampler;
 use super::nowplaying::MusicWatcher;
 use super::session::{Ending, LiveSession};
+use super::theme::ThemeLive;
 use super::video::VideoBg;
 use super::{Config, PH, PW};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering::Relaxed};
@@ -140,6 +141,9 @@ pub struct Shared {
     /// Current config, changed at run time through `reload_config`, `set_background`, `set_fps`.
     pub cfg: Mutex<Config>,
     pub cfg_gen: AtomicU64,
+    /// Current theme (set through `set_theme`); the render thread picks it up when `theme_gen` changes.
+    pub theme: Mutex<Option<ThemeLive>>,
+    pub theme_gen: AtomicU64,
     pub stats: Stats,
 }
 
@@ -170,6 +174,8 @@ impl Pipeline {
             fast_stop: AtomicBool::new(false),
             cfg: Mutex::new(cfg.clone()),
             cfg_gen: AtomicU64::new(0),
+            theme: Mutex::new(None),
+            theme_gen: AtomicU64::new(0),
             stats: Stats::default(),
         });
         let rgba_slot: Arc<Latest<Vec<u8>>> = Arc::new(Latest::new());
@@ -445,6 +451,12 @@ impl Pipeline {
         let f = if fps >= 45 { 60 } else { 30 };
         self.shared.fps.store(f, Relaxed);
         self.shared.cfg.lock().unwrap().fps = f;
+    }
+
+    /// Swap the theme (widgets, background, hand-over) while running, without restarting the pipeline.
+    pub fn set_theme(&self, t: ThemeLive) {
+        *self.shared.theme.lock().unwrap() = Some(t);
+        self.shared.theme_gen.fetch_add(1, Relaxed);
     }
 
     /// Change the background clip while running (None: the animated gradient). The decoder is restarted by the render thread.

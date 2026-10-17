@@ -5,16 +5,22 @@
 //!   render    tiny-skia compositor: background, clock, sensor panel (landscape 1680x756)
 //!   sensors   CPU load, RAM, NVIDIA GPU (NVML loaded at run time, no admin)
 //!   video     animated background: decode a clip through the bundled ffmpeg as raw frames
+//!   theme     3.0 theme model (theme.json): widgets, hand-over, ThemeLive
+//!   preview   one-frame renders without a device (editor preview, onBase overlay)
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
 pub mod encode;
 pub mod mask;
 pub mod nowplaying;
 pub mod pipeline;
+pub mod preview;
 pub mod render;
 pub mod sensors;
 pub mod session;
+pub mod theme;
 pub mod video;
 
+pub use preview::{render_base_overlay, render_preview};
+pub use theme::{ClockProps, Handover, HandoverEnd, ImageProps, MusicIdle, MusicProps, StatsProps, TextProps, Theme, ThemeLive, Widget};
 use serde::{Deserialize, Serialize};
 
 /// Landscape canvas (the 2400x1080 design space at 0.7) and the portrait frame the screen takes.
