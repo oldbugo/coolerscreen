@@ -30,13 +30,37 @@ t = mk(['a', 'b', 'c']); L.stepLayers(t, ['a'], 1); assert.equal(ord(t), 'b a c'
 t = mk(['a', 'b:g1', 'c:g1', 'd'], ['g1']); L.stepLayers(t, ['a'], 1); assert.equal(ord(t), 'b:g1 c:g1 a d');
 t = mk(['a:g1', 'b:g1', 'c'], ['g1']); L.stepLayers(t, ['b'], 1); assert.equal(ord(t), 'a:g1 b:g1 c', 'a member stops at the edge of its group');
 t = mk(['a', 'b', 'c', 'd']); L.stepLayers(t, ['b', 'c'], 1); assert.equal(ord(t), 'a d b c'.replace('a d b c', 'a d b c'));
-// guides
-const g1 = L.effectiveGuides({ curve: { right: 50 }, zones: [{ id: 'z1', name: 'RAM', edge: 'right', size: 180 }] }, { curve: { right: -20 }, zones: { z1: 30 } });
-assert.equal(g1.curve.right, 30); assert.equal(g1.zones[0].size, 210);
-assert.equal(L.zoneHit({ x: .9, y: .2, w: .05, h: .2 }, g1), 'RAM'); assert.equal(L.zoneHit({ x: .1, y: .2, w: .05, h: .2 }, g1), null);
+// guides (v1.4)
+const g1 = L.effectiveGuides({ left: { size: 100 }, right: { size: 180 }, curve: { offset: 0, left: 50, right: 50 } }, { right: { size: 30 }, curve: { offset: 20, right: -20 } });
+assert.equal(g1.right.size, 210); assert.equal(g1.left.size, 100);
+assert.deepEqual(g1.curve, { offset: 20, left: 50, right: 30 });
+const big = L.effectiveGuides({ curve: { offset: 1100, left: 5000, right: 5000 } }, null);
+assert.ok(L.curveEdges(big)[0] >= 0 && L.curveEdges(big)[1] <= 2400, 'curve band stays inside the canvas');
+assert.equal(L.effectiveGuides(null, null).right.size, 0);
+assert.equal(L.bandHit({ x: .9, y: .2, w: .05, h: .2 }, g1), 'Right'); assert.equal(L.bandHit({ x: .02, y: .2, w: .02, h: .2 }, g1), 'Left');
+assert.equal(L.bandHit({ x: .5, y: .2, w: .02, h: .2 }, g1), 'Curve'); assert.equal(L.bandHit({ x: .25, y: .2, w: .1, h: .2 }, g1), null);
+assert.equal(L.bandRects(L.effectiveGuides(null, null)).length, 0, 'empty bands are not drawn');
 // snapping
 const lines = L.snapLines([{ x: .5, y: .2, w: .2, h: .2 }], g1);
 let s = L.snapMove({ x: .498, y: .5, w: .1, h: .1 }, lines, .003, .006); assert.ok(Math.abs(s.x - .5) < 1e-9, 'left edge to the other box / centre');
 s = L.snapMove({ x: .3, y: .31, w: .1, h: .1 }, lines, .003, .006); assert.equal(s.x, .3);
-let r = L.snapResize({ x: .1, y: .1, w: .1999, h: .1 }, 'e', L.snapLines([], { curve: {}, zones: [] }), [{ w: .2, h: .3 }], .003, .006); assert.ok(Math.abs(r.w - .2) < 1e-9, 'width matches another box');
+const none = L.effectiveGuides(null, null);
+let r = L.snapResize({ x: .1, y: .1, w: .1999, h: .1 }, 'e', L.snapLines([], none), [{ w: .2, h: .3 }], .003, .006); assert.ok(Math.abs(r.w - .2) < 1e-9, 'width matches another box');
+// gap (24 px on 2400x1080): inside the canvas edges, outside the bands, between boxes
+const near = (a, b) => Math.abs(a - b) < 1e-9;
+const gl = L.snapLines([{ x: .5, y: .5, w: .1, h: .1 }], g1, 24);
+s = L.snapMove({ x: .0105, y: .5, w: .1, h: .1 }, L.snapLines([], none, 24), .003, .006); assert.ok(near(s.x, 24 / 2400), 'inside the left canvas edge');
+s = L.snapMove({ x: 1 - .1 - .0105, y: .5, w: .1, h: .1 }, L.snapLines([], none, 24), .003, .006); assert.ok(near(s.x, 1 - .1 - 24 / 2400), 'inside the right canvas edge');
+s = L.snapMove({ x: .3, y: .0235, w: .1, h: .1 }, L.snapLines([], none, 24), .003, .006); assert.ok(near(s.y, 24 / 1080), 'inside the top canvas edge');
+s = L.snapMove({ x: .0105 - 0.0001 + 100 / 2400, y: .5, w: .1, h: .1 }, L.snapLines([], g1, 24), .003, .006); assert.ok(near(s.x, 100 / 2400 + 24 / 2400), 'outside the left band');
+s = L.snapMove({ x: 1 - 210 / 2400 - 24 / 2400 - .1 + .001, y: .5, w: .1, h: .1 }, L.snapLines([], g1, 24), .003, .006); assert.ok(near(s.x + .1, 1 - 210 / 2400 - 24 / 2400), 'outside the right band (its right edge snaps, not its left)');
+s = L.snapMove({ x: .5 + .1 + .0105, y: .2, w: .1, h: .1 }, L.snapLines([{ x: .5, y: .5, w: .1, h: .1 }], none, 24), .003, .006); assert.ok(near(s.x, .6 + 24 / 2400), 'gutter right of another box');
+s = L.snapMove({ x: .3, y: .5 - .1 - .0235, w: .1, h: .1 }, L.snapLines([{ x: .3, y: .5, w: .1, h: .1 }], none, 24), .003, .006); assert.ok(near(s.y + .1, .5 - 24 / 1080), 'gutter above another box');
+assert.ok(gl.xs.length > lines.xs.length, 'gap adds lines');
+s = L.snapMove({ x: .015, y: .5, w: .1, h: .1 }, L.snapLines([], none, 24), .003, .006); assert.equal(s.x, .015, 'outside the threshold: no snap');
+s = L.snapMove({ x: .0105, y: .5, w: .1, h: .1 }, L.snapLines([], none, 0), .003, .006); assert.equal(s.x, .0105, 'gap 0: no gap lines');
+// a box's right edge does not snap to an inside-left gap line
+s = L.snapMove({ x: 24 / 2400 - .1 + .001, y: .5, w: .1, h: .1 }, L.snapLines([], none, 24), .003, .006); assert.notEqual(s.x + .1, 24 / 2400);
+// resize to the gap
+r = L.snapResize({ x: .1, y: .1, w: 1 - .1 - 24 / 2400 - .001, h: .1 }, 'e', L.snapLines([], none, 24), [], .003, .006); assert.ok(near(r.x + r.w, 1 - 24 / 2400), 'right edge to the inside gap');
 console.log('layers ok');

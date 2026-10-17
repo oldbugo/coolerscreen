@@ -3,6 +3,7 @@ import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, s
 import { openDialog } from './js/dialog.js';
 import './js/titlebar.js';
 import { backend } from './js/backend.js';
+import { createBandSlider } from './js/bandslider.js';
 import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
 
 // ---------- small helpers ----------
@@ -2517,7 +2518,7 @@ $('gSave').onclick = async () => {
 };
 $('gOpen').onclick = () => $('openFolder').click();
 $('cornerR').onchange = async () => {
-  try { S.app = await call('settings_update', { cornerRadius: Number($('cornerR').value) || 0 }); $('thMsg').textContent = 'Saved. Themes that use the default radius need their base stored again.'; await loadOriginals(); if (typeof themes !== 'undefined') themes.appChanged(); }
+  try { S.app = await call('settings_update', { cornerRadius: Number($('cornerR').value) || 0 }); $('thMsg').textContent = 'Saved.'; await loadOriginals(); if (typeof themes !== 'undefined') themes.appChanged(); }
   catch (e) { $('thMsg').textContent = e.message; }
 };
 $('edSnap').onchange = async () => {
@@ -2529,8 +2530,7 @@ $('edSnap').onchange = async () => {
 const GC = { g: null, live: false, t: 0 };
 const clone = o => JSON.parse(JSON.stringify(o));
 function loadGuidesForm() {
-  GC.g = clone((S.app && S.app.screenGuides) || { curve: { left: 0, right: 0, top: 0, bottom: 0 }, zones: [] });
-  GC.g.curve = { left: 0, right: 0, top: 0, bottom: 0, ...GC.g.curve };
+  GC.g = Ly.clampGuides(clone((S.app && S.app.screenGuides) || {}));
   renderGuidesForm();
 }
 // The lines appear on the real screen once the user works in this section, and go when the settings close.
@@ -2545,50 +2545,41 @@ function renderGuidePreview() {
   const o = S.originals.find(x => x.id === S.currentTheme) || S.originals[0];
   const img = $('gcImg');
   if (o && o.frameUrl) { img.src = o.frameUrl; img.hidden = false; } else { img.removeAttribute('src'); img.hidden = true; }
-  fillGuides($('gcLayer'), Ly.effectiveGuides(GC.g, null));
+  fillGuides($('gcLayer'), Ly.clampGuides(GC.g));
 }
+let gcBand = null;
 function renderGuidesForm() {
-  const curve = $('gcCurve'), zones = $('gcZones');
-  curve.textContent = '';
-  const row = (label, value, max, onset, name) => {
-    const num = el('input', { type: 'number', min: 0, max, step: 5, 'aria-label': label });
-    const rng = el('input', { type: 'range', min: 0, max, step: 5, 'aria-label': label });
-    num.value = rng.value = value;
-    rng.oninput = () => { num.value = rng.value; onset(Number(rng.value)); guidesChanged(); };
-    num.oninput = () => { rng.value = num.value; onset(clamp(Number(num.value) || 0, 0, max)); guidesChanged(); };
+  const rows = $('gcRows');
+  rows.textContent = '';
+  const upd = [];
+  // a label, a slider and a number box for one value
+  const row = (label, get, set, min, max) => {
+    const num = el('input', { type: 'number', min, max, step: 5, 'aria-label': label });
+    const rng = el('input', { type: 'range', min, max, step: 5, 'aria-label': label });
+    const show = () => { num.value = rng.value = get(); };
+    const apply = n => { set(clamp(Number.isFinite(n) ? n : 0, min, max)); GC.g = Ly.clampGuides(GC.g); upd.forEach(f => f()); guidesChanged(); };
+    rng.oninput = () => apply(Number(rng.value));
+    num.oninput = () => apply(Number(num.value));
+    upd.push(show); show();
     return el('div', { class: 'gcal-row' }, el('span', { class: 'small', text: label }), rng, num);
   };
-  for (const [e, text, max] of [['left', 'Left edge', 600], ['right', 'Right edge', 600], ['top', 'Top edge', 300], ['bottom', 'Bottom edge', 300]]) {
-    curve.append(row(text, GC.g.curve[e] || 0, max, v => { GC.g.curve[e] = v; }));
-  }
-  curve.append(el('p', { class: 'muted small', text: 'How far in from each edge the curve starts (in screen pixels). 0 = flat.' }));
-  zones.textContent = '';
-  GC.g.zones.forEach((z, i) => {
-    const name = el('input', { type: 'text', value: z.name || '', placeholder: 'Name, e.g. RAM', maxLength: 40, 'aria-label': 'Name of the area', oninput: e => { z.name = e.target.value; guidesChanged(); } });
-    name.value = z.name || '';
-    const edge = el('select', { 'aria-label': 'Which edge', onchange: e => { z.edge = e.target.value; renderGuidesForm(); guidesChanged(); } },
-      [['right', 'Right edge'], ['left', 'Left edge'], ['top', 'Top edge'], ['bottom', 'Bottom edge']].map(([v, t]) => el('option', { value: v, text: t })));
-    edge.value = z.edge || 'right';
-    const max = z.edge === 'top' || z.edge === 'bottom' ? 1080 : 2400;
-    zones.append(el('div', { class: 'gcal-zone' }, el('div', { class: 'grid2' }, el('div', { class: 'field' }, el('label', { text: 'Name' }), name), el('div', { class: 'field' }, el('label', { text: 'Along' }), edge)),
-      row('Size', z.size || 0, Math.min(max, 800), v => { z.size = v; }),
-      el('div', { class: 'row' }, el('button', { class: 'btn danger small-btn', text: 'Remove', onclick: () => { GC.g.zones.splice(i, 1); renderGuidesForm(); guidesChanged(); } }))));
-  });
-  if (!GC.g.zones.length) zones.append(el('p', { class: 'muted small', text: 'None yet. Add one for something that hides part of the screen, like the RAM in front of it.' }));
+  rows.append(row('Left', () => GC.g.left.size, v => { GC.g.left.size = v; }, 0, 800));
+  rows.append(row('Right', () => GC.g.right.size, v => { GC.g.right.size = v; }, 0, 800));
+  gcBand = createBandSlider({ span: 600, step: 5, onchange: ({ left, right }) => { GC.g.curve.left = left; GC.g.curve.right = right; GC.g = Ly.clampGuides(GC.g); upd.forEach(f => f()); guidesChanged(); } });
+  const syncBand = () => { const c = 1200 + GC.g.curve.offset; gcBand.set(GC.g.curve.left, GC.g.curve.right, { left: c, right: 2400 - c }); };
+  upd.push(syncBand);
+  const pos = row('Position', () => GC.g.curve.offset, v => { GC.g.curve.offset = v; }, -600, 600);
+  rows.append(el('div', { class: 'gcal-curve' }, el('h4', { class: 'group-label', text: 'Curve' }), pos,
+    el('div', { class: 'gcal-row two' }, el('span', { class: 'small', text: 'Edges' }), gcBand.root)));
+  syncBand();
   renderGuidePreview();
 }
-$('gcAdd').onclick = () => {
-  const used = new Set(GC.g.zones.map(z => z.id));
-  let n = 1; while (used.has('z' + n)) n++;
-  GC.g.zones.push({ id: 'z' + n, name: n === 1 ? 'RAM' : 'Area ' + n, edge: 'right', size: 150 });
-  renderGuidesForm(); guidesChanged();
-};
-$('gcRevert').onclick = () => { loadGuidesForm(); $('gcMsg').textContent = 'Back to the saved guides.'; };
+$('gcRevert').onclick = () => { loadGuidesForm(); $('gcMsg').textContent = 'Undone.'; };
 $('gcSave').onclick = async () => {
   try {
     S.app = await call('settings_update', { screenGuides: GC.g });
     loadGuidesForm();
-    $('gcMsg').textContent = 'Saved. Every theme now uses these guides (plus its own offsets).';
+    $('gcMsg').textContent = 'Saved.';
     if (typeof themes !== 'undefined') themes.appChanged();
     paintDetailGuides();
   } catch (e) { $('gcMsg').textContent = e.message; }

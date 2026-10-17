@@ -501,7 +501,7 @@ impl Renderer {
         let curve_col = [255u8, 235, 0];
         let lsz = (26.0 * k / 0.7).round().max(10.0) as u32;
         let mut chips: Vec<(String, f32, f32, [u8; 3])> = Vec::new(); // text, x, baseline, colour
-        let mut band = |layer: &mut tiny_skia::Pixmap, x: f32, w: f32, col: [u8; 3], tint: u8| {
+        let band = |layer: &mut tiny_skia::Pixmap, x: f32, w: f32, col: [u8; 3], tint: u8| {
             round_rect(layer, x, 0.0, w, fh, 0.0, [col[0], col[1], col[2], tint]);
             let mut sx = x;
             while sx < x + w {

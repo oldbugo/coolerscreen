@@ -128,53 +128,95 @@ export function stepLayers(t, ids, dir) {
   return normalizeGroups(t);
 }
 
-// ---------------------------------------------------------------------------- screen guides
+// ---------------------------------------------------------------------------- screen guides (v1.4)
+// { left: { size }, right: { size }, curve: { offset, left, right } } in px on the 2400x1080 canvas.
 
-/** Global guides + a theme's offsets, clamped like the engine does. */
-export function effectiveGuides(g, off) {
-  g = g || {}; off = off || {};
-  const c = (g.curve || {}), o = (off.curve || {});
-  const cv = (k, max) => clamp((Number(c[k]) || 0) + (Number(o[k]) || 0), 0, max);
+export const DEFAULT_GAP = 24;
+const num = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+/** Clamp one set of guides like the engine does (sides 0..half; the curve band stays inside the canvas). */
+export function clampGuides(g) {
+  g = g || {};
+  const c = g.curve || {};
+  const offset = clamp(num(c.offset), -GW / 2, GW / 2), centre = GW / 2 + offset;
   return {
-    curve: { left: cv('left', GW / 2), right: cv('right', GW / 2), top: cv('top', GH / 2), bottom: cv('bottom', GH / 2) },
-    zones: (g.zones || []).map(z => ({ ...z, size: clamp((Number(z.size) || 0) + (Number((off.zones || {})[z.id]) || 0), 0, z.edge === 'left' || z.edge === 'right' ? GW : GH) })),
+    left: { size: clamp(num((g.left || {}).size), 0, GW / 2) },
+    right: { size: clamp(num((g.right || {}).size), 0, GW / 2) },
+    curve: { offset, left: clamp(num(c.left), 0, centre), right: clamp(num(c.right), 0, GW - centre) },
   };
 }
 
-/** Normalised (0..1) rectangles of the avoid zones, and of the curve bands. */
-export function bandRect(edge, px) {
-  const fx = px / GW, fy = px / GH;
-  if (edge === 'left') return { x0: 0, y0: 0, x1: fx, y1: 1 };
-  if (edge === 'right') return { x0: 1 - fx, y0: 0, x1: 1, y1: 1 };
-  if (edge === 'top') return { x0: 0, y0: 0, x1: 1, y1: fy };
-  return { x0: 0, y0: 1 - fy, x1: 1, y1: 1 };
+/** Global guides + a theme's offsets (same keys, deltas), clamped. */
+export function effectiveGuides(g, off) {
+  g = g || {}; off = off || {};
+  const a = (k, f) => num((g[k] || {})[f]) + num((off[k] || {})[f]);
+  return clampGuides({
+    left: { size: a('left', 'size') }, right: { size: a('right', 'size') },
+    curve: { offset: a('curve', 'offset'), left: a('curve', 'left'), right: a('curve', 'right') },
+  });
 }
-export const zoneRects = g => (g.zones || []).filter(z => z.size > 0).map(z => ({ id: z.id, name: z.name, ...bandRect(z.edge, z.size) }));
-export const curveRects = g => ['left', 'right', 'top', 'bottom'].filter(e => g.curve[e] > 0).map(e => ({ edge: e, ...bandRect(e, g.curve[e]) }));
 
-/** Does the box overlap an avoid zone? -> the zone's name (or null). */
-export function zoneHit(w, g) {
-  for (const z of zoneRects(g)) {
-    if (w.x < z.x1 - 1e-6 && w.x + w.w > z.x0 + 1e-6 && w.y < z.y1 - 1e-6 && w.y + w.h > z.y0 + 1e-6) return z.name || 'an avoid area';
+/** The curve band's left and right edge, px. */
+export const curveEdges = g => { const c = GW / 2 + g.curve.offset; return [c - g.curve.left, c + g.curve.right]; };
+
+/** Normalised (0..1) rectangles of the guide bands that have a width: { key: 'left'|'right'|'curve', name, x0, y0, x1, y1 }. */
+export function bandRects(g) {
+  const out = [];
+  if (g.left.size > 0) out.push({ key: 'left', name: 'Left', x0: 0, y0: 0, x1: g.left.size / GW, y1: 1 });
+  if (g.right.size > 0) out.push({ key: 'right', name: 'Right', x0: 1 - g.right.size / GW, y0: 0, x1: 1, y1: 1 });
+  const [a, b] = curveEdges(g);
+  if (b - a > 0) out.push({ key: 'curve', name: 'Curve', x0: a / GW, y0: 0, x1: b / GW, y1: 1 });
+  return out;
+}
+
+/** Does the box overlap a band? -> the band's name (or null). */
+export function bandHit(w, g) {
+  for (const z of bandRects(g)) {
+    if (w.x < z.x1 - 1e-6 && w.x + w.w > z.x0 + 1e-6 && w.y < z.y1 - 1e-6 && w.y + w.h > z.y0 + 1e-6) return z.name;
   }
   return null;
 }
 
 // ---------------------------------------------------------------------------- snapping
 
-/** Vertical (x) and horizontal (y) snap lines in 0..1: canvas edges and centre, other boxes, guide-zone and curve edges. */
-export function snapLines(others, guides) {
-  const xs = [0, 0.5, 1], ys = [0, 0.5, 1];
-  for (const b of others) { xs.push(b.x, b.x + b.w / 2, b.x + b.w); ys.push(b.y, b.y + b.h / 2, b.y + b.h); }
-  for (const r of [...zoneRects(guides), ...curveRects(guides)]) { xs.push(r.x0, r.x1); ys.push(r.y0, r.y1); }
+/**
+ * Vertical (x) and horizontal (y) snap lines in 0..1. Each line is { v, k }: k 'a' = any side of a box may snap to it,
+ * 's' = only a box's start edge (left/top), 'e' = only its end edge (right/bottom).
+ * Exact alignment: canvas edges and centre, other boxes' edges and centres, guide band edges.
+ * Gap (px on the 2400x1080 canvas, 0 = none): inside the canvas edges, outside each band, and between boxes.
+ */
+export function snapLines(others, guides, gap = 0) {
+  const xs = [{ v: 0, k: 'a' }, { v: 0.5, k: 'a' }, { v: 1, k: 'a' }], ys = [...xs];
+  const bands = bandRects(guides || { left: { size: 0 }, right: { size: 0 }, curve: { offset: 0, left: 0, right: 0 } });
+  for (const b of others) {
+    xs.push({ v: b.x, k: 'a' }, { v: b.x + b.w / 2, k: 'a' }, { v: b.x + b.w, k: 'a' });
+    ys.push({ v: b.y, k: 'a' }, { v: b.y + b.h / 2, k: 'a' }, { v: b.y + b.h, k: 'a' });
+  }
+  for (const r of bands) xs.push({ v: r.x0, k: 'a' }, { v: r.x1, k: 'a' });
+  gap = Math.max(0, num(gap));
+  if (gap > 0) {
+    const gx = gap / GW, gy = gap / GH;
+    xs.push({ v: gx, k: 's' }, { v: 1 - gx, k: 'e' });
+    ys.push({ v: gy, k: 's' }, { v: 1 - gy, k: 'e' });
+    for (const r of bands) {
+      if (r.x1 + gx < 1) xs.push({ v: r.x1 + gx, k: 's' });
+      if (r.x0 - gx > 0) xs.push({ v: r.x0 - gx, k: 'e' });
+    }
+    for (const b of others) {
+      xs.push({ v: b.x + b.w + gx, k: 's' }, { v: b.x - gx, k: 'e' });
+      ys.push({ v: b.y + b.h + gy, k: 's' }, { v: b.y - gy, k: 'e' });
+    }
+  }
   return { xs, ys };
 }
 
+// cands: [{ v, side: 's'|'c'|'e' }]; a line with k 's'/'e' only takes that side.
 function nearest(cands, lines, thr) {
   let best = null;
   for (const c of cands) for (const l of lines) {
-    const d = l - c.v;
-    if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, line: l, ...c };
+    if (l.k !== 'a' && l.k !== c.side) continue;
+    const d = l.v - c.v;
+    if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d) - 1e-12)) best = { d, line: l.v, ...c };
   }
   return best;
 }
@@ -184,8 +226,8 @@ function nearest(cands, lines, thr) {
  * { x, y } and the lines that were hit ({ vx: [...], hy: [...] }) for drawing.
  */
 export function snapMove(b, L, thrX, thrY) {
-  const sx = nearest([{ v: b.x }, { v: b.x + b.w / 2 }, { v: b.x + b.w }], L.xs, thrX);
-  const sy = nearest([{ v: b.y }, { v: b.y + b.h / 2 }, { v: b.y + b.h }], L.ys, thrY);
+  const sx = nearest([{ v: b.x, side: 's' }, { v: b.x + b.w / 2, side: 'c' }, { v: b.x + b.w, side: 'e' }], L.xs, thrX);
+  const sy = nearest([{ v: b.y, side: 's' }, { v: b.y + b.h / 2, side: 'c' }, { v: b.y + b.h, side: 'e' }], L.ys, thrY);
   return { x: b.x + (sx ? sx.d : 0), y: b.y + (sy ? sy.d : 0), vx: sx ? [sx.line] : [], hy: sy ? [sy.line] : [] };
 }
 
@@ -195,17 +237,18 @@ export function snapMove(b, L, thrX, thrY) {
  */
 export function snapResize(r, mode, L, others, thrX, thrY) {
   let { x, y, w, h } = r; const vx = [], hy = [];
-  if (mode.includes('e')) { const s = nearest([{ v: x + w }], L.xs, thrX); if (s) { w += s.d; vx.push(s.line); } }
-  if (mode.includes('w')) { const s = nearest([{ v: x }], L.xs, thrX); if (s) { x += s.d; w -= s.d; vx.push(s.line); } }
-  if (mode.includes('s')) { const s = nearest([{ v: y + h }], L.ys, thrY); if (s) { h += s.d; hy.push(s.line); } }
-  if (mode.includes('n')) { const s = nearest([{ v: y }], L.ys, thrY); if (s) { y += s.d; h -= s.d; hy.push(s.line); } }
+  if (mode.includes('e')) { const s = nearest([{ v: x + w, side: 'e' }], L.xs, thrX); if (s) { w += s.d; vx.push(s.line); } }
+  if (mode.includes('w')) { const s = nearest([{ v: x, side: 's' }], L.xs, thrX); if (s) { x += s.d; w -= s.d; vx.push(s.line); } }
+  if (mode.includes('s')) { const s = nearest([{ v: y + h, side: 'e' }], L.ys, thrY); if (s) { h += s.d; hy.push(s.line); } }
+  if (mode.includes('n')) { const s = nearest([{ v: y, side: 's' }], L.ys, thrY); if (s) { y += s.d; h -= s.d; hy.push(s.line); } }
   // matching sizes (only when no edge snapped on that axis)
+  const sizes = (key, thr, v) => nearest([{ v, side: 'a' }], others.map(o => ({ v: o[key], k: 'a' })), thr);
   if ((mode.includes('e') || mode.includes('w')) && !vx.length) {
-    const s = nearest([{ v: w }], others.map(o => o.w), thrX);
+    const s = sizes('w', thrX, w);
     if (s) { if (mode.includes('w')) x -= s.d; w += s.d; }
   }
   if ((mode.includes('n') || mode.includes('s')) && !hy.length) {
-    const s = nearest([{ v: h }], others.map(o => o.h), thrY);
+    const s = sizes('h', thrY, h);
     if (s) { if (mode.includes('n')) y -= s.d; h += s.d; }
   }
   return { x, y, w, h, vx, hy };

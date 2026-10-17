@@ -29,7 +29,6 @@ const END_CHOICES = [
   ['instant', 'Stop at once', 'The live layer disappears and the stored loop plays.'],
   ['screenOff', 'Fade to black and turn the screen off', 'The screen goes dark when CoolerScreen stops.'],
 ];
-const EDGES = [['left', 'Left edge'], ['right', 'Right edge'], ['top', 'Top edge'], ['bottom', 'Bottom edge']];
 
 const SVG_EYE = on => `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>${on ? '<circle cx="12" cy="12" r="3" fill="currentColor"/>' : '<path stroke="currentColor" stroke-width="2" d="M4 20 20 4"/>'}</svg>`;
 const SVG_CARET = open => `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="${open ? 'M5 8l7 8 7-8z' : 'M8 5l8 7-8 7z'}"/></svg>`;
@@ -46,9 +45,16 @@ export function fillGuides(layer, g, { labels = true } = {}) {
     Object.assign(d.style, { left: pct(r.x0), top: pct(r.y0), width: pct(r.x1 - r.x0), height: pct(r.y1 - r.y0) });
     if (labels && text) { const s = document.createElement('span'); s.className = 'gl'; s.textContent = text; d.append(s); }
     layer.append(d);
+    return d;
   };
-  for (const r of Ly.curveRects(g)) add('curve ' + r.edge, r, 'curve');
-  for (const r of Ly.zoneRects(g)) add('zone', r, r.name || 'hard to see');
+  for (const r of Ly.bandRects(g)) {
+    const d = add(r.key === 'curve' ? 'curve' : 'zone ' + r.key, r, r.name);
+    if (r.key === 'curve') {
+      const m = document.createElement('i');
+      m.className = 'gmid'; m.style.left = ((0.5 + g.curve.offset / Ly.GW - r.x0) / (r.x1 - r.x0)) * 100 + '%';
+      d.append(m);
+    }
+  }
 }
 export { Ly as layers };
 
@@ -96,8 +102,9 @@ export function createThemes(ctx) {
   }
   function fixTheme(t) {
     t.groups = t.groups || [];
-    t.guidesOffset = t.guidesOffset || { curve: {}, zones: {} };
-    t.guidesOffset.curve = t.guidesOffset.curve || {}; t.guidesOffset.zones = t.guidesOffset.zones || {};
+    t.guidesOffset = t.guidesOffset || {};
+    t.guidesOffset.left = t.guidesOffset.left || {}; t.guidesOffset.right = t.guidesOffset.right || {}; t.guidesOffset.curve = t.guidesOffset.curve || {};
+    if (!Number.isFinite(t.gap)) t.gap = Ly.DEFAULT_GAP;
     if (t.liveLayer === undefined) t.liveLayer = true;
     return t;
   }
@@ -338,10 +345,10 @@ export function createThemes(ctx) {
   }
   function makeBox(w, g) {
     const on = E.selIds.includes(w.id), single = on && E.selIds.length === 1;
-    const hit = Ly.zoneHit(w, g);
-    const b = el('div', { class: 'wbox' + (on ? ' sel' : '') + (single ? ' one' : '') + (hit && E.guides ? ' warn' : ''), tabindex: '0', role: 'button', 'data-id': w.id, 'aria-label': `${nameOf(w)}${hit ? `. Overlaps ${hit}` : ''}. Arrow keys move it, Delete removes it.` },
+    const hit = Ly.bandHit(w, g);
+    const b = el('div', { class: 'wbox' + (on ? ' sel' : '') + (single ? ' one' : '') + (hit && E.guides ? ' warn' : ''), tabindex: '0', role: 'button', 'data-id': w.id, 'aria-label': `${nameOf(w)}${hit ? `. Overlaps ${hit} guide` : ''}. Arrow keys move it, Delete removes it.` },
       el('span', { class: 'wlabel', text: nameOf(w) }), el('span', { class: 'wname', text: on ? '' : nameOf(w) }),
-      hit && E.guides ? el('span', { class: 'wwarn', title: `Overlaps ${hit}: hard to see there`, text: '⚠' }) : null);
+      hit && E.guides ? el('span', { class: 'wwarn', title: `Overlaps ${hit}`, text: '⚠' }) : null);
     placeBox(b, w);
     for (const h of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) b.append(el('span', { class: 'wh', 'data-h': h }));
     b.addEventListener('pointerdown', ev => {
@@ -370,7 +377,7 @@ export function createThemes(ctx) {
     const orig = moving.map(m => ({ m, x: m.x, y: m.y, w: m.w, h: m.h }));
     const ids = new Set(moving.map(m => m.id));
     const others = widgets().filter(o => !ids.has(o.id) && shownOnStage(o));
-    const lines = Ly.snapLines(others, guidesNow());
+    const lines = Ly.snapLines(others, guidesNow(), E.theme.gap ?? Ly.DEFAULT_GAP);
     const thrX = SNAP_PX / sr.width, thrY = SNAP_PX / sr.height;
     const ux0 = Math.min(...orig.map(o => o.x)), uy0 = Math.min(...orig.map(o => o.y));
     const ux1 = Math.max(...orig.map(o => o.x + o.w)), uy1 = Math.max(...orig.map(o => o.y + o.h));
@@ -427,16 +434,16 @@ export function createThemes(ctx) {
     for (const w of widgets()) {
       const b = E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(w.id)}"]`);
       if (!b) continue;
-      const hit = E.guides ? Ly.zoneHit(w, g) : null;
+      const hit = E.guides ? Ly.bandHit(w, g) : null;
       b.classList.toggle('warn', !!hit);
       let badge = b.querySelector('.wwarn');
       if (hit && !badge) { badge = el('span', { class: 'wwarn', text: '⚠' }); b.append(badge); }
-      if (badge) { if (hit) badge.title = `Overlaps ${hit}: hard to see there`; else badge.remove(); }
+      if (badge) { if (hit) badge.title = `Overlaps ${hit}`; else badge.remove(); }
     }
     paintLayerList();
     // the properties note about an overlapped area follows the selected item
     const one = E.selIds.length === 1 ? byId(E.selIds[0]) : null;
-    const now = one && E.guides ? !!Ly.zoneHit(one, g) : false;
+    const now = one && E.guides ? !!Ly.bandHit(one, g) : false;
     if (one && now !== E.hitShown) { E.hitShown = now; paintProps(); }
   }
 
@@ -578,7 +585,7 @@ export function createThemes(ctx) {
       const eye = el('button', { class: 'leye', type: 'button', 'aria-label': hidden ? 'Show' : 'Hide', title: hidden ? 'Show' : 'Hide', 'aria-pressed': String(!hidden) });
       eye.innerHTML = SVG_EYE(!hidden);
       const name = isGroup ? (r.g.name || 'Group') : nameOf(r.w);
-      const hit = !isGroup && Ly.zoneHit(r.w, g);
+      const hit = !isGroup && Ly.bandHit(r.w, g);
       const row = el('div', { class: 'lrow' + (isGroup ? ' group' : '') + (selected ? ' sel' : '') + (hidden ? ' off' : '') + (r.depth ? ' in' : ''), role: 'option', draggable: 'true', 'aria-selected': String(selected), 'data-id': isGroup ? r.g.id : r.w.id, 'data-kind': r.kind });
       if (isGroup) {
         const caret = el('button', { class: 'lcaret', type: 'button', 'aria-label': r.g.collapsed ? 'Expand group' : 'Collapse group', 'aria-expanded': String(!r.g.collapsed) });
@@ -771,8 +778,8 @@ export function createThemes(ctx) {
         w.onBase = v; paintStage(); E.baseSig = null; edited();
       }, 'Draws it into the picture stored on the screen, so it stays there when CoolerScreen is closed. Changing it later means storing the base again.'));
     }
-    const hit = Ly.zoneHit(w, guidesNow());
-    if (hit && E.guides) u.props.append(el('p', { class: 'warn-text small', text: `⚠ Overlaps ${hit}: it is hard to see there. Move it, or keep it if that is fine.` }));
+    const hit = Ly.bandHit(w, guidesNow());
+    if (hit && E.guides) u.props.append(el('p', { class: 'warn-text small', text: `⚠ Overlaps ${hit}` }));
     u.props.append(el('hr', { class: 'sep' }), el('h3', { text: 'Position and size' }));
     const grid = el('div', { class: 'props-grid' });
     posFields = {};
@@ -807,35 +814,34 @@ export function createThemes(ctx) {
     };
     const t = E.theme, h = t.handover || (t.handover = {});
     const dflt = Math.round((S.app && S.app.cornerRadius) || 0);
-    const custom = t.corners != null;
-    const cornerNum = numInput('thCorner', custom ? t.corners : dflt, { min: 0, max: 300, onchange: v => { if (v == null) return; t.corners = clamp(Math.round(v), 0, 300); onCorners(); } });
-    cornerNum.disabled = !custom;
     const onCorners = () => { E.baseSig = null; paintStage(); paintBanner(); edited(); };
+    const cornerNum = numInput('thCorner', t.corners ?? dflt, { min: 0, max: 300, onchange: v => { if (v == null) { cornerNum.value = t.corners ?? dflt; return; } t.corners = clamp(Math.round(v), 0, 300); resetBtn.disabled = false; onCorners(); } });
+    const resetBtn = el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Reset to default', title: 'Reset to default', id: 'thCornerReset', disabled: t.corners == null,
+      onclick: () => { t.corners = null; cornerNum.value = dflt; resetBtn.disabled = true; onCorners(); } });
+    resetBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 0 0-14.3-4.5M4 4v4h4M4 13a8 8 0 0 0 14.3 4.5M20 20v-4h-4"/></svg>';
     const radio = (name, value, checked, text, on) => { const r = el('input', { type: 'radio', name, value, checked, onchange: on }); r.checked = checked; return el('label', { class: 'rad' }, r, text); };
-    const guides = Ly.effectiveGuides(S.app && S.app.screenGuides, t.guidesOffset);
+    const gapNum = numInput('thGap', t.gap ?? Ly.DEFAULT_GAP, { min: 0, max: 200, onchange: v => { t.gap = v == null ? Ly.DEFAULT_GAP : clamp(Math.round(v), 0, 200); gapNum.value = t.gap; edited({ preview: false }); } });
+    const G = Ly.effectiveGuides(S.app && S.app.screenGuides, null);
     const gBox = el('div', { class: 'offs' });
-    const offRow = (label, getV, setV, base) => {
-      const i = numInput('off-' + label, getV() || 0, { min: -600, max: 600, step: 5, onchange: v => { setV(v || 0); paintStage(); edited({ preview: false }); paintLayerList(); } });
-      return el('div', { class: 'off-row' }, el('label', { class: 'small', text: label }), i, el('span', { class: 'muted small', text: base != null ? `global ${base} px` : '' }));
+    const offRow = (label, key, field, base) => {
+      const i = numInput('off-' + key + '-' + field, t.guidesOffset[key][field] || 0, { min: -600, max: 600, step: 5, onchange: v => { t.guidesOffset[key][field] = v || 0; paintStage(); edited({ preview: false }); paintLayerList(); } });
+      i.setAttribute('aria-label', label); i.title = 'Global ' + base;
+      return el('div', { class: 'off-row' }, el('label', { class: 'small', for: i.id, text: label }), i);
     };
-    const G = (S.app && S.app.screenGuides) || { curve: {}, zones: [] };
-    for (const [e, text] of EDGES) gBox.append(offRow(`Curve, ${text.toLowerCase()}`, () => t.guidesOffset.curve[e], v => { t.guidesOffset.curve[e] = v; }, (G.curve || {})[e] || 0));
-    for (const z of G.zones || []) gBox.append(offRow(`${z.name || 'Area'} (${z.edge})`, () => t.guidesOffset.zones[z.id], v => { t.guidesOffset.zones[z.id] = v; }, z.size));
+    gBox.append(offRow('Left', 'left', 'size', G.left.size), offRow('Right', 'right', 'size', G.right.size),
+      offRow('Curve position', 'curve', 'offset', G.curve.offset), offRow('Curve left', 'curve', 'left', G.curve.left), offRow('Curve right', 'curve', 'right', G.curve.right));
     u.props.append(
       el('h3', { text: 'Theme settings' }),
       field('Name', nameIn, 'thName'), err,
       el('p', { class: 'muted small', text: widgets().length ? 'Click a layer on the preview or in the list to change it.' : 'Add items from the left: drag them onto the preview, or click them.' }),
       el('div', { class: 'row' }, el('button', { class: 'btn secondary', text: 'Use the Standard layout', title: 'Clock, music and PC stats where they were before themes', onclick: usePreset })),
       el('hr', { class: 'sep' }),
-      el('h3', { text: 'Rounded corners' }),
-      radio('thCornerMode', 'default', !custom, `Default (${dflt} px${dflt ? '' : ', none'})`, () => { t.corners = null; paintProps(); onCorners(); }),
-      radio('thCornerMode', 'custom', custom, 'This theme only', () => { t.corners = dflt; paintProps(); onCorners(); }),
-      el('div', { class: 'field' }, el('label', { for: 'thCorner', text: 'Radius in pixels (0 = square corners)' }), cornerNum),
+      el('div', { class: 'field' }, el('label', { for: 'thCorner', text: 'Corner radius' }), el('div', { class: 'inline-ctl' }, cornerNum, resetBtn)),
+      field('Gap', gapNum, 'thGap'),
       el('hr', { class: 'sep' }),
-      el('h3', { text: 'Screen guides for this theme' }),
-      el('p', { class: 'muted small', text: 'Added to the global guides (Settings > Screen guides). Use a negative number to shrink one. Guides only help you place things; nothing is darkened on the screen.' }),
+      el('div', { class: 'row between' }, el('h3', { text: 'Guides' }),
+        el('button', { class: 'btn ghost small-btn', text: 'Reset', title: 'Back to the global guides', onclick: () => { t.guidesOffset = { left: {}, right: {}, curve: {} }; paintProps(); paintStage(); edited({ preview: false }); } })),
       gBox,
-      el('div', { class: 'row' }, el('button', { class: 'btn ghost', text: 'Reset to the global guides', onclick: () => { t.guidesOffset = { curve: {}, zones: {} }; paintProps(); paintStage(); edited({ preview: false }); } })),
       el('hr', { class: 'sep' }),
       el('h3', { text: 'Hand-over' }),
       field('Fade-in when live starts', range('hoFade', clamp(Number(h.fadeIn ?? 0.8), 0, 3), 0, 3, 0.1, v => { h.fadeIn = Math.round(v * 10) / 10; edited({ preview: false }); }, v => v.toFixed(1) + ' s'), 'hoFade'),
@@ -851,7 +857,6 @@ export function createThemes(ctx) {
       el('div', { class: 'row' },
         el('button', { class: 'btn secondary', text: 'Base settings…', title: 'Choose any clip as the base, with its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) }),
         el('button', { class: 'btn ghost', text: 'Store the base again', title: 'Make the base picture again and send it to the screen', onclick: () => ctx.applyTheme(E.oid, E.info.name) })));
-    void guides;
   }
   async function usePreset() {
     if (widgets().length) {

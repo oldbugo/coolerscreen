@@ -133,24 +133,17 @@
 
       <section id="setThemes" aria-labelledby="hThemes">
         <h3 id="hThemes">Themes</h3>
-        <div class="field"><label for="cornerR">Default corner radius (pixels, 0 = square corners)</label><input type="number" id="cornerR" min="0" max="300" step="1"></div>
-        <p class="muted small">Used for the base of every theme that does not set its own radius (On screen > Theme settings). Changing it means storing those bases again.</p>
-        <div class="src-row"><div class="src-top"><label for="edSnap" class="src-name">Snap items in the editor</label><input type="checkbox" id="edSnap" role="switch"></div>
-          <p class="muted small">Items snap gently to each other, the middle and the guides. Hold Alt to move freely. The editor has its own switch too.</p></div>
+        <div class="field"><label for="cornerR">Corner radius</label><input type="number" id="cornerR" min="0" max="300" step="1"></div>
+        <div class="src-row"><div class="src-top"><label for="edSnap" class="src-name">Snap in the editor</label><input type="checkbox" id="edSnap" role="switch"></div></div>
         <p id="thMsg" class="muted small" role="status"></p>
       </section>
 
       <section id="setGuides" aria-labelledby="hGuides">
         <h3 id="hGuides">Screen guides</h3>
-        <p class="muted small">The screen curves at its edges and part of it may be hidden (for example behind the RAM). Tell CoolerScreen where, and the editor and Base settings show hatched guides there. Nothing is darkened: they only help you place things. While Live is on, the lines are also drawn on the real screen as you change these, so you can line them up.</p>
         <p id="gcLive" class="small"></p>
         <div class="gcal-frame" id="gcFrame"><img id="gcImg" alt=""><div class="guides-layer" id="gcLayer"></div></div>
-        <h4 class="group-label">Where the screen starts to curve</h4>
-        <div id="gcCurve"></div>
-        <h4 class="group-label">Hard-to-see areas, e.g. behind the RAM</h4>
-        <div id="gcZones"></div>
-        <div class="row"><button type="button" id="gcAdd" class="btn secondary">Add a hard-to-see area</button></div>
-        <div class="row"><button type="button" id="gcSave" class="btn primary">Save guides</button><button type="button" id="gcRevert" class="btn ghost">Undo changes</button></div>
+        <div id="gcRows"></div>
+        <div class="row"><button type="button" id="gcSave" class="btn primary">Save</button><button type="button" id="gcRevert" class="btn ghost">Undo</button></div>
         <p id="gcMsg" class="muted small" role="status"></p>
       </section>
 
