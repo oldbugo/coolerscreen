@@ -126,9 +126,32 @@
           <div class="field"><label for="nR">Size (radius)</label><input type="number" id="nR" min="0" max="600"></div>
           <div class="field"><label for="nF">Soft edge</label><input type="number" id="nF" min="0" max="200"></div>
         </div>
-        <p class="muted small">Rounded corners are set per clip, in Tune.</p>
+        <p class="muted small">Rounded corners are set below (a default) and per theme.</p>
         <div class="row"><button type="button" id="nSave" class="btn primary">Save notch</button></div>
         <p id="nMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setThemes" aria-labelledby="hThemes">
+        <h3 id="hThemes">Themes</h3>
+        <div class="field"><label for="cornerR">Default corner radius (pixels, 0 = square corners)</label><input type="number" id="cornerR" min="0" max="300" step="1"></div>
+        <p class="muted small">Used for the base of every theme that does not set its own radius (On screen > Theme settings). Changing it means storing those bases again.</p>
+        <div class="src-row"><div class="src-top"><label for="edSnap" class="src-name">Snap items in the editor</label><input type="checkbox" id="edSnap" role="switch"></div>
+          <p class="muted small">Items snap gently to each other, the middle and the guides. Hold Alt to move freely. The editor has its own switch too.</p></div>
+        <p id="thMsg" class="muted small" role="status"></p>
+      </section>
+
+      <section id="setGuides" aria-labelledby="hGuides">
+        <h3 id="hGuides">Screen guides</h3>
+        <p class="muted small">The screen curves at its edges and part of it may be hidden (for example behind the RAM). Tell CoolerScreen where, and the editor and Base settings show hatched guides there. Nothing is darkened: they only help you place things. While Live is on, the lines are also drawn on the real screen as you change these, so you can line them up.</p>
+        <p id="gcLive" class="small"></p>
+        <div class="gcal-frame" id="gcFrame"><img id="gcImg" alt=""><div class="guides-layer" id="gcLayer"></div></div>
+        <h4 class="group-label">Where the screen starts to curve</h4>
+        <div id="gcCurve"></div>
+        <h4 class="group-label">Hard-to-see areas, e.g. behind the RAM</h4>
+        <div id="gcZones"></div>
+        <div class="row"><button type="button" id="gcAdd" class="btn secondary">Add a hard-to-see area</button></div>
+        <div class="row"><button type="button" id="gcSave" class="btn primary">Save guides</button><button type="button" id="gcRevert" class="btn ghost">Undo changes</button></div>
+        <p id="gcMsg" class="muted small" role="status"></p>
       </section>
 
       <section id="setSources" aria-labelledby="hSources">
@@ -170,8 +193,6 @@
       <section id="setAdvanced" aria-labelledby="hAdv">
         <details>
           <summary><h3 id="hAdv">Advanced</h3></summary>
-          <div class="field"><label for="aMax">Longest clip (seconds)</label><input type="number" id="aMax" min="1" max="120" step="1"></div>
-          <div class="row"><button type="button" id="aSave" class="btn secondary">Save</button></div>
           <p class="muted small">Restoring the original driver lets the vendor app (LOVINGCOOL MONITOR) see the screen again. The screen then switches its display off 30 seconds after any program closes its connection.</p>
           <div class="row"><button type="button" id="aRestore" class="btn danger">Restore original driver…</button></div>
         </details>

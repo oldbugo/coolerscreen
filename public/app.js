@@ -3,7 +3,7 @@ import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, s
 import { openDialog } from './js/dialog.js';
 import './js/titlebar.js';
 import { backend } from './js/backend.js';
-import { createThemes, initApply, runApply } from './js/themes.js';
+import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
 
 // ---------- small helpers ----------
 const $ = id => document.getElementById(id);
@@ -55,6 +55,7 @@ function fmtLeft(sec) {
 }
 
 const call = (command, args) => backend.call(command, args);
+const TRIM_MAX = 30; // the longest loop the loop finder looks for; what really fits is shown by the size meter ("Best that fits")
 
 let toastT;
 function toast(msg, bad = false, ms = 5000) {
@@ -75,6 +76,7 @@ const S = {
   home: 'screen', // the view the open base settings were reached from ('screen' | 'mine')
   currentTheme: null, // the original whose version is in the screen's loop slot
   selTheme: null, // the card selected in My themes
+  baseFor: null, // the theme whose base is being chosen in Base settings
   manualLoop: false, // "Edit loop manually…" panel open
 };
 const DEFAULT_FRAME = { zoom: 1, x: 0.5, y: 0.5 };
@@ -131,7 +133,7 @@ function renderBanners() {
   const os = S.app && S.app.onScreen;
   if (os && os.incomplete && !S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'))) {
     add('danger', `The last upload of "${os.originalName} · ${os.label}" didn't finish, so the screen may show a broken picture.`,
-      os.exists ? el('button', { class: 'btn primary', text: 'Push again', onclick: () => confirmSend(os.versionId) }) : null);
+      os.exists ? el('button', { class: 'btn primary', text: 'Push again', onclick: () => startSend(os.versionId) }) : null);
   }
   if (S.longMissing.length && !S.missingDismissed) {
     const n = S.longMissing.length;
@@ -181,6 +183,8 @@ async function loadApp() {
   S.app = await call('app_state');
   backend.setMediaBase(S.app.mediaBase);
   renderTop(); renderBanners();
+  if (typeof themes !== 'undefined') themes.appChanged();
+  paintDetailGuides();
 }
 async function loadOriginals() {
   const r = await call('originals_list');
@@ -212,7 +216,7 @@ async function loadDetail() {
 
 function initialDraft(d) {
   if (!d) return null;
-  const max = S.app ? S.app.maxSeconds : 10;
+  const max = (d.loops && d.loops.suggestedMax) || (S.app ? S.app.maxSeconds : 10);
   const dr = d.draft || {};
   const dur = d.duration || 0;
   const sf = d.fps || 25, of = S.app ? S.app.deviceFps : 18;
@@ -308,6 +312,7 @@ window.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth -
 window.addEventListener('dragover', e => e.preventDefault());
 window.addEventListener('drop', e => {
   e.preventDefault(); dragDepth = 0; $('dropHint').hidden = true;
+  if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return; // a layer or an item dragged inside the app
   importFiles([...(e.dataTransfer?.files || [])]);
 });
 
@@ -671,7 +676,7 @@ function renderSelBar() {
     cur ? el('span', { class: 'chip ok', text: 'On screen' }) : null,
     el('span', { class: 'small muted', text: themeLabel(o) }),
     el('button', { class: 'btn primary big', text: cur ? 'Apply again' : 'Apply to screen', disabled: o.missing && !o.versionCount, title: 'Make its base, store it on the screen and switch the live layer', onclick: () => applyTheme(o.id, o.name) }),
-    el('button', { class: 'btn secondary', text: 'Base settings…', title: 'Loop, quality and saved versions of the base picture', onclick: () => select(o.id) }),
+    el('button', { class: 'btn secondary', text: 'Base settings…', title: 'Choose the base picture: any clip, its loop, quality and versions', onclick: () => openBase(o.id, { name: o.name }) }),
     el('button', { class: 'btn secondary', text: 'Rename…', onclick: () => renameTheme(o) }),
     el('button', { class: 'btn danger', text: o.missing ? 'Remove…' : 'Delete…', onclick: () => deleteTheme(o) }));
 }
@@ -923,6 +928,8 @@ function buildDetail(d) {
   main.append(el('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
     el('button', { class: 'btn ghost back', text: backLabel(), onclick: showGallery }), el('span', { class: 'muted', 'aria-hidden': 'true', text: '/' }),
     el('span', { class: 'muted small crumb-name', text: d.name })));
+  refs.ctxBar = el('div', { class: 'ctx-bar', role: 'region', 'aria-label': 'Choosing a base' });
+  main.append(refs.ctxBar);
   main.append(el('div', { class: 'detail-head' }, refs.titles, refs.renameBtn,
     el('div', { class: 'menu-wrap' }, refs.versionsBtn, refs.versions), refs.more));
   refs.notices = el('div');
@@ -951,7 +958,7 @@ function buildDetail(d) {
   main.append(refs.tune);
   // bottom action bar
   refs.saveBtn = el('button', { class: 'btn secondary big', text: 'Save as version', onclick: saveVersion });
-  refs.pushBtn = el('button', { class: 'btn primary big', text: 'Push to screen', onclick: pushToScreen });
+  refs.pushBtn = el('button', { class: 'btn primary big', text: 'Use as this theme\'s base', title: 'Nothing is sent to the screen: the theme then offers to store it', onclick: pushToScreen });
   refs.saveReason = el('span', { class: 'reason', role: 'status' });
   refs.saveFix = el('button', { class: 'btn secondary', hidden: true });
   refs.actionBar = el('div', { class: 'action-bar' }, refs.saveReason, refs.saveFix, el('span', { class: 'grow' }), refs.saveBtn, refs.pushBtn);
@@ -979,10 +986,12 @@ function updateDetail(d) {
   else if (d.sourceChanged) refs.notices.append(el('div', { class: 'notice info', text: 'The original file has changed since its versions were made. They can still be sent; new versions use the changed file.' }));
   if (d.assets === 'error') refs.notices.append(el('div', { class: 'notice danger' }, 'CoolerScreen can\'t read this file. It may be damaged or in a format that isn\'t supported.',
     el('details', {}, el('summary', { text: 'Show details' }), el('pre', { text: d.assetsError || '' }))));
+  renderCtxBar();
   renderVersions(d);
   renderLoopCards();
   updateTimeline();
   updateTuneState();
+  paintDetailGuides();
   if (!d.canTune) { refs.saveBtn.disabled = true; refs.pushBtn.disabled = true; }
   updateShowingLabel();
 }
@@ -1155,10 +1164,6 @@ function buildTune(d) {
   refs.zoomVal = el('span', { class: 'num small muted', style: 'min-width:48px' });
   refs.posX = el('input', { type: 'range', id: 'fX', min: '0', max: '1', step: '0.001' });
   refs.posY = el('input', { type: 'range', id: 'fY', min: '0', max: '1', step: '0.001' });
-  refs.cornersOn = el('input', { type: 'checkbox', id: 'cOn' });
-  refs.cornersR = el('input', { type: 'range', id: 'cR', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius (pixels)' });
-  refs.cornersRN = el('input', { type: 'number', id: 'cRN', min: '0', max: '300', step: '1', 'aria-label': 'Corner radius in pixels' });
-  refs.cornersRow = el('div', { class: 'slider-row' }, el('label', { for: 'cR', class: 'small muted', text: 'Corner radius' }), refs.cornersR, refs.cornersRN);
   fg.append(
     el('div', { class: 'slider-row' }, el('label', { for: 'fZoom', class: 'small muted', text: 'Zoom' }), refs.zoom, refs.zoomVal),
     el('div', { class: 'slider-row' }, el('label', { for: 'fX', class: 'small muted', text: 'Left – right' }), refs.posX),
@@ -1167,21 +1172,11 @@ function buildTune(d) {
       el('button', { class: 'btn secondary', text: 'Fill the screen', onclick: () => { dr.frame = { ...DEFAULT_FRAME }; applyGeometry(); draftChanged(); } }),
       el('button', { class: 'btn secondary', text: 'Show the whole picture', onclick: () => { dr.frame = { zoom: Math.round(fitZoom(natural.w, natural.h) * 1000) / 1000, x: 0.5, y: 0.5 }; applyGeometry(); draftChanged(); } }),
       el('span', { class: 'muted small', text: 'Tip: drag the preview to move the picture.' })),
-    el('label', { class: 'check' }, refs.cornersOn, 'Rounded corners'), refs.cornersRow);
+    el('p', { class: 'muted small', text: 'Rounded corners are set per theme (On screen > Theme settings), with a default in Settings.' }));
   refs.zoom.oninput = () => { dr.frame.zoom = Number(refs.zoom.value); applyGeometry(); };
   refs.posX.oninput = () => { dr.frame.x = Number(refs.posX.value); applyGeometry(); };
   refs.posY.oninput = () => { dr.frame.y = Number(refs.posY.value); applyGeometry(); };
   for (const r of [refs.zoom, refs.posX, refs.posY]) r.onchange = draftChanged;
-  const onCorners = (fromNum) => {
-    if (fromNum) refs.cornersR.value = refs.cornersRN.value; else refs.cornersRN.value = refs.cornersR.value;
-    dr.corners = { on: refs.cornersOn.checked, r: clamp(Math.round(Number(refs.cornersR.value) || 0), 0, 300) };
-    refs.cornersRow.hidden = !dr.corners.on;
-    applyCorners();
-  };
-  refs.cornersOn.onchange = () => { onCorners(false); draftChanged(); };
-  refs.cornersR.oninput = () => onCorners(false);
-  refs.cornersRN.oninput = () => onCorners(true);
-  refs.cornersR.onchange = refs.cornersRN.onchange = draftChanged;
   t.append(fg);
   // 3. quality: always Best that fits; the meter says what it chose
   refs.meterState = el('span', { class: 'meter-state' });
@@ -1333,7 +1328,8 @@ function showPreview(vid, force = false) {
   }
   if (!v && S.app) styleNotch(refs.notch, liveMask());
   applyCorners();
-  refs.stage.append(refs.notch, refs.corners);
+  if (!refs.guides) refs.guides = el('div', { class: 'guides-layer' });
+  refs.stage.append(refs.notch, refs.corners, refs.guides);
   if (refs.stage.classList.contains('outline')) refs.notch.classList.add('outline');
   refs.stage.classList.toggle('pannable', !v && !!d.canTune);
   refs.backToTune.hidden = !v || !d.canTune;
@@ -1620,8 +1616,6 @@ function syncTuneControls() {
     refs.detail.value = dr.detail || 0; refs.detailNum.textContent = dr.detail || 'off';
     refs.detailBox.hidden = dr.quality === 'auto';
   }
-  refs.cornersOn.checked = !!dr.corners.on; refs.cornersR.value = refs.cornersRN.value = dr.corners.r;
-  refs.cornersRow.hidden = !dr.corners.on;
   applyCorners();
   updateFrameControls();
 }
@@ -1634,7 +1628,7 @@ function updateLoopInfo() {
   if (document.activeElement !== refs.inStartF) refs.inStartF.value = sf;
   if (document.activeElement !== refs.inLenF) refs.inLenF.value = n;
   refs.inStartF.max = Math.max(0, Math.floor((d.duration - 0.05) * srcFps()));
-  refs.inLenF.max = Math.round(Math.min(S.app.maxSeconds, d.duration - dr.start) * OUT_FPS());
+  refs.inLenF.max = Math.round(Math.min(TRIM_MAX, d.duration - dr.start) * OUT_FPS());
   refs.startInfo.textContent = `at ${fmtT2(dr.start)}${d.fps ? '' : ' (source frame rate unknown, assuming 25)'}`;
   refs.endInfo.textContent = `= ${fmtSecs(dr.length)}, ends at ${fmtT2(dr.start + dr.length)}`;
   const B = effectiveBlend();
@@ -1664,7 +1658,7 @@ function positionTrim() {
   refs.hEnd.style.left = trackPct(end);
   refs.trimRange.style.left = trackPct(dr.start);
   refs.trimRange.style.width = `calc(${trackPct(end)} - ${trackPct(dr.start)})`;
-  for (const [h, v, lo, hi] of [[refs.hStart, dr.start, 0, d.duration - 0.05], [refs.hEnd, end, dr.start + 1 / OUT_FPS(), Math.min(d.duration, dr.start + S.app.maxSeconds)]]) {
+  for (const [h, v, lo, hi] of [[refs.hStart, dr.start, 0, d.duration - 0.05], [refs.hEnd, end, dr.start + 1 / OUT_FPS(), Math.min(d.duration, dr.start + TRIM_MAX)]]) {
     h.setAttribute('aria-valuemin', r3(lo)); h.setAttribute('aria-valuemax', r3(hi)); h.setAttribute('aria-valuenow', r3(v));
     h.setAttribute('aria-valuetext', `${fmtT2(v)}, ${h === refs.hStart ? `source frame ${Math.round(v * srcFps())}` : `${Math.round(dr.length * OUT_FPS())} frames long`}`);
   }
@@ -1676,7 +1670,7 @@ function setTrim(start, length, seekTo, manual = true) {
   const d = S.detail;
   const sf = srcFps(), of = OUT_FPS();
   start = clamp(Math.round(start * sf) / sf, 0, Math.max(0, d.duration - 0.05));
-  const maxN = Math.max(1, Math.floor(Math.min(S.app.maxSeconds, d.duration - start) * of + 1e-6));
+  const maxN = Math.max(1, Math.floor(Math.min(TRIM_MAX, d.duration - start) * of + 1e-6));
   const n = clamp(Math.round(length * of), 1, maxN);
   S.draft.start = r3(start); S.draft.length = r3(n / of);
   if (manual) S.draft.manualLoop = true; // edited by hand: don't replace it with a found loop
@@ -1720,7 +1714,7 @@ function setupTrim() {
       elm.addEventListener('pointermove', move); elm.addEventListener('pointerup', up); elm.addEventListener('pointercancel', up);
     });
   };
-  drag(refs.hStart, t => { const end = S.draft.start + S.draft.length; const s = clamp(t, Math.max(0, end - S.app.maxSeconds), end - 1 / OUT_FPS()); setTrim(s, end - s, s); });
+  drag(refs.hStart, t => { const end = S.draft.start + S.draft.length; const s = clamp(t, Math.max(0, end - TRIM_MAX), end - 1 / OUT_FPS()); setTrim(s, end - s, s); });
   drag(refs.hEnd, t => { const e = clamp(t, S.draft.start + 1 / OUT_FPS(), d.duration); setTrim(S.draft.start, e - S.draft.start, e); });
   drag(refs.trimRange, (t, t0, s0, l0) => { const s = clamp(s0 + t - t0, 0, d.duration - l0); setTrim(s, l0, s); });
   const keys = (h, isEnd) => h.addEventListener('keydown', e => {
@@ -1732,7 +1726,7 @@ function setupTrim() {
     else if (e.key === 'End') { if (isEnd) l = d.duration - s; else { s = s + l - 1 / OUT_FPS(); l = 1 / OUT_FPS(); } }
     else return;
     e.preventDefault();
-    if (!isEnd && l > S.app.maxSeconds) l = S.app.maxSeconds;
+    if (!isEnd && l > TRIM_MAX) l = TRIM_MAX;
     setTrim(s, Math.max(1 / OUT_FPS(), l), s);
     draftChangedSoon();
   });
@@ -1977,7 +1971,8 @@ function updateTuneState() {
   }
   refs.saveBtn.disabled = disabled;
   // Push sends the saved twin of this tuning if there is one, else makes a version first.
-  refs.pushBtn.disabled = dup ? dup.status === 'error' || (dup.status === 'ready' && dup.tooBig) : disabled;
+  refs.pushBtn.disabled = !S.baseFor || (dup ? dup.status === 'error' || (dup.status === 'ready' && dup.tooBig) : disabled);
+  refs.pushBtn.textContent = S.baseFor ? `Use as base of “${S.baseFor.name}”` : 'Use as base';
   refs.saveReason.textContent = dup && !danger ? '' : reason;
   refs.saveReason.className = 'reason' + (danger ? ' danger' : '');
 }
@@ -2027,14 +2022,14 @@ function renderVersions(d) {
   const box = refs.versions;
   box.textContent = '';
   box.append(el('h3', { id: 'hVersions', text: `Versions (${d.versions.length})` }));
-  if (!d.versions.length) { box.append(el('p', { class: 'muted small', text: 'No versions yet. "Push to screen" or "Save as version" keeps one here.' })); return; }
+  if (!d.versions.length) { box.append(el('p', { class: 'muted small', text: 'No versions yet. "Use as base" or "Save as version" keeps one here.' })); return; }
   const ul = el('ul', { class: 'vlist' });
-  const deviceRunning = S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'));
   for (const v of d.versions) {
     const name = v.label || `v${v.n}`;
     const chips = [];
     if (v.onScreen) chips.push(el('span', { class: 'chip ok', text: v.onScreenIncomplete ? 'On screen (upload didn\'t finish)' : 'On screen' }));
-    const sendJob = jobFor(v.id, 'send');
+    const isBase = !!(S.baseFor && S.baseFor.versionId === v.id);
+    if (isBase) chips.push(el('span', { class: 'chip accent', text: `Base of “${S.baseFor.name}”` }));
     const vjob = jobFor(v.id, 'version');
     if (v.status === 'ready') {
       if (v.tooBig) chips.push(el('span', { class: 'chip danger', text: 'Too big for the screen' }));
@@ -2056,12 +2051,9 @@ function renderVersions(d) {
     const btns = el('div', { class: 'vbtns' });
     if (v.status === 'ready') {
       btns.append(el('button', { class: 'btn secondary', text: '▶ Preview', 'aria-label': `Preview ${name}`, onclick: e => { e.stopPropagation(); closeVersions(false); showPreview(v.id); refs.stage.scrollIntoView({ block: 'nearest' }); } }));
-      if (sendJob) btns.append(el('span', { class: 'small muted', text: sendJob.status === 'waiting' ? 'Waiting to send…' : 'Sending…' }));
-      else {
-        const label = v.onScreen ? 'Push again' : deviceRunning ? 'Push (after current update)' : 'Push to screen';
-        btns.append(el('button', { class: 'btn ' + (v.onScreen ? 'secondary' : 'primary'), text: label, disabled: v.tooBig, title: v.tooBig ? 'Too big for the screen. Make a shorter version or choose Best that fits.' : '',
-          onclick: e => { e.stopPropagation(); confirmSend(v.id); } }));
-      }
+      btns.append(el('button', { class: 'btn ' + (isBase ? 'secondary' : 'primary'), text: isBase ? 'This is the base' : 'Use as base', disabled: v.tooBig || isBase || !S.baseFor,
+        title: v.tooBig ? 'Too big for the screen. Make a shorter version or choose Best that fits.' : 'Nothing is sent to the screen: the theme then offers to store it.',
+        onclick: e => { e.stopPropagation(); useAsBase(v.id); } }));
     }
     if (v.status === 'error') btns.append(el('button', { class: 'btn secondary', text: 'Try again', onclick: e => { e.stopPropagation(); retryVersion(v.id); } }));
     btns.append(el('span', { class: 'grow' }));
@@ -2116,32 +2108,6 @@ async function deleteVersion(v) {
 }
 
 // ---------- send ----------
-async function confirmSend(vid) {
-  let d = S.detail;
-  let v = d && d.versions.find(x => x.id === vid);
-  if (!v) {
-    const os = S.app.onScreen;
-    if (os && os.versionId === vid && os.originalId) { await select(os.originalId); d = S.detail; v = d && d.versions.find(x => x.id === vid); }
-    if (!v) return;
-  }
-  const name = `${d.name} · ${v.label || 'v' + v.n}`;
-  const os = S.app.onScreen;
-  const secs = v.result.size / (S.app.uploadRate || 50000) + 15;
-  const curFig = el('figure', {}, os && os.thumbUrl ? el('img', { src: os.thumbUrl, alt: '' }) : el('div', { class: 'noimg' }),
-    el('figcaption', { text: os ? (os.known ? `${os.originalName} · ${os.label}` : 'Unknown (sent with another app)') : 'Unknown' }));
-  const body = el('div', {},
-    el('div', { class: 'swap' },
-      el('figure', {}, el('img', { src: backend.mediaUrl(v.id, 'thumb.jpg', 'v'), alt: '' }), el('figcaption', { text: `${name} (${mb(v.result.size)})` })),
-      el('span', { 'aria-hidden': 'true', text: '→' }), el('span', { class: 'small muted', text: 'replaces' }), curFig),
-    el('p', { text: `This takes ${fmtDuration(secs)}. Keep CoolerScreen open until it finishes.` }),
-    el('p', { class: 'muted small', text: 'The screen restarts to show the new clip. If LOVINGCOOL MONITOR is running, close it first.' }));
-  if (!(await confirmPushDialog(body))) return;
-  await startSend(vid);
-}
-function confirmPushDialog(body) {
-  return openDialog({ title: 'Push to the screen?', body, wide: true,
-    actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Push to screen', value: true, kind: 'primary' }] });
-}
 async function startSend(vid) {
   try {
     const { jobId } = await call('version_send', { versionId: vid });
@@ -2151,44 +2117,71 @@ async function startSend(vid) {
 }
 
 /**
- * "Push to screen": sends the current tuning. If it is already saved as a version, that version is sent; otherwise a
- * version is made first and sent as soon as it is ready (same confirmation as sending a version).
+ * "Use as this theme's base": takes the current tuning. If it is already saved as a version, that version is used; otherwise a
+ * version is made first and used as soon as it is ready. Nothing is sent to the screen from here.
  */
 let pendingPush = null; // { oid, vid }
 async function pushToScreen() {
   const d = S.detail;
+  if (!S.baseFor) return;
   const dup = duplicateOf();
-  if (dup && dup.status === 'ready') return confirmSend(dup.id);
-  const os = S.app.onScreen;
-  const est = S.est.r && S.est.state === 'done' ? S.est.r : null;
-  const secs = (est ? est.bytes : 9e6) / (S.app.uploadRate || 50000) + 25;
-  const curFig = el('figure', {}, os && os.thumbUrl ? el('img', { src: os.thumbUrl, alt: '' }) : el('div', { class: 'noimg' }),
-    el('figcaption', { text: os ? (os.known ? `${os.originalName} · ${os.label}` : 'Unknown (sent with another app)') : 'Unknown' }));
-  const body = el('div', {},
-    el('div', { class: 'swap' },
-      el('figure', {}, d.frameUrl ? el('img', { src: d.frameUrl, alt: '' }) : el('div', { class: 'noimg' }),
-        el('figcaption', { text: `${d.name} · new version${est ? ` (about ${mb(est.bytes)})` : ''}` })),
-      el('span', { 'aria-hidden': 'true', text: '→' }), el('span', { class: 'small muted', text: 'replaces' }), curFig),
-    el('p', { text: `CoolerScreen prepares it, then sends it: ${fmtDuration(secs)} in all. Keep CoolerScreen open until it finishes.` }),
-    el('p', { class: 'muted small', text: 'The screen restarts to show the new clip. If LOVINGCOOL MONITOR is running, close it first.' }));
-  if (!(await confirmPushDialog(body))) return;
+  if (dup && dup.status === 'ready') return useAsBase(dup.id);
   try {
     let vid = dup && dup.id;
     if (!vid) vid = (await call('version_create', { originalId: d.id, settings: JSON.parse(JSON.stringify(S.draft)) })).versionId;
     pendingPush = { oid: d.id, vid };
-    toast('Preparing the version; it is sent as soon as it is ready.');
+    toast('Preparing the version; it becomes the base as soon as it is ready.');
     await loadDetail();
     pollSoon();
   } catch (e) { toast(e.message, true); }
 }
+
+// The theme whose base is being chosen (set when Base settings opens): { oid, name, versionId, guidesOffset, home }
+async function openBase(oid, info) {
+  let v = info;
+  try { v = await call('theme_get', { originalId: oid }); } catch { /* use what the editor had */ }
+  S.baseFor = { oid, name: v.name, versionId: v.baseVersionId, guidesOffset: (v.theme && v.theme.guidesOffset) || null, home: S.view };
+  await select((v.baseOwner && v.baseOwner.originalId) || oid);
+}
+async function useAsBase(vid) {
+  const b = S.baseFor;
+  if (!b) return;
+  try {
+    const v = await call('theme_set_base', { originalId: b.oid, versionId: vid });
+    S.baseFor = { ...b, versionId: v.baseVersionId, guidesOffset: (v.theme && v.theme.guidesOffset) || null };
+    await loadOriginals();
+    const cur = S.currentTheme === b.oid;
+    if (cur) { goHome('screen'); toast(`New base for “${b.name}”. Store it on the screen when you are ready.`, false, 8000); }
+    else { S.selTheme = b.oid; goHome('mine'); toast(`“${b.name}” has a new base. Apply it to put it on the screen.`, false, 8000); }
+  } catch (e) { toast(e.message, true); }
+}
+function renderCtxBar() {
+  const bar = refs.ctxBar;
+  if (!bar) return;
+  bar.textContent = '';
+  const b = S.baseFor;
+  bar.hidden = !b;
+  if (!b) return;
+  const cur = S.detail && S.detail.versions.find(v => v.id === b.versionId);
+  const back = b.home === 'screen' || S.currentTheme === b.oid ? 'On screen' : 'My themes';
+  bar.append(el('p', {}, el('b', { text: `Choosing the base for “${b.name}”. ` }),
+    'Pick any clip on the left, choose or make a version of it, then press ',
+    el('b', { text: 'Use as base' }), '. Nothing is sent to the screen from here' + (cur ? `; the current base is ${S.detail.name} · ${cur.label || 'v' + cur.n}.` : '.')),
+    el('button', { class: 'btn secondary', text: `‹ Back to ${back}`, onclick: showGallery }));
+}
+function paintDetailGuides() {
+  if (!refs.guides || !S.app) return;
+  fillGuides(refs.guides, Ly.effectiveGuides(S.app.screenGuides, S.baseFor && S.baseFor.guidesOffset));
+}
+
 async function checkPendingPush() {
   if (!pendingPush) return;
   const p = pendingPush;
   let v = S.detail && S.detail.id === p.oid ? S.detail.versions.find(x => x.id === p.vid) : null;
   if (!v) { try { v = (await call('original_get', { originalId: p.oid })).versions.find(x => x.id === p.vid); } catch { v = null; } }
   if (!v) { pendingPush = null; return; }
-  if (v.status === 'ready') { pendingPush = null; if (v.tooBig) { toast('The version came out too big for the screen, so it was not sent.', true, 10000); return; } await startSend(v.id); }
-  else if (v.status === 'error') { pendingPush = null; toast('Couldn\'t prepare the version, so nothing was sent: ' + (v.error || ''), true, 12000); }
+  if (v.status === 'ready') { pendingPush = null; if (v.tooBig) { toast('The version came out too big for the screen, so it was not used.', true, 10000); return; } await useAsBase(v.id); }
+  else if (v.status === 'error') { pendingPush = null; toast('Couldn\'t prepare the version: ' + (v.error || ''), true, 12000); }
 }
 
 // ---------- activity strip ----------
@@ -2272,7 +2265,7 @@ function sendErrorAction(j) {
   if (j.failedUsb || j.code === 'failedUsb' || j.code === 'stalled') return el('button', { class: 'btn primary', text: 'Reconnect', onclick: runReconnect });
   if (j.code === 'notFound') return el('button', { class: 'btn primary', text: 'Check again', onclick: checkScreen });
   if (j.code === 'noReply') return el('button', { class: 'btn primary', text: 'Restart screen', onclick: runRestart });
-  return el('button', { class: 'btn primary', text: 'Try again', onclick: () => { S.dismissed.add(j.id); confirmSend(j.versionId); } });
+  return el('button', { class: 'btn primary', text: 'Try again', onclick: () => { S.dismissed.add(j.id); startSend(j.versionId); } });
 }
 
 window.addEventListener('beforeunload', e => {
@@ -2390,6 +2383,7 @@ function openDrawer(section) {
 }
 function closeDrawer() {
   $('drawerBack').hidden = true;
+  calibrate(null); // the guide lines leave the real screen
   draftMask = null; // unsaved notch/corner changes are dropped
   applyLiveMask();
   if (drawerReturn && document.contains(drawerReturn)) drawerReturn.focus();
@@ -2464,7 +2458,8 @@ function fillSettings() {
   $('appVer').textContent = a.appVersion;
   maskToForm(a.mask);
   $('gDir').value = a.galleryDir; $('gMsg').textContent = '';
-  $('aMax').value = a.maxSeconds;
+  $('cornerR').value = a.cornerRadius || 0; $('edSnap').checked = a.editorSnap !== false; $('thMsg').textContent = '';
+  loadGuidesForm();
   $('nMsg').textContent = '';
   const bg = $('notchBg');
   if (S.detail && S.detail.assets === 'ready') { bg.src = backend.mediaUrl(S.detail.id, 'frame.jpg'); bg.hidden = false; } else { bg.removeAttribute('src'); bg.hidden = true; }
@@ -2521,11 +2516,83 @@ $('gSave').onclick = async () => {
   catch (e) { $('gMsg').textContent = e.message; }
 };
 $('gOpen').onclick = () => $('openFolder').click();
-$('aSave').onclick = async () => {
-  try { S.app = await call('settings_update', { maxSeconds: Number($('aMax').value) }); toast('Saved.'); if (S.detail) { detailFor = null; await loadDetail(); } }
-  catch (e) { toast(e.message, true); }
+$('cornerR').onchange = async () => {
+  try { S.app = await call('settings_update', { cornerRadius: Number($('cornerR').value) || 0 }); $('thMsg').textContent = 'Saved. Themes that use the default radius need their base stored again.'; await loadOriginals(); if (typeof themes !== 'undefined') themes.appChanged(); }
+  catch (e) { $('thMsg').textContent = e.message; }
+};
+$('edSnap').onchange = async () => {
+  try { S.app = await call('settings_update', { editor: { snap: $('edSnap').checked } }); $('thMsg').textContent = 'Saved.'; } catch (e) { $('thMsg').textContent = e.message; }
 };
 
+// Settings > Screen guides: where the screen curves and what hides part of it. While Live is on, the lines are drawn on the
+// real screen as you change them (calibration_set), and they go away when the settings close.
+const GC = { g: null, live: false, t: 0 };
+const clone = o => JSON.parse(JSON.stringify(o));
+function loadGuidesForm() {
+  GC.g = clone((S.app && S.app.screenGuides) || { curve: { left: 0, right: 0, top: 0, bottom: 0 }, zones: [] });
+  GC.g.curve = { left: 0, right: 0, top: 0, bottom: 0, ...GC.g.curve };
+  renderGuidesForm();
+}
+// The lines appear on the real screen once the user works in this section, and go when the settings close.
+$('setGuides').addEventListener('focusin', () => calibrate(GC.g));
+function calibrate(g) {
+  clearTimeout(GC.t);
+  const send = () => call('calibration_set', { guides: g }).then(r => { const n = $('gcLive'); if (n && g) n.textContent = r.live ? 'The lines are showing on the real screen now.' : 'Turn Live on (top bar) to see the lines on the real screen too.'; }).catch(() => {});
+  if (g) GC.t = setTimeout(send, 60); else send();
+}
+function guidesChanged() { renderGuidePreview(); calibrate(GC.g); $('gcMsg').textContent = ''; }
+function renderGuidePreview() {
+  const o = S.originals.find(x => x.id === S.currentTheme) || S.originals[0];
+  const img = $('gcImg');
+  if (o && o.frameUrl) { img.src = o.frameUrl; img.hidden = false; } else { img.removeAttribute('src'); img.hidden = true; }
+  fillGuides($('gcLayer'), Ly.effectiveGuides(GC.g, null));
+}
+function renderGuidesForm() {
+  const curve = $('gcCurve'), zones = $('gcZones');
+  curve.textContent = '';
+  const row = (label, value, max, onset, name) => {
+    const num = el('input', { type: 'number', min: 0, max, step: 5, 'aria-label': label });
+    const rng = el('input', { type: 'range', min: 0, max, step: 5, 'aria-label': label });
+    num.value = rng.value = value;
+    rng.oninput = () => { num.value = rng.value; onset(Number(rng.value)); guidesChanged(); };
+    num.oninput = () => { rng.value = num.value; onset(clamp(Number(num.value) || 0, 0, max)); guidesChanged(); };
+    return el('div', { class: 'gcal-row' }, el('span', { class: 'small', text: label }), rng, num);
+  };
+  for (const [e, text, max] of [['left', 'Left edge', 600], ['right', 'Right edge', 600], ['top', 'Top edge', 300], ['bottom', 'Bottom edge', 300]]) {
+    curve.append(row(text, GC.g.curve[e] || 0, max, v => { GC.g.curve[e] = v; }));
+  }
+  curve.append(el('p', { class: 'muted small', text: 'How far in from each edge the curve starts (in screen pixels). 0 = flat.' }));
+  zones.textContent = '';
+  GC.g.zones.forEach((z, i) => {
+    const name = el('input', { type: 'text', value: z.name || '', placeholder: 'Name, e.g. RAM', maxLength: 40, 'aria-label': 'Name of the area', oninput: e => { z.name = e.target.value; guidesChanged(); } });
+    name.value = z.name || '';
+    const edge = el('select', { 'aria-label': 'Which edge', onchange: e => { z.edge = e.target.value; renderGuidesForm(); guidesChanged(); } },
+      [['right', 'Right edge'], ['left', 'Left edge'], ['top', 'Top edge'], ['bottom', 'Bottom edge']].map(([v, t]) => el('option', { value: v, text: t })));
+    edge.value = z.edge || 'right';
+    const max = z.edge === 'top' || z.edge === 'bottom' ? 1080 : 2400;
+    zones.append(el('div', { class: 'gcal-zone' }, el('div', { class: 'grid2' }, el('div', { class: 'field' }, el('label', { text: 'Name' }), name), el('div', { class: 'field' }, el('label', { text: 'Along' }), edge)),
+      row('Size', z.size || 0, Math.min(max, 800), v => { z.size = v; }),
+      el('div', { class: 'row' }, el('button', { class: 'btn danger small-btn', text: 'Remove', onclick: () => { GC.g.zones.splice(i, 1); renderGuidesForm(); guidesChanged(); } }))));
+  });
+  if (!GC.g.zones.length) zones.append(el('p', { class: 'muted small', text: 'None yet. Add one for something that hides part of the screen, like the RAM in front of it.' }));
+  renderGuidePreview();
+}
+$('gcAdd').onclick = () => {
+  const used = new Set(GC.g.zones.map(z => z.id));
+  let n = 1; while (used.has('z' + n)) n++;
+  GC.g.zones.push({ id: 'z' + n, name: n === 1 ? 'RAM' : 'Area ' + n, edge: 'right', size: 150 });
+  renderGuidesForm(); guidesChanged();
+};
+$('gcRevert').onclick = () => { loadGuidesForm(); $('gcMsg').textContent = 'Back to the saved guides.'; };
+$('gcSave').onclick = async () => {
+  try {
+    S.app = await call('settings_update', { screenGuides: GC.g });
+    loadGuidesForm();
+    $('gcMsg').textContent = 'Saved. Every theme now uses these guides (plus its own offsets).';
+    if (typeof themes !== 'undefined') themes.appChanged();
+    paintDetailGuides();
+  } catch (e) { $('gcMsg').textContent = e.message; }
+};
 // ---------- themes: the On screen editor and the Apply dialog ----------
 async function applyTheme(oid, name) {
   await themes.flush(); // unsaved edits first, so the base is made from the saved theme
@@ -2536,7 +2603,7 @@ async function applyTheme(oid, name) {
   else if (r === 'stopped') toast('Stopped. The previous theme is still on the screen.');
   return r;
 }
-const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openDetail: id => select(id), applyTheme });
+const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openBase, applyTheme });
 initApply({ call, backend, plainWait });
 
 // ---------- start ----------

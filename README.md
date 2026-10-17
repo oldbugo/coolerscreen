@@ -80,6 +80,16 @@ top while it runs, if Live is on). The top bar has three pages:
 - **Browse**: sources you turned on (Wallpaper Engine, Lively, the LOVINGCOOL themes...). **Add to My themes** makes an
   independent copy; adding again makes "Name (2)".
 
+In On screen, the **Layers** list works like a paint program: drag to reorder (top of the list = on top), Ctrl-click or
+Shift-click to select several, **Ctrl+G** groups and **Ctrl+Shift+G** ungroups, **Ctrl+]** / **Ctrl+[** move forward or back,
+the eye hides a layer or group, double-click renames, Delete removes. The **Live layer** switch turns every item on or
+off (off = the screen shows only its base). Boxes **snap** gently to each other, the middle and the guides (hold Alt to
+move freely; the Snap box in the bar and Settings > Themes set the default). **Guides** (hatched) show where the screen
+curves and the hard-to-see areas, and a ⚠ marks items inside one. Calibrate them in Settings > **Screen guides**: with
+Live on, the lines are drawn on the real screen while you move the sliders. Each theme can nudge them (Theme settings),
+and has its own rounded-corner radius (Settings > Themes holds the default; 0 = square corners). **Base settings…**
+lets you pick ANY clip as the theme's base (nothing is sent until you press "Store it on the screen").
+
 The right of the top bar shows the screen's status together with the **Live** switch (the same as Settings > Live screen);
 the gear opens **Settings**.
 

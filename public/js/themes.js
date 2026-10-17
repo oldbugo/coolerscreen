@@ -1,15 +1,19 @@
-// 3.0 themes: the "On screen" theme editor and the Apply dialog (docs/v3/theme-format.md).
+// 3.0 themes: the "On screen" theme editor and the Apply dialog (docs/v3/theme-format.md, v1.1 to v1.3).
 //
 // The editor works on one theme: the one whose base is in the screen's loop slot ("current theme"). It edits a working copy
-// of theme.json: boxes on the preview (move, resize), a palette to drop items from, an item list, and a properties panel.
-// Every edit is saved after a short pause (theme_set, which also updates the live screen at once) and the rendered preview is
-// refreshed (theme_preview). Edits to text/picture items that are baked into the stored base show "Base needs re-storing".
-import { styleNotch } from './frame.js';
+// of theme.json: boxes on the preview (move, resize, gentle snapping), a palette to drop items from, a Photoshop-style
+// layer list (drag to reorder, groups, eyes, rename), and a properties panel. Every edit is saved after a short pause
+// (theme_set, which also updates the live screen at once) and the rendered preview is refreshed (theme_preview).
+import { styleNotch, styleCorners, makeCornersOverlay } from './frame.js';
 import { openDialog } from './dialog.js';
+import * as Ly from './layers.js';
 
 const MIN_BOX = 0.02;
+const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const r4 = v => Math.round(v * 10000) / 10000;
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* not remembered */ } };
 
 const KINDS = {
   clock: { name: 'Clock', icon: '◔', w: 0.3, h: 0.34, props: () => ({ format: '24h', seconds: false, date: true, color: '#ffffff' }) },
@@ -25,18 +29,48 @@ const END_CHOICES = [
   ['instant', 'Stop at once', 'The live layer disappears and the stored loop plays.'],
   ['screenOff', 'Fade to black and turn the screen off', 'The screen goes dark when CoolerScreen stops.'],
 ];
+const EDGES = [['left', 'Left edge'], ['right', 'Right edge'], ['top', 'Top edge'], ['bottom', 'Bottom edge']];
+
+const SVG_EYE = on => `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>${on ? '<circle cx="12" cy="12" r="3" fill="currentColor"/>' : '<path stroke="currentColor" stroke-width="2" d="M4 20 20 4"/>'}</svg>`;
+const SVG_CARET = open => `<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="${open ? 'M5 8l7 8 7-8z' : 'M8 5l8 7-8 7z'}"/></svg>`;
+const SVG_FOLDER = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+
+/** Hatched, tinted overlays for the screen guides inside a `position: relative` box (never drawn on the real screen). */
+export function fillGuides(layer, g, { labels = true } = {}) {
+  layer.textContent = '';
+  if (!g) return;
+  const pct = v => v * 100 + '%';
+  const add = (cls, r, text) => {
+    const d = document.createElement('div');
+    d.className = 'gz ' + cls;
+    Object.assign(d.style, { left: pct(r.x0), top: pct(r.y0), width: pct(r.x1 - r.x0), height: pct(r.y1 - r.y0) });
+    if (labels && text) { const s = document.createElement('span'); s.className = 'gl'; s.textContent = text; d.append(s); }
+    layer.append(d);
+  };
+  for (const r of Ly.curveRects(g)) add('curve ' + r.edge, r, 'curve');
+  for (const r of Ly.zoneRects(g)) add('zone', r, r.name || 'hard to see');
+}
+export { Ly as layers };
 
 export function createThemes(ctx) {
   const { el, $, call, backend, S, toast } = ctx;
   const root = $('screenView');
   const E = {
-    oid: null, info: null, theme: null, sel: null, view: 'live', rev: 0, saved: 0, saving: false, saveErr: null,
-    liveUrl: null, baseUrl: null, baseSig: null, pvSeq: 0, previewOk: true, ui: null, saveT: 0, pvT: 0, loadSeq: 0,
+    oid: null, info: null, theme: null, selIds: [], selGroup: null, anchor: null, rev: 0, saved: 0, saving: false, saveErr: null,
+    liveUrl: null, baseUrl: null, baseSig: null, pvSeq: 0, previewOk: true, ui: null, saveT: 0, pvT: 0, loadSeq: 0, dragging: false,
+    snap: true, guides: lsGet('cs.guides') !== '0', dragIds: [],
   };
   const currentId = () => S.currentTheme || null;
+  const widgets = () => E.theme.widgets;
+  const byId = id => widgets().find(w => w.id === id);
+  const groupById = id => (E.theme.groups || []).find(g => g.id === id);
+  const sel = () => E.selIds.map(byId).filter(Boolean);
+  const radius = () => (E.theme.corners ?? (S.app && S.app.cornerRadius) ?? 0);
+  const guidesNow = () => Ly.effectiveGuides(S.app && S.app.screenGuides, E.theme.guidesOffset);
+  const hiddenNow = w => !!w.hidden || !!(w.group && (groupById(w.group) || {}).hidden);
+  const shownOnStage = w => !hiddenNow(w) && (E.theme.liveLayer !== false || w.onBase);
 
   // ------------------------------------------------------------------ entering and leaving
-  /** Show the editor for the current theme (called when the view opens and when the library changes). */
   async function enter() {
     if (S.rev < 0) return; // the library has not been read yet
     const oid = currentId();
@@ -45,11 +79,8 @@ export function createThemes(ctx) {
       renderEmpty(S.originals.length ? 'Nothing has been applied to the screen yet.' : 'You have no themes yet.');
       return;
     }
-    if (E.oid !== oid || !E.ui) {
-      await open(oid);
-    } else {
-      await syncFromServer();
-    }
+    if (E.oid !== oid || !E.ui) await open(oid);
+    else await syncFromServer();
   }
 
   async function open(oid) {
@@ -57,29 +88,42 @@ export function createThemes(ctx) {
     let info;
     try { info = await call('theme_get', { originalId: oid }); } catch (e) { if (seq === E.loadSeq) renderEmpty(e.message); return; }
     if (seq !== E.loadSeq) return;
-    Object.assign(E, { oid, info, theme: info.theme, sel: null, view: E.oid === oid ? E.view : 'live', rev: 0, saved: 0, saveErr: null, liveUrl: null, baseUrl: null, baseSig: null, previewOk: true });
+    Object.assign(E, { oid, info, theme: fixTheme(info.theme), selIds: [], selGroup: null, anchor: null, rev: 0, saved: 0, saveErr: null, liveUrl: null, baseUrl: null, baseSig: null, previewOk: true });
+    E.snap = !S.app || S.app.editorSnap !== false;
     buildEditor();
     paintAll();
     schedulePreview(0);
   }
+  function fixTheme(t) {
+    t.groups = t.groups || [];
+    t.guidesOffset = t.guidesOffset || { curve: {}, zones: {} };
+    t.guidesOffset.curve = t.guidesOffset.curve || {}; t.guidesOffset.zones = t.guidesOffset.zones || {};
+    if (t.liveLayer === undefined) t.liveLayer = true;
+    return t;
+  }
 
-  /** The library changed (a base was stored, a theme renamed...): refresh what the server knows, keep unsaved edits. */
   async function syncFromServer() {
     let info;
     try { info = await call('theme_get', { originalId: E.oid }); } catch { return; }
     const dirty = E.rev !== E.saved || E.saving || E.dragging;
     const baseChanged = info.baseVersionId !== E.info.baseVersionId;
-    const themeChanged = JSON.stringify(info.theme) !== JSON.stringify(E.theme);
+    const theirs = fixTheme(info.theme);
+    const themeChanged = JSON.stringify(theirs) !== JSON.stringify(E.theme);
     E.info = info;
-    if (!dirty && themeChanged) E.theme = info.theme;
+    if (!dirty && themeChanged) E.theme = theirs;
     if (E.ui) {
       paintTitle(); paintBanner();
-      if (!dirty && themeChanged) { paintItems(); paintStage(); paintProps(); } // (an open text field is never rebuilt without a reason)
+      if (!dirty && themeChanged) { paintLayerList(); paintStage(); paintProps(); }
     }
     if (baseChanged || (!dirty && themeChanged)) { if (baseChanged) E.baseSig = null; schedulePreview(0); }
   }
 
-  // ------------------------------------------------------------------ empty state
+  /** The app settings changed (guides, default radius): redraw what depends on them. */
+  function appChanged() {
+    if (!E.ui) return;
+    E.snap = E.snap; paintStage(); if (!E.selIds.length) paintProps();
+  }
+
   function renderEmpty(text) {
     root.textContent = '';
     root.append(el('div', { class: 'ed-empty' },
@@ -94,7 +138,6 @@ export function createThemes(ctx) {
   function buildEditor() {
     root.textContent = '';
     const u = (E.ui = {});
-    // left: palette + item list
     u.palette = el('ul', { class: 'palette', 'aria-label': 'Items you can add' });
     for (const [type, k] of Object.entries(KINDS)) {
       const b = el('button', { type: 'button', class: 'pal', draggable: !k.soon, disabled: !!k.soon, title: k.soon ? 'Coming later' : `Add ${k.name.toLowerCase()}: click, or drag it onto the preview`,
@@ -103,26 +146,38 @@ export function createThemes(ctx) {
       b.addEventListener('dragstart', ev => { ev.dataTransfer.setData('text/x-cs-widget', type); ev.dataTransfer.effectAllowed = 'copy'; });
       u.palette.append(el('li', {}, b));
     }
-    u.items = el('ul', { class: 'items', role: 'listbox', 'aria-label': 'Items in this theme' });
-    u.itemsNone = el('p', { class: 'muted small', text: 'Nothing yet: this theme shows its base only.' });
+    u.layers = el('div', { class: 'layers', role: 'listbox', 'aria-multiselectable': 'true', 'aria-label': 'Layers, top of the picture first' });
+    u.layersNone = el('p', { class: 'muted small', text: 'Nothing yet: this theme shows its base only.' });
+    u.btnGroup = el('button', { class: 'iconbtn', title: 'Group the selected layers (Ctrl+G)', 'aria-label': 'Group the selected layers', text: '▣', onclick: () => doGroup() });
+    u.btnUngroup = el('button', { class: 'iconbtn', title: 'Ungroup (Ctrl+Shift+G)', 'aria-label': 'Ungroup', text: '▢', onclick: () => doUngroup() });
+    u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', text: '✕', onclick: () => doDelete() });
     const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' },
-      el('h3', { text: 'Add' }), u.palette, el('h3', { text: 'In this theme' }), u.items, u.itemsNone);
+      el('h3', { text: 'Add' }), u.palette,
+      el('div', { class: 'layers-head' }, el('h3', { text: 'Layers' }), el('span', { class: 'grow' }), u.btnGroup, u.btnUngroup, u.btnDelete),
+      u.layers, u.layersNone);
     // centre
     u.title = el('h1', { id: 'screenTitle' });
     u.sub = el('span', { class: 'muted small' });
     u.saveState = el('span', { class: 'save-state', role: 'status', 'aria-live': 'polite' });
-    u.views = el('div', { class: 'seg', role: 'group', 'aria-label': 'What the preview shows' });
-    for (const [v, t] of [['live', 'With live layer'], ['base', 'Base only'], ['hand', 'Hand-over']]) {
-      u.views.append(el('button', { type: 'button', 'data-v': v, text: t, 'aria-pressed': 'false', onclick: () => setView(v) }));
-    }
     u.banner = el('div');
+    // the one "Live layer" switch, snapping and guides
+    u.layerSw = el('input', { type: 'checkbox', id: 'liveLayerSw', role: 'switch', onchange: e => { E.theme.liveLayer = e.target.checked; E.baseSig = null; paintBar(); paintStage(); edited(); } });
+    u.snapSw = el('input', { type: 'checkbox', id: 'snapSw', onchange: e => { E.snap = e.target.checked; } });
+    u.guidesSw = el('input', { type: 'checkbox', id: 'guidesSw', onchange: e => { E.guides = e.target.checked; lsSet('cs.guides', E.guides ? '1' : '0'); paintStage(); } });
+    u.bar = el('div', { class: 'ed-bar' },
+      el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the clock, music and other items are drawn on the screen. Off: the screen shows only its base.' }, u.layerSw, el('span', { class: 'switch-track', 'aria-hidden': 'true' }, el('span', { class: 'switch-knob' })), el('span', { text: 'Live layer' })),
+      el('label', { class: 'check', title: 'Items snap gently to each other, the middle and the guides. Hold Alt to move freely.' }, u.snapSw, 'Snap'),
+      el('label', { class: 'check', title: 'Show where the screen curves and the hard-to-see areas (calibrate them in Settings > Screen guides)' }, u.guidesSw, 'Guides'));
     u.stage = el('div', { class: 'stage', role: 'application', 'aria-label': 'Preview of the screen. Drag items to move them; use the handles to resize.' });
     u.imgBase = el('img', { class: 'layer', alt: '', draggable: false });
     u.imgLive = el('img', { class: 'layer', alt: '', draggable: false });
+    u.corners = makeCornersOverlay();
+    u.gz = el('div', { class: 'guides-layer' });
     u.notch = el('div', { class: 'notch', hidden: true, title: 'The camera hole. Keep items clear of it.' });
     u.note = el('div', { class: 'stage-note', hidden: true });
     u.boxes = el('div', { class: 'boxes' });
-    u.stage.append(u.imgBase, u.imgLive, u.notch, u.boxes, u.note);
+    u.snaps = el('div', { class: 'snaps' });
+    u.stage.append(u.imgBase, u.imgLive, u.corners, u.gz, u.notch, u.boxes, u.snaps, u.note);
     u.stage.addEventListener('dragover', ev => { if ([...ev.dataTransfer.types].includes('text/x-cs-widget')) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; u.stage.classList.add('drop-ok'); } });
     u.stage.addEventListener('dragleave', () => u.stage.classList.remove('drop-ok'));
     u.stage.addEventListener('drop', ev => {
@@ -133,36 +188,24 @@ export function createThemes(ctx) {
       const r = u.stage.getBoundingClientRect();
       addWidget(t, (ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height);
     });
-    u.stage.addEventListener('pointerdown', ev => { if (ev.target === u.stage || ev.target === u.imgBase || ev.target === u.imgLive) select(null); });
+    u.stage.addEventListener('pointerdown', ev => { if (ev.target === u.stage || ev.target.closest('.guides-layer') || ev.target === u.imgBase || ev.target === u.imgLive) setSel([]); });
     u.stageWrap = el('div', { class: 'stage-wrap' }, u.stage);
-    u.hand = el('div', { class: 'hand-panel', hidden: true });
-    u.baseBtn = el('button', { class: 'btn ghost', text: 'Base settings…', title: 'Loop, quality and saved versions of the base picture', onclick: () => ctx.openDetail(E.oid) });
+    u.baseBtn = el('button', { class: 'btn ghost', text: 'Base settings…', title: 'Choose the base picture: any clip, its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) });
     const center = el('section', { class: 'ed-center', 'aria-labelledby': 'screenTitle' },
       el('div', { class: 'ed-title' }, u.title, u.sub, el('span', { class: 'grow' }), u.saveState, u.baseBtn),
-      u.banner,
-      el('div', { class: 'ed-bar' }, u.views),
-      u.stageWrap, u.hand);
+      u.banner, u.bar, u.stageWrap);
     u.props = el('aside', { class: 'ed-right', 'aria-label': 'Properties' });
     root.append(el('div', { class: 'ed' }, left, center, u.props));
-    root.onkeydown = onKeys;
-  }
-
-  function setView(v) {
-    E.view = v;
-    if (E.sel && v === 'base' && !byId(E.sel)?.onBase) E.sel = null;
-    paintAll();
-    if (v === 'base' || v === 'hand') schedulePreview(0);
   }
 
   function paintAll() {
     if (!E.ui) return;
-    paintTitle(); paintBanner(); paintViews(); paintItems(); paintStage(); paintProps(); paintSave();
+    paintTitle(); paintBanner(); paintBar(); paintLayerList(); paintStage(); paintProps(); paintSave();
   }
-
   function paintTitle() {
     const u = E.ui;
     u.title.textContent = E.info.name;
-    u.sub.textContent = 'is on the screen' + (S.app?.live?.settings?.inApp ? ' · live is on' : '');
+    u.sub.textContent = 'is on the screen' + (S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? ' · live layer is off' : ' · live is on') : '');
   }
   function paintSave() {
     const u = E.ui;
@@ -170,34 +213,38 @@ export function createThemes(ctx) {
     u.saveState.title = E.saveErr || '';
     u.saveState.style.color = E.saveErr ? 'var(--danger)' : '';
   }
-  function paintViews() {
-    for (const b of E.ui.views.children) b.setAttribute('aria-pressed', String(b.dataset.v === E.view));
-    E.ui.stageWrap.hidden = E.view === 'hand';
-    E.ui.hand.hidden = E.view !== 'hand';
-    if (E.view === 'hand') paintHand();
+  function paintBar() {
+    const u = E.ui;
+    u.layerSw.checked = E.theme.liveLayer !== false;
+    u.snapSw.checked = E.snap;
+    u.guidesSw.checked = E.guides;
   }
   function paintBanner() {
     const u = E.ui;
     u.banner.textContent = '';
-    if (E.info.baseStale) {
+    const run = () => ctx.applyTheme(E.oid, E.info.name);
+    if (E.info.baseUnstored) {
+      const o = E.info.baseOwner;
       u.banner.append(el('div', { class: 'base-banner', role: 'status' },
-        el('p', { text: 'Base needs re-storing: the text or pictures that are part of the base changed since it was stored on the screen. The live layer already shows the change.' }),
-        el('button', { class: 'btn primary', text: 'Store the base again', onclick: () => ctx.applyTheme(E.oid, E.info.name) })));
+        el('p', { text: `Base changed — store it on the screen. The new base${o ? ` (from “${o.name}”)` : ''} is already used by the live preview; the screen still holds the old one.` }),
+        el('button', { class: 'btn primary', text: 'Store it on the screen', onclick: run })));
+    } else if (E.info.baseStale) {
+      u.banner.append(el('div', { class: 'base-banner', role: 'status' },
+        el('p', { text: 'Base needs re-storing: the text, pictures or rounded corners that are part of the base changed since it was stored on the screen. The live layer already shows the change.' }),
+        el('button', { class: 'btn primary', text: 'Store the base again', onclick: run })));
     }
   }
 
   // ------------------------------------------------------------------ the working theme
-  const widgets = () => E.theme.widgets;
-  const byId = id => widgets().find(w => w.id === id);
-  const label = w => {
+  const nameOf = w => {
     const k = KINDS[w.type];
+    if (w.props && w.props.name) return w.props.name;
     if (!k) return w.type;
     if (w.type === 'text') { const t = (w.props.text || '').replace(/\s+/g, ' ').trim(); return t ? `Text: “${t.slice(0, 22)}${t.length > 22 ? '…' : ''}”` : 'Text'; }
     if (w.type === 'image') return w.props.file ? `Picture: ${w.props.file.split('/').pop()}` : 'Picture (none chosen)';
     return k.name;
   };
 
-  /** Something about the theme changed: save soon, refresh the rendered preview soon. */
   function edited({ preview = true } = {}) {
     E.rev++;
     clearTimeout(E.saveT);
@@ -217,8 +264,8 @@ export function createThemes(ctx) {
       if (E.oid !== oid) return;
       E.info = { ...E.info, ...r, name: E.info.name };
       E.saved = rev;
-      // nothing newer: take the server's cleaned copy (only when it differs, so a drag in progress is not rebuilt)
-      if (E.rev === rev && !E.dragging && JSON.stringify(r.theme) !== JSON.stringify(E.theme)) { E.theme = r.theme; E.repaint = true; }
+      const theirs = fixTheme(r.theme);
+      if (E.rev === rev && !E.dragging && JSON.stringify(theirs) !== JSON.stringify(E.theme)) { E.theme = theirs; E.repaint = true; }
     } catch (e) {
       E.saveErr = e.message;
       toast(`The theme could not be saved: ${e.message}`, true);
@@ -227,36 +274,34 @@ export function createThemes(ctx) {
     if (E.ui && E.oid === oid) {
       paintSave(); paintBanner();
       if (E.rev !== E.saved && !E.saveErr) E.saveT = setTimeout(save, 100);
-      else if (E.repaint && !E.dragging) { E.repaint = false; paintItems(); paintStage(); paintProps(); }
+      else if (E.repaint && !E.dragging) { E.repaint = false; paintLayerList(); paintStage(); paintProps(); }
     }
   }
 
   // ------------------------------------------------------------------ preview images
-  const baseSigOf = () => JSON.stringify(widgets().filter(w => w.onBase));
-  function schedulePreview(ms) {
-    clearTimeout(E.pvT);
-    E.pvT = setTimeout(refreshPreview, ms);
-  }
+  const baseSigOf = () => JSON.stringify([widgets().filter(w => w.onBase && !hiddenNow(w)), radius()]);
+  function schedulePreview(ms) { clearTimeout(E.pvT); E.pvT = setTimeout(refreshPreview, ms); }
   async function refreshPreview() {
     if (!E.ui || !E.oid) return;
     const seq = ++E.pvSeq, oid = E.oid;
     const theme = JSON.parse(JSON.stringify(E.theme));
-    const live = call('theme_preview', { originalId: oid, theme, withLive: true, w: 1200, h: 540 });
+    const wantLive = E.theme.liveLayer !== false;
+    const live = wantLive ? call('theme_preview', { originalId: oid, theme, withLive: true, w: 1200, h: 540 }) : Promise.resolve(null);
     const sig = baseSigOf();
     const needBase = E.baseSig !== sig || !E.baseUrl;
-    const base = needBase ? call('theme_preview', { originalId: oid, theme, withLive: false, w: 1200, h: 540 }) : null;
-    const [l, b] = await Promise.allSettled([live, base || Promise.resolve(null)]);
+    const base = needBase ? call('theme_preview', { originalId: oid, theme, withLive: false, w: 1200, h: 540 }) : Promise.resolve(null);
+    const [l, b] = await Promise.allSettled([live, base]);
     if (seq !== E.pvSeq || E.oid !== oid || !E.ui) return;
-    E.previewOk = l.status === 'fulfilled' || (b && b.status === 'fulfilled');
-    E.liveUrl = l.status === 'fulfilled' ? l.value.url : null;
-    if (needBase) { E.baseUrl = b && b.status === 'fulfilled' ? b.value.url : null; E.baseSig = sig; }
+    E.previewOk = (l.status === 'fulfilled' && (!wantLive || l.value)) || (b.status === 'fulfilled' && !!b.value) || (!needBase && b.status === 'fulfilled');
+    E.liveUrl = l.status === 'fulfilled' && l.value ? l.value.url : null;
+    if (needBase) { E.baseUrl = b.status === 'fulfilled' && b.value ? b.value.url : null; E.baseSig = sig; }
     await Promise.all([setImg(E.ui.imgLive, E.liveUrl), setImg(E.ui.imgBase, E.baseUrl || fallbackFrame())]);
-    paintLayers(); if (E.view === 'hand') paintHand();
+    paintImages();
   }
   const fallbackFrame = () => (S.originals.find(o => o.id === E.oid) || {}).frameUrl || null;
   function setImg(img, url) {
     return new Promise(res => {
-      if (!url) { img.removeAttribute('src'); img.hidden = true; return res(); }
+      if (!url) { img.removeAttribute('src'); delete img.dataset.url; img.hidden = true; return res(); }
       if (img.dataset.url === url) { img.hidden = false; return res(); }
       const pre = new Image();
       pre.onload = pre.onerror = () => { img.src = url; img.dataset.url = url; img.hidden = false; res(); };
@@ -264,94 +309,164 @@ export function createThemes(ctx) {
     });
   }
 
-  // ------------------------------------------------------------------ the stage: boxes
+  // ------------------------------------------------------------------ the stage: boxes, guides, corners
   function paintStage() {
     const u = E.ui;
     if (!u) return;
     styleNotch(u.notch, S.app && S.app.mask);
+    styleCorners(u.corners, { on: radius() > 0, r: radius() }, S.app && S.app.mask);
+    fillGuides(u.gz, E.guides ? guidesNow() : null);
     u.boxes.textContent = '';
-    const list = widgets().filter(w => (E.view === 'live' ? true : w.onBase));
-    for (const w of list) u.boxes.append(makeBox(w));
-    paintLayers();
+    const g = guidesNow();
+    for (const w of widgets()) if (shownOnStage(w)) u.boxes.append(makeBox(w, g));
+    paintImages();
   }
-  /** The picture layers and the note on the stage (the boxes are left alone, so a drag in progress is not interrupted). */
-  function paintLayers() {
+  function paintImages() {
     const u = E.ui;
     if (!u) return;
-    u.imgLive.style.display = E.view === 'live' && E.liveUrl ? '' : 'none';
+    const on = E.theme.liveLayer !== false;
+    u.imgLive.style.display = on && E.liveUrl ? '' : 'none';
     u.imgBase.style.display = '';
-    const list = widgets().filter(w => (E.view === 'live' ? true : w.onBase));
+    const any = widgets().some(shownOnStage);
     if (!E.previewOk) { u.note.hidden = false; u.note.textContent = 'The rendered preview is not available yet; showing the base picture and the item boxes.'; }
-    else if (E.view === 'base' && !list.length) { u.note.hidden = false; u.note.textContent = 'The base is the picture stored on the screen. Text and pictures marked "also on the stored base" appear here.'; }
+    else if (!on) { u.note.hidden = false; u.note.textContent = 'Live layer is off: the screen shows only its base' + (any ? ' (and the text and pictures marked as part of it).' : '.'); }
     else u.note.hidden = true;
   }
   function placeBox(b, w) {
     b.style.left = w.x * 100 + '%'; b.style.top = w.y * 100 + '%'; b.style.width = w.w * 100 + '%'; b.style.height = w.h * 100 + '%';
     b.classList.toggle('top', w.y < 0.06);
   }
-  function makeBox(w) {
-    const b = el('div', { class: 'wbox' + (E.sel === w.id ? ' sel' : ''), tabindex: '0', role: 'button', 'data-id': w.id, 'aria-label': `${label(w)}. Arrow keys move it, Delete removes it.` },
-      el('span', { class: 'wlabel', text: label(w) }), el('span', { class: 'wname', text: E.sel === w.id ? '' : label(w) }));
+  function makeBox(w, g) {
+    const on = E.selIds.includes(w.id), single = on && E.selIds.length === 1;
+    const hit = Ly.zoneHit(w, g);
+    const b = el('div', { class: 'wbox' + (on ? ' sel' : '') + (single ? ' one' : '') + (hit && E.guides ? ' warn' : ''), tabindex: '0', role: 'button', 'data-id': w.id, 'aria-label': `${nameOf(w)}${hit ? `. Overlaps ${hit}` : ''}. Arrow keys move it, Delete removes it.` },
+      el('span', { class: 'wlabel', text: nameOf(w) }), el('span', { class: 'wname', text: on ? '' : nameOf(w) }),
+      hit && E.guides ? el('span', { class: 'wwarn', title: `Overlaps ${hit}: hard to see there`, text: '⚠' }) : null);
     placeBox(b, w);
     for (const h of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) b.append(el('span', { class: 'wh', 'data-h': h }));
     b.addEventListener('pointerdown', ev => {
       if (ev.button !== 0) return;
       const h = ev.target.dataset && ev.target.dataset.h;
-      select(w.id, { keepFocus: true });
-      startDrag(ev, w, b, h || 'move');
+      if (ev.ctrlKey || ev.metaKey || ev.shiftKey) setSel(E.selIds.includes(w.id) ? E.selIds.filter(i => i !== w.id) : [...E.selIds, w.id], { keepFocus: true });
+      else if (!E.selIds.includes(w.id)) setSel([w.id], { keepFocus: true });
+      startDrag(ev, w, h || 'move');
     });
-    b.addEventListener('focus', () => { if (E.sel !== w.id) select(w.id, { keepFocus: true }); });
+    b.addEventListener('focus', () => { if (!E.selIds.includes(w.id)) setSel([w.id], { keepFocus: true }); });
     return b;
   }
-  function startDrag(ev, w, box, mode) {
+  const boxEl = id => E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(id)}"]`);
+
+  function drawSnapLines(vx, hy) {
+    const s = E.ui.snaps;
+    s.textContent = '';
+    for (const x of vx) s.append(el('div', { class: 'snapline v', style: `left:${x * 100}%` }));
+    for (const y of hy) s.append(el('div', { class: 'snapline h', style: `top:${y * 100}%` }));
+  }
+
+  function startDrag(ev, w, mode) {
     ev.preventDefault();
     const sr = E.ui.stage.getBoundingClientRect();
-    const o = { x: w.x, y: w.y, w: w.w, h: w.h }, sx = ev.clientX, sy = ev.clientY;
-    const live = E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(w.id)}"]`) || box;
-    live.focus({ preventScroll: true });
-    try { live.setPointerCapture(ev.pointerId); } catch { /* the pointer is gone */ }
+    const moving = mode === 'move' ? (E.selIds.includes(w.id) ? sel() : [w]) : [w];
+    const orig = moving.map(m => ({ m, x: m.x, y: m.y, w: m.w, h: m.h }));
+    const ids = new Set(moving.map(m => m.id));
+    const others = widgets().filter(o => !ids.has(o.id) && shownOnStage(o));
+    const lines = Ly.snapLines(others, guidesNow());
+    const thrX = SNAP_PX / sr.width, thrY = SNAP_PX / sr.height;
+    const ux0 = Math.min(...orig.map(o => o.x)), uy0 = Math.min(...orig.map(o => o.y));
+    const ux1 = Math.max(...orig.map(o => o.x + o.w)), uy1 = Math.max(...orig.map(o => o.y + o.h));
+    const sx = ev.clientX, sy = ev.clientY;
+    const live = boxEl(w.id);
+    if (live) { live.focus({ preventScroll: true }); try { live.setPointerCapture(ev.pointerId); } catch { /* gone */ } }
+    const target = live || E.ui.stage;
     let moved = false;
     E.dragging = true;
     const move = e => {
       const dx = (e.clientX - sx) / sr.width, dy = (e.clientY - sy) / sr.height;
-      let { x, y, w: ww, h: hh } = o;
-      if (mode === 'move') { x = clamp(o.x + dx, 0, 1 - o.w); y = clamp(o.y + dy, 0, 1 - o.h); }
-      else {
+      const snapOn = E.snap && !e.altKey;
+      let vx = [], hy = [];
+      if (mode === 'move') {
+        let ddx = clamp(dx, -ux0, 1 - ux1), ddy = clamp(dy, -uy0, 1 - uy1);
+        if (snapOn) {
+          const s = Ly.snapMove({ x: ux0 + ddx, y: uy0 + ddy, w: ux1 - ux0, h: uy1 - uy0 }, lines, thrX, thrY);
+          ddx = clamp(s.x - ux0, -ux0, 1 - ux1); ddy = clamp(s.y - uy0, -uy0, 1 - uy1); vx = s.vx; hy = s.hy;
+        }
+        for (const o of orig) { o.m.x = r4(o.x + ddx); o.m.y = r4(o.y + ddy); const b = boxEl(o.m.id); if (b) placeBox(b, o.m); }
+      } else {
+        const o = orig[0];
+        let x = o.x, y = o.y, ww = o.w, hh = o.h;
         if (mode.includes('e')) ww = clamp(o.w + dx, MIN_BOX, 1 - o.x);
         if (mode.includes('s')) hh = clamp(o.h + dy, MIN_BOX, 1 - o.y);
         if (mode.includes('w')) { const nx = clamp(o.x + dx, 0, o.x + o.w - MIN_BOX); ww = o.x + o.w - nx; x = nx; }
         if (mode.includes('n')) { const ny = clamp(o.y + dy, 0, o.y + o.h - MIN_BOX); hh = o.y + o.h - ny; y = ny; }
+        if (snapOn) {
+          const s = Ly.snapResize({ x, y, w: ww, h: hh }, mode, lines, others, thrX, thrY);
+          x = clamp(s.x, 0, 1); y = clamp(s.y, 0, 1); ww = clamp(s.w, MIN_BOX, 1 - x); hh = clamp(s.h, MIN_BOX, 1 - y); vx = s.vx; hy = s.hy;
+        }
+        Object.assign(o.m, { x: r4(x), y: r4(y), w: r4(ww), h: r4(hh) });
+        const b = boxEl(o.m.id); if (b) placeBox(b, o.m);
       }
       moved = true;
-      Object.assign(w, { x: r4(x), y: r4(y), w: r4(ww), h: r4(hh) });
-      placeBox(live, w);
-      syncPosFields(w);
+      drawSnapLines(vx, hy);
+      if (moving.length === 1) syncPosFields(moving[0]);
     };
     const up = () => {
-      live.removeEventListener('pointermove', move);
-      live.removeEventListener('pointerup', up);
-      live.removeEventListener('pointercancel', up);
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', up);
+      target.removeEventListener('pointercancel', up);
       E.dragging = false;
-      if (moved) edited();
+      drawSnapLines([], []);
+      if (moved) { refreshWarnings(); edited(); }
     };
-    live.addEventListener('pointermove', move);
-    live.addEventListener('pointerup', up);
-    live.addEventListener('pointercancel', up);
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', up);
+    target.addEventListener('pointercancel', up);
   }
+  /** Badges for boxes that overlap a hard-to-see area (kept current while items move). */
+  function refreshWarnings() {
+    const g = guidesNow();
+    for (const w of widgets()) {
+      const b = E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(w.id)}"]`);
+      if (!b) continue;
+      const hit = E.guides ? Ly.zoneHit(w, g) : null;
+      b.classList.toggle('warn', !!hit);
+      let badge = b.querySelector('.wwarn');
+      if (hit && !badge) { badge = el('span', { class: 'wwarn', text: '⚠' }); b.append(badge); }
+      if (badge) { if (hit) badge.title = `Overlaps ${hit}: hard to see there`; else badge.remove(); }
+    }
+    paintLayerList();
+    // the properties note about an overlapped area follows the selected item
+    const one = E.selIds.length === 1 ? byId(E.selIds[0]) : null;
+    const now = one && E.guides ? !!Ly.zoneHit(one, g) : false;
+    if (one && now !== E.hitShown) { E.hitShown = now; paintProps(); }
+  }
+
+  // Shortcuts work whenever the On screen page is showing and nothing modal is open (focus may be on the page or a row).
+  document.addEventListener('keydown', ev => {
+    if (root.hidden || !E.ui || ev.defaultPrevented) return;
+    if (document.querySelector('.backdrop') || !$('drawerBack').hidden || !$('applyBack').hidden) return;
+    onKeys(ev);
+  });
   function onKeys(ev) {
-    if (!E.sel || ev.target.closest('input, textarea, select')) return;
-    const w = byId(E.sel);
-    if (!w) return;
+    if (ev.target.closest('input, textarea, select')) return;
+    const k = ev.key.toLowerCase();
+    const mod = ev.ctrlKey || ev.metaKey;
+    if (mod && k === 'g') { ev.preventDefault(); if (ev.shiftKey) doUngroup(); else doGroup(); return; }
+    if (mod && (ev.key === ']' || ev.key === '[')) { ev.preventDefault(); stepSel(ev.key === ']' ? 1 : -1); return; }
+    if (mod && k === 'a') { ev.preventDefault(); setSel(widgets().map(w => w.id)); return; }
+    if (ev.key === 'Escape' && E.selIds.length) { setSel([]); return; }
+    if (!E.selIds.length) return;
     const step = ev.shiftKey ? 0.02 : 0.005;
     const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[ev.key];
     if (d) {
       ev.preventDefault();
-      w.x = r4(clamp(w.x + d[0], 0, 1 - w.w)); w.y = r4(clamp(w.y + d[1], 0, 1 - w.h));
-      const b = E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(w.id)}"]`);
-      if (b) placeBox(b, w);
-      syncPosFields(w); edited();
+      const ms = sel();
+      const x0 = Math.min(...ms.map(m => m.x)), y0 = Math.min(...ms.map(m => m.y)), x1 = Math.max(...ms.map(m => m.x + m.w)), y1 = Math.max(...ms.map(m => m.y + m.h));
+      const dx = clamp(d[0], -x0, 1 - x1), dy = clamp(d[1], -y0, 1 - y1);
+      for (const m of ms) { m.x = r4(m.x + dx); m.y = r4(m.y + dy); const b = boxEl(m.id); if (b) placeBox(b, m); }
+      if (ms.length === 1) syncPosFields(ms[0]);
+      refreshWarnings(); edited();
     } else if (ev.key === 'Delete' || (ev.key === 'Backspace' && !ev.target.closest('button'))) {
-      ev.preventDefault(); removeWidget(w.id);
+      ev.preventDefault(); doDelete();
     }
   }
 
@@ -368,58 +483,172 @@ export function createThemes(ctx) {
     const w = k.w, h = k.h;
     let x, y;
     if (cx != null) { x = cx - w / 2; y = cy - h / 2; } else { x = 0.1 + 0.04 * (n % 8); y = 0.12 + 0.05 * (n % 8); }
-    const wd = { id: nextId(), type, x: r4(clamp(x, 0, 1 - w)), y: r4(clamp(y, 0, 1 - h)), w, h, onBase: false, props: k.props() };
+    const wd = { id: nextId(), type, x: r4(clamp(x, 0, 1 - w)), y: r4(clamp(y, 0, 1 - h)), w, h, onBase: false, hidden: false, group: null, props: k.props() };
     widgets().push(wd);
-    if (E.view === 'base' && !wd.onBase) E.view = 'live';
-    E.sel = wd.id;
-    paintViews(); paintItems(); paintStage(); paintProps();
+    E.theme.liveLayer = true; // adding an item shows the live layer again
+    E.selIds = [wd.id]; E.selGroup = null; E.anchor = wd.id;
+    paintBar(); paintLayerList(); paintStage(); paintProps();
     edited();
-    const b = E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(wd.id)}"]`);
+    const b = boxEl(wd.id);
     if (b) b.focus({ preventScroll: true });
   }
-  function removeWidget(id) {
-    const i = widgets().findIndex(w => w.id === id);
-    if (i < 0) return;
-    widgets().splice(i, 1);
-    E.sel = null;
-    paintItems(); paintStage(); paintProps();
+  function doDelete() {
+    const ids = new Set(E.selIds);
+    if (!ids.size) return;
+    E.theme.widgets = widgets().filter(w => !ids.has(w.id));
+    Ly.normalizeGroups(E.theme);
+    E.selIds = []; E.selGroup = null;
+    paintLayerList(); paintStage(); paintProps();
     edited();
   }
-  function moveWidget(id, dir) {
-    const l = widgets(), i = l.findIndex(w => w.id === id), j = i + dir;
-    if (i < 0 || j < 0 || j >= l.length) return;
-    [l[i], l[j]] = [l[j], l[i]];
-    paintItems(); paintStage();
+  function doGroup() {
+    if (!E.selIds.length) return;
+    const gid = Ly.groupLayers(E.theme, E.selIds);
+    if (!gid) return;
+    E.selGroup = gid; E.selIds = Ly.membersOf(E.theme, gid).map(w => w.id);
+    paintLayerList(); paintStage(); paintProps();
     edited();
   }
-  function select(id, { keepFocus = false } = {}) {
-    if (E.sel === id) return;
-    E.sel = id;
-    paintItems(); paintProps();
+  function doUngroup() {
+    const gids = E.selGroup ? [E.selGroup] : [];
+    if (!gids.length && !sel().some(w => w.group)) return;
+    Ly.ungroupLayers(E.theme, E.selIds, gids);
+    E.selGroup = null;
+    paintLayerList(); paintStage(); paintProps();
+    edited();
+  }
+  function stepSel(dir) {
+    if (!E.selIds.length) return;
+    Ly.stepLayers(E.theme, E.selIds, dir);
+    paintLayerList(); paintStage();
+    edited();
+  }
+  function setSel(ids, { keepFocus = false, group = null } = {}) {
+    ids = ids.filter(id => byId(id));
+    const same = ids.length === E.selIds.length && ids.every((id, i) => id === E.selIds[i]) && group === E.selGroup;
+    if (same) return;
+    E.selIds = ids; E.selGroup = group;
+    if (ids.length) E.anchor = ids[ids.length - 1];
+    paintLayerList(); paintProps();
     for (const b of E.ui.boxes.children) {
-      const on = b.dataset.id === id;
+      const on = ids.includes(b.dataset.id);
       b.classList.toggle('sel', on);
+      b.classList.toggle('one', on && ids.length === 1);
       const nm = b.querySelector('.wname');
-      if (nm) nm.textContent = on ? '' : label(byId(b.dataset.id) || {});
+      if (nm) nm.textContent = on ? '' : nameOf(byId(b.dataset.id) || {});
     }
-    if (!keepFocus && id) { const b = E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(id)}"]`); if (b) b.focus({ preventScroll: true }); }
+    if (!keepFocus && ids.length === 1) { const b = boxEl(ids[0]); if (b) b.focus({ preventScroll: true }); }
   }
 
-  // ------------------------------------------------------------------ the item list
-  function paintItems() {
+  // ------------------------------------------------------------------ the layer list
+  function rename(row, current, commit) {
+    const nameEl = row.querySelector('.lname');
+    const input = el('input', { type: 'text', class: 'lrename', value: current, maxLength: 60, 'aria-label': 'Name' });
+    input.value = current;
+    let done = false;
+    const finish = save => { if (done) return; done = true; if (save) commit(input.value.trim()); else paintLayerList(); };
+    input.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false); };
+    input.onblur = () => finish(true);
+    input.onclick = e => e.stopPropagation();
+    nameEl.replaceWith(input);
+    input.focus(); input.select();
+  }
+
+  function dropPos(row, ev, isGroup) {
+    const r = row.getBoundingClientRect(), f = (ev.clientY - r.top) / r.height;
+    if (isGroup) return f < 0.4 ? 'above' : 'into';
+    return f < 0.5 ? 'above' : 'below';
+  }
+  function clearDropMarks() { for (const r of E.ui.layers.querySelectorAll('.drop-above,.drop-below,.drop-into')) r.classList.remove('drop-above', 'drop-below', 'drop-into'); }
+
+  function paintLayerList() {
     const u = E.ui;
     if (!u) return;
-    u.items.textContent = '';
-    const l = widgets();
-    u.itemsNone.hidden = l.length > 0;
-    l.forEach((w, i) => {
-      const li = el('li', { class: 'item', role: 'option', 'aria-selected': String(E.sel === w.id), 'data-id': w.id, onclick: () => select(w.id) },
-        el('span', { class: 'it', text: label(w), title: label(w) }),
-        el('button', { class: 'iconbtn', 'aria-label': `Move ${label(w)} earlier (drawn lower)`, title: 'Draw earlier', disabled: i === 0, text: '↑', onclick: e => { e.stopPropagation(); moveWidget(w.id, -1); } }),
-        el('button', { class: 'iconbtn', 'aria-label': `Move ${label(w)} later (drawn on top)`, title: 'Draw later (on top)', disabled: i === l.length - 1, text: '↓', onclick: e => { e.stopPropagation(); moveWidget(w.id, 1); } }),
-        el('button', { class: 'iconbtn', 'aria-label': `Delete ${label(w)}`, title: 'Delete', text: '✕', onclick: e => { e.stopPropagation(); removeWidget(w.id); } }));
-      u.items.append(li);
-    });
+    const keep = u.layers.scrollTop;
+    u.layers.textContent = '';
+    const rows = Ly.layerRows(E.theme);
+    u.layersNone.hidden = rows.length > 0;
+    const g = guidesNow();
+    const orderIds = Ly.orderTopFirst(E.theme);
+    for (const r of rows) {
+      const isGroup = r.kind === 'group';
+      const ids = isGroup ? r.members.map(m => m.id) : [r.w.id];
+      const selected = isGroup ? (E.selGroup === r.g.id) : E.selIds.includes(r.w.id);
+      const hidden = isGroup ? !!r.g.hidden : hiddenNow(r.w);
+      const eye = el('button', { class: 'leye', type: 'button', 'aria-label': hidden ? 'Show' : 'Hide', title: hidden ? 'Show' : 'Hide', 'aria-pressed': String(!hidden) });
+      eye.innerHTML = SVG_EYE(!hidden);
+      const name = isGroup ? (r.g.name || 'Group') : nameOf(r.w);
+      const hit = !isGroup && Ly.zoneHit(r.w, g);
+      const row = el('div', { class: 'lrow' + (isGroup ? ' group' : '') + (selected ? ' sel' : '') + (hidden ? ' off' : '') + (r.depth ? ' in' : ''), role: 'option', draggable: 'true', 'aria-selected': String(selected), 'data-id': isGroup ? r.g.id : r.w.id, 'data-kind': r.kind });
+      if (isGroup) {
+        const caret = el('button', { class: 'lcaret', type: 'button', 'aria-label': r.g.collapsed ? 'Expand group' : 'Collapse group', 'aria-expanded': String(!r.g.collapsed) });
+        caret.innerHTML = SVG_CARET(!r.g.collapsed);
+        caret.onclick = e => { e.stopPropagation(); r.g.collapsed = !r.g.collapsed; paintLayerList(); edited({ preview: false }); };
+        const fold = el('span', { class: 'licon' }); fold.innerHTML = SVG_FOLDER;
+        row.append(caret, eye, fold, el('span', { class: 'lname', text: name, title: name }), el('span', { class: 'lcount small muted', text: String(r.members.length) }));
+      } else {
+        row.append(...[el('span', { class: 'lindent' }), eye, el('span', { class: 'licon', 'aria-hidden': 'true', text: (KINDS[r.w.type] || {}).icon || '?' }), el('span', { class: 'lname', text: name, title: name }),
+          hit && E.guides ? el('span', { class: 'lwarn', title: `Overlaps ${hit}`, text: '⚠' }) : null].filter(Boolean));
+      }
+      eye.onclick = e => {
+        e.stopPropagation();
+        if (isGroup) r.g.hidden = !r.g.hidden; else r.w.hidden = !r.w.hidden;
+        E.baseSig = null; paintLayerList(); paintStage(); edited();
+      };
+      row.addEventListener('click', e => {
+        if (e.target.closest('.leye, .lcaret, .lrename')) return;
+        if (isGroup) { setSel(ids, { group: r.g.id }); return; }
+        if (e.shiftKey && E.anchor) {
+          const a = orderIds.indexOf(E.anchor), b = orderIds.indexOf(r.w.id);
+          if (a >= 0 && b >= 0) { const [lo, hi] = a < b ? [a, b] : [b, a]; setSel(orderIds.slice(lo, hi + 1), { keepFocus: true }); return; }
+        }
+        if (e.ctrlKey || e.metaKey) { setSel(E.selIds.includes(r.w.id) ? E.selIds.filter(i => i !== r.w.id) : [...E.selIds, r.w.id], { keepFocus: true }); return; }
+        setSel([r.w.id], { keepFocus: true });
+      });
+      row.addEventListener('dblclick', e => {
+        if (e.target.closest('.leye, .lcaret')) return;
+        e.preventDefault();
+        if (isGroup) rename(row, r.g.name, v => { r.g.name = v || 'Group'; paintLayerList(); paintProps(); edited({ preview: false }); });
+        else rename(row, r.w.props.name || '', v => { if (v) r.w.props.name = v; else delete r.w.props.name; paintLayerList(); refreshBoxLabel(r.w); paintProps(); edited({ preview: false }); });
+      });
+      row.addEventListener('dragstart', e => {
+        // (the list is not redrawn here: replacing the dragged row would cancel the drag)
+        const mine = isGroup ? ids : (E.selIds.includes(r.w.id) ? [...E.selIds] : [r.w.id]);
+        E.dragIds = mine;
+        e.dataTransfer.setData('text/x-cs-layer', mine.join(','));
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      row.addEventListener('dragend', () => { E.dragIds = []; clearDropMarks(); });
+      row.addEventListener('dragover', e => {
+        if (!E.dragIds.length || E.dragIds.includes(isGroup ? '' : r.w.id)) return;
+        e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+        clearDropMarks();
+        row.classList.add('drop-' + dropPos(row, e, isGroup));
+      });
+      row.addEventListener('dragleave', () => row.classList.remove('drop-above', 'drop-below', 'drop-into'));
+      row.addEventListener('drop', e => {
+        if (!E.dragIds.length) return;
+        e.preventDefault();
+        const pos = dropPos(row, e, isGroup);
+        clearDropMarks();
+        const dragged = E.dragIds; E.dragIds = [];
+        if (!isGroup && dragged.includes(r.w.id)) return;
+        Ly.moveLayers(E.theme, dragged, isGroup ? { kind: 'group', id: r.g.id } : { kind: 'layer', id: r.w.id }, pos);
+        E.selIds = dragged.filter(id => byId(id)); E.selGroup = null;
+        paintLayerList(); paintStage(); paintProps();
+        edited();
+      });
+      u.layers.append(row);
+    }
+    u.layers.scrollTop = keep;
+    const hasSel = E.selIds.length > 0;
+    u.btnGroup.disabled = !hasSel;
+    u.btnDelete.disabled = !hasSel;
+    u.btnUngroup.disabled = !(E.selGroup || sel().some(w => w.group));
+  }
+  function refreshBoxLabel(w) {
+    const b = boxEl(w.id);
+    if (b) { b.querySelector('.wlabel').textContent = nameOf(w); const nm = b.querySelector('.wname'); if (nm && nm.textContent) nm.textContent = nameOf(w); }
   }
 
   // ------------------------------------------------------------------ properties
@@ -446,17 +675,50 @@ export function createThemes(ctx) {
     r.value = value;
     return el('div', { class: 'slider-row' }, r, out);
   }
+  const numInput = (id, value, { min = 0, max = 9999, step = 1, onchange }) => {
+    const i = el('input', { type: 'number', id, min, max, step, onchange: e => onchange(e.target.value === '' ? null : Number(e.target.value)) });
+    i.value = value ?? '';
+    return i;
+  };
 
   function paintProps() {
     const u = E.ui;
     if (!u) return;
     posFields = null;
     u.props.textContent = '';
-    const w = E.sel && byId(E.sel);
-    if (!w) return paintThemeProps();
+    const ms = sel();
+    if (E.selGroup && groupById(E.selGroup)) return paintGroupProps(groupById(E.selGroup));
+    if (ms.length > 1) return paintMultiProps(ms);
+    if (ms.length === 1) return paintWidgetProps(ms[0]);
+    paintThemeProps();
+  }
+
+  function paintMultiProps(ms) {
+    const u = E.ui;
+    u.props.append(el('h3', { text: `${ms.length} layers selected` }),
+      el('p', { class: 'muted small', text: 'Drag any of them on the preview to move them together. Ctrl+G groups them.' }),
+      el('div', { class: 'row' }, el('button', { class: 'btn secondary', text: 'Group', onclick: doGroup }), el('button', { class: 'btn danger', text: 'Delete', onclick: doDelete })));
+  }
+  function paintGroupProps(g) {
+    const u = E.ui;
+    const nm = el('input', { type: 'text', id: 'gName', maxLength: 60, spellcheck: false, oninput: e => { g.name = e.target.value; paintLayerList(); edited({ preview: false }); } });
+    nm.value = g.name;
+    u.props.append(el('h3', { text: 'Group' }), field('Name', nm, 'gName'),
+      swRow('Visible', !g.hidden, v => { g.hidden = !v; E.baseSig = null; paintLayerList(); paintStage(); edited(); }),
+      el('p', { class: 'muted small', text: `${Ly.membersOf(E.theme, g.id).length} layers. Click the group on the preview to move them all together.` }),
+      el('div', { class: 'row' }, el('button', { class: 'btn secondary', text: 'Ungroup', onclick: doUngroup }), el('button', { class: 'btn danger', text: 'Delete group', onclick: doDelete })));
+  }
+
+  function paintWidgetProps(w) {
+    const u = E.ui;
     const k = KINDS[w.type] || { name: w.type };
-    const set = (key, v) => { w.props[key] = v; edited(); refreshLabels(w); };
-    u.props.append(el('h3', { text: k.name }));
+    const set = (key, v) => { w.props[key] = v; edited(); refreshBoxLabel(w); const l = u.layers.querySelector(`.lrow[data-id="${CSS.escape(w.id)}"] .lname`); if (l) l.textContent = nameOf(w); };
+    const nameIn = el('input', { type: 'text', id: 'pName', maxLength: 60, spellcheck: false, placeholder: nameOf({ ...w, props: { ...w.props, name: '' } }), oninput: e => {
+      if (e.target.value.trim()) w.props.name = e.target.value; else delete w.props.name;
+      refreshBoxLabel(w); const l = u.layers.querySelector(`.lrow[data-id="${CSS.escape(w.id)}"] .lname`); if (l) l.textContent = nameOf(w); edited({ preview: false });
+    } });
+    nameIn.value = w.props.name || '';
+    u.props.append(el('h3', { text: k.name }), field('Layer name', nameIn, 'pName'));
     const p = w.props;
     if (w.type === 'clock') {
       u.props.append(
@@ -466,7 +728,7 @@ export function createThemes(ctx) {
         field('Colour', el('input', { type: 'color', id: 'pCol', value: p.color || '#ffffff', oninput: e => set('color', e.target.value) }), 'pCol'));
     } else if (w.type === 'music') {
       u.props.append(swRow('Show the cover', p.cover !== false, v => set('cover', v)), swRow('Show the progress bar', p.progress !== false, v => set('progress', v)),
-        el('p', { class: 'muted small', text: 'Shows what is playing in Spotify, the browser or any other player. Hidden when nothing plays (change this under Hand-over).' }));
+        el('p', { class: 'muted small', text: 'Shows what is playing in Spotify, the browser or any other player. Hidden when nothing plays (change this in the theme settings).' }));
     } else if (w.type === 'stats') {
       const items = Array.isArray(p.items) ? p.items : [];
       const box = el('div', { class: 'checks', role: 'group', 'aria-label': 'What to show' });
@@ -494,7 +756,7 @@ export function createThemes(ctx) {
       const file = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif,image/bmp', hidden: true, onchange: async e => {
         const f = e.target.files[0]; e.target.value = '';
         if (!f) return;
-        try { const r = await backend.themeAsset(E.oid, f); w.props.file = r.file; edited(); refreshLabels(w); paintProps(); }
+        try { const r = await backend.themeAsset(E.oid, f); w.props.file = r.file; edited(); refreshBoxLabel(w); paintLayerList(); paintProps(); }
         catch (err) { toast(err.message, true); }
       } });
       u.props.append(el('div', { class: 'field' }, el('p', { class: 'small', text: p.file ? p.file.split('/').pop() : 'No picture chosen yet.' }),
@@ -506,10 +768,11 @@ export function createThemes(ctx) {
     }
     if (k.base) {
       u.props.append(el('hr', { class: 'sep' }), swRow('Also on the stored base', w.onBase, v => {
-        w.onBase = v; paintStage(); refreshLabels(w); edited();
-        E.baseSig = null;
+        w.onBase = v; paintStage(); E.baseSig = null; edited();
       }, 'Draws it into the picture stored on the screen, so it stays there when CoolerScreen is closed. Changing it later means storing the base again.'));
     }
+    const hit = Ly.zoneHit(w, guidesNow());
+    if (hit && E.guides) u.props.append(el('p', { class: 'warn-text small', text: `⚠ Overlaps ${hit}: it is hard to see there. Move it, or keep it if that is fine.` }));
     u.props.append(el('hr', { class: 'sep' }), el('h3', { text: 'Position and size' }));
     const grid = el('div', { class: 'props-grid' });
     posFields = {};
@@ -519,24 +782,18 @@ export function createThemes(ctx) {
         if (key === 'x') w.x = clamp(v, 0, 1 - w.w); else if (key === 'y') w.y = clamp(v, 0, 1 - w.h);
         else if (key === 'w') w.w = clamp(v, MIN_BOX, 1 - w.x); else w.h = clamp(v, MIN_BOX, 1 - w.y);
         for (const kk of ['x', 'y', 'w', 'h']) w[kk] = r4(w[kk]);
-        const b = u.boxes.querySelector(`.wbox[data-id="${CSS.escape(w.id)}"]`);
+        const b = boxEl(w.id);
         if (b) placeBox(b, w);
-        syncPosFields(w); edited();
+        syncPosFields(w); refreshWarnings(); edited();
       } });
       inp.value = (w[key] * 100).toFixed(1);
       posFields[key] = inp;
       grid.append(field(text, inp, 'pos-' + key));
     }
-    u.props.append(grid, el('div', { class: 'row' }, el('button', { class: 'btn danger', text: 'Delete this item', onclick: () => removeWidget(w.id) })));
-  }
-  function refreshLabels(w) {
-    const l = E.ui.items.querySelector(`.item[data-id="${CSS.escape(w.id)}"] .it`);
-    if (l) { l.textContent = label(w); l.title = label(w); }
-    const b = E.ui.boxes.querySelector(`.wbox[data-id="${CSS.escape(w.id)}"]`);
-    if (b) { b.querySelector('.wlabel').textContent = label(w); b.setAttribute('aria-label', `${label(w)}. Arrow keys move it, Delete removes it.`); }
+    u.props.append(grid, el('div', { class: 'row' }, el('button', { class: 'btn danger', text: 'Delete this item', onclick: doDelete })));
   }
 
-  // theme-level: name, preset, hand-over summary, base
+  // The theme's own settings: name, layout preset, corners, guides, hand-over, base.
   function paintThemeProps() {
     const u = E.ui;
     const nameIn = el('input', { type: 'text', id: 'thName', maxLength: 80, spellcheck: false });
@@ -548,23 +805,53 @@ export function createThemes(ctx) {
       try { await call('original_patch', { originalId: E.oid, name: v }); E.info.name = v; err.textContent = ''; paintTitle(); ctx.loadOriginals(); }
       catch (e) { err.textContent = e.message; }
     };
-    const h = E.theme.handover || {};
-    const endTxt = (END_CHOICES.find(c => c[0] === h.end) || END_CHOICES[0])[1];
+    const t = E.theme, h = t.handover || (t.handover = {});
+    const dflt = Math.round((S.app && S.app.cornerRadius) || 0);
+    const custom = t.corners != null;
+    const cornerNum = numInput('thCorner', custom ? t.corners : dflt, { min: 0, max: 300, onchange: v => { if (v == null) return; t.corners = clamp(Math.round(v), 0, 300); onCorners(); } });
+    cornerNum.disabled = !custom;
+    const onCorners = () => { E.baseSig = null; paintStage(); paintBanner(); edited(); };
+    const radio = (name, value, checked, text, on) => { const r = el('input', { type: 'radio', name, value, checked, onchange: on }); r.checked = checked; return el('label', { class: 'rad' }, r, text); };
+    const guides = Ly.effectiveGuides(S.app && S.app.screenGuides, t.guidesOffset);
+    const gBox = el('div', { class: 'offs' });
+    const offRow = (label, getV, setV, base) => {
+      const i = numInput('off-' + label, getV() || 0, { min: -600, max: 600, step: 5, onchange: v => { setV(v || 0); paintStage(); edited({ preview: false }); paintLayerList(); } });
+      return el('div', { class: 'off-row' }, el('label', { class: 'small', text: label }), i, el('span', { class: 'muted small', text: base != null ? `global ${base} px` : '' }));
+    };
+    const G = (S.app && S.app.screenGuides) || { curve: {}, zones: [] };
+    for (const [e, text] of EDGES) gBox.append(offRow(`Curve, ${text.toLowerCase()}`, () => t.guidesOffset.curve[e], v => { t.guidesOffset.curve[e] = v; }, (G.curve || {})[e] || 0));
+    for (const z of G.zones || []) gBox.append(offRow(`${z.name || 'Area'} (${z.edge})`, () => t.guidesOffset.zones[z.id], v => { t.guidesOffset.zones[z.id] = v; }, z.size));
     u.props.append(
-      el('h3', { text: 'This theme' }),
+      el('h3', { text: 'Theme settings' }),
       field('Name', nameIn, 'thName'), err,
-      el('p', { class: 'muted small', text: widgets().length ? 'Click an item on the preview to change it.' : 'Add items from the left: drag them onto the preview, or click them.' }),
+      el('p', { class: 'muted small', text: widgets().length ? 'Click a layer on the preview or in the list to change it.' : 'Add items from the left: drag them onto the preview, or click them.' }),
       el('div', { class: 'row' }, el('button', { class: 'btn secondary', text: 'Use the Standard layout', title: 'Clock, music and PC stats where they were before themes', onclick: usePreset })),
       el('hr', { class: 'sep' }),
+      el('h3', { text: 'Rounded corners' }),
+      radio('thCornerMode', 'default', !custom, `Default (${dflt} px${dflt ? '' : ', none'})`, () => { t.corners = null; paintProps(); onCorners(); }),
+      radio('thCornerMode', 'custom', custom, 'This theme only', () => { t.corners = dflt; paintProps(); onCorners(); }),
+      el('div', { class: 'field' }, el('label', { for: 'thCorner', text: 'Radius in pixels (0 = square corners)' }), cornerNum),
+      el('hr', { class: 'sep' }),
+      el('h3', { text: 'Screen guides for this theme' }),
+      el('p', { class: 'muted small', text: 'Added to the global guides (Settings > Screen guides). Use a negative number to shrink one. Guides only help you place things; nothing is darkened on the screen.' }),
+      gBox,
+      el('div', { class: 'row' }, el('button', { class: 'btn ghost', text: 'Reset to the global guides', onclick: () => { t.guidesOffset = { curve: {}, zones: {} }; paintProps(); paintStage(); edited({ preview: false }); } })),
+      el('hr', { class: 'sep' }),
       el('h3', { text: 'Hand-over' }),
-      el('p', { class: 'small muted', text: `The live layer fades in over ${Number(h.fadeIn ?? 0.8).toFixed(1)} s. When CoolerScreen stops: ${endTxt.toLowerCase()}.` }),
-      el('div', { class: 'row' }, el('button', { class: 'btn secondary', text: 'Hand-over settings…', onclick: () => setView('hand') })),
+      field('Fade-in when live starts', range('hoFade', clamp(Number(h.fadeIn ?? 0.8), 0, 3), 0, 3, 0.1, v => { h.fadeIn = Math.round(v * 10) / 10; edited({ preview: false }); }, v => v.toFixed(1) + ' s'), 'hoFade'),
+      el('p', { class: 'small muted', text: 'When CoolerScreen stops:' }));
+    for (const [v, tt, d] of END_CHOICES) {
+      u.props.append(radio('hoEnd', v, (h.end || 'loopStart') === v, tt, () => { h.end = v; edited({ preview: false }); }));
+      u.props.append(el('p', { class: 'muted small hint', text: d }));
+    }
+    u.props.append(field('Music when nothing is playing', select2('hoMusic', h.musicIdle || 'hide', [['hide', 'Hide the music item'], ['keep', 'Keep it, showing an idle card']], v => { h.musicIdle = v; edited({ preview: false }); }), 'hoMusic'),
       el('hr', { class: 'sep' }),
       el('h3', { text: 'Base' }),
-      el('p', { class: 'small muted', text: E.info.baseExists ? 'The base is the picture stored on the screen. It keeps playing when CoolerScreen is closed.' : 'The base picture has not been stored yet.' }),
+      el('p', { class: 'small muted', text: E.info.baseOwner ? `The base is “${E.info.baseOwner.name}”, the picture stored on the screen. It keeps playing when CoolerScreen is closed.` : 'The base picture has not been stored yet.' }),
       el('div', { class: 'row' },
-        el('button', { class: 'btn secondary', text: 'Base settings…', onclick: () => ctx.openDetail(E.oid) }),
+        el('button', { class: 'btn secondary', text: 'Base settings…', title: 'Choose any clip as the base, with its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) }),
         el('button', { class: 'btn ghost', text: 'Store the base again', title: 'Make the base picture again and send it to the screen', onclick: () => ctx.applyTheme(E.oid, E.info.name) })));
+    void guides;
   }
   async function usePreset() {
     if (widgets().length) {
@@ -572,36 +859,11 @@ export function createThemes(ctx) {
         actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Use Standard layout', value: true, kind: 'primary' }] });
       if (!ok) return;
     }
-    try { const t = await call('theme_standard'); E.theme.widgets = t.widgets; E.sel = null; paintItems(); paintStage(); paintProps(); edited(); }
+    try { const t = await call('theme_standard'); E.theme.widgets = t.widgets; E.theme.groups = []; E.selIds = []; E.selGroup = null; E.theme.liveLayer = true; paintBar(); paintLayerList(); paintStage(); paintProps(); edited(); }
     catch (e) { toast(e.message, true); }
   }
 
-  // ------------------------------------------------------------------ hand-over view
-  function paintHand() {
-    const u = E.ui, h = E.theme.handover || (E.theme.handover = {});
-    u.hand.textContent = '';
-    const img = url => (url ? el('img', { src: url, alt: '' }) : null);
-    const baseUrl = E.baseUrl || fallbackFrame(), liveUrl = E.liveUrl || baseUrl;
-    u.hand.append(
-      el('h3', { text: 'When live starts' }),
-      el('div', { class: 'hand-flow' },
-        el('figure', {}, el('div', { class: 'frame' }, img(baseUrl)), el('figcaption', { text: 'The stored loop' })),
-        el('span', { 'aria-hidden': 'true', text: '→' }),
-        el('figure', {}, el('div', { class: 'frame' }, img(liveUrl)), el('figcaption', { text: 'The live layer fades in' }))),
-      field('Fade-in time', range('hoFade', clamp(Number(h.fadeIn ?? 0.8), 0, 3), 0, 3, 0.1, v => { h.fadeIn = Math.round(v * 10) / 10; edited({ preview: false }); }, v => v.toFixed(1) + ' s'), 'hoFade'),
-      el('h3', { text: 'When CoolerScreen stops' }));
-    const cards = el('div', { class: 'hand-cards', role: 'radiogroup', 'aria-label': 'When CoolerScreen stops' });
-    for (const [v, t, d] of END_CHOICES) {
-      const r = el('input', { type: 'radio', name: 'hoEnd', value: v, checked: (h.end || 'loopStart') === v, onchange: () => { h.end = v; edited({ preview: false }); paintProps(); } });
-      r.checked = (h.end || 'loopStart') === v;
-      cards.append(el('label', {}, r, el('span', {}, el('b', { text: t }), el('br'), el('span', { class: 'muted small', text: d }))));
-    }
-    u.hand.append(cards,
-      el('h3', { text: 'Music when nothing is playing' }),
-      select2('hoMusic', h.musicIdle || 'hide', [['hide', 'Hide the music item'], ['keep', 'Keep it, showing an idle card']], v => { h.musicIdle = v; edited({ preview: false }); }));
-  }
-
-  return { enter, isOpen: () => !!E.ui, flush: () => (E.rev !== E.saved ? save() : Promise.resolve()) };
+  return { enter, appChanged, isOpen: () => !!E.ui, flush: () => (E.rev !== E.saved ? save() : Promise.resolve()) };
 }
 
 // ---------------------------------------------------------------------- the Apply dialog
