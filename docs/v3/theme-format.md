@@ -102,3 +102,25 @@ thing: a **base** (the loop stored on the screen — the existing MJPEG "version
   selected, or a "Theme settings" section). Same `handover` fields.
 - Live start must never show a placeholder/gradient when the theme has a base or a clip: wait for the first real
   background frame before the first live frame (fixes the "flash" when turning live on).
+
+## v1.2 additions (user, 2026-10-17): snapping and screen guides
+
+Context from the user: the physical screen is **curved**, so content near the curve is seen at a different angle,
+and in their case the **right edge is partly hidden behind the RAM** (colours still visible at an angle). These are
+**guides, not masks**: nothing is darkened on the screen (unlike the notch black band).
+
+- **Snapping (editor):** gentle snap of moving/resizing boxes to other boxes' edges and centres, canvas centre/edges,
+  guide-zone edges, and matching width/height of other boxes. Weak threshold (≈6 px at preview scale), Alt held =
+  no snap for that move. Toggle in the editor toolbar; default from settings `editor.snap` (default true).
+- **Screen guides (global, settings.json `screenGuides`, coordinates in px on the landscape 2400x1080 canvas):**
+  `{ "curve": { "left": 0, "right": 0, "top": 0, "bottom": 0 },
+     "zones": [ { "id": "z1", "name": "RAM", "edge": "right"|"left"|"top"|"bottom", "size": 180 } ] }`
+  `curve.<edge>` = how far in from that edge the curve starts (0 = flat). `zones` = "avoid" bands along an edge.
+- **Per-theme offset** (theme.json `guidesOffset`, same shape, values added to the global ones, may be negative):
+  `{ "curve": { "right": -20 }, "zones": { "z1": 30 } }`.
+- **Display:** hatched, tinted overlays in the editor preview (live layer) and in Base settings; never drawn on the real
+  screen except during calibration. Widgets overlapping a zone get a warning badge; zone edges are snap targets.
+- **Calibration (settings "Screen guides"):** sliders per curve edge and per zone (add/rename/remove zones). While
+  live is on, the engine draws the guide lines and labels on the REAL screen in real time
+  (`Pipeline::set_calibration(Option<Guides>)` — draws over everything, temporary, cleared when leaving the page), so
+  the user can line them up with the physical curve and the RAM. Save = global defaults.
