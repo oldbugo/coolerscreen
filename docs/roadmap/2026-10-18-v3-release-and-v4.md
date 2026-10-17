@@ -18,10 +18,13 @@ original 3.0 brief are in `2026-10-12-v2-release-and-v3.md`; the theme contract 
   (about 240 MB with the WebView alive). Earlier prototype numbers are in the 2.0/3.0 brief file.
 - **Verified on the real screen (SC70, fw 3.6):**
   - the live protocol works (frames, keepalive, end sequence), portrait 756x1680 frames, 4:2:0 JPEG, up to about 200 KB;
-  - 60 fps is accepted and shown, with 30 as the alternative;
-  - the user checked readability and the look of the live picture, tray Quit returning to the loop, and a theme applying
-    with the Apply window; the hidden-edge values (top 4 px, left 9 px) were found on this screen and the guides were
-    calibrated by the user.
+  - 60 fps is accepted without send errors (whether the panel shows every frame is unknown), with 30 as the alternative;
+  - the user checked readability and the look of the live picture, tray Quit returning to the loop, and applied themes
+    with the Apply window (uploads 2026-10-17 14:48, 16:07, 16:25 UTC);
+  - hidden edges: top 4 px / left 9 px were measured with the ruler tool; the "top still cut" the user kept seeing turned
+    out to be the rounded corners drawn at the panel edge. Fixed in 7a7a798 (corners follow the visible area) —
+    **not yet confirmed by the user**; their saved top value was 16 at that point and may need lowering back to ~4.
+    Screen guides exist but the user has not reported calibrating them.
 - **Not verified by the user or on hardware:** start with Windows over a real reboot; screen-off endings (sleep, lock,
   shutdown) and the timing of the hand-over; the visualizer with real audio; CPU temperature (not built); weather on a long
   run; behaviour on another screen or firmware; installing 3.0.0 on a clean machine without the dev tools.
