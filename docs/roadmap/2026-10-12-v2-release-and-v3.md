@@ -167,3 +167,20 @@ Technical basis: the live engine plays the same baked loop as its background, so
 loop's first frame (seamless hand-over); on start it can only cross-fade (the device's loop position is unknown).
 Next step agreed: design exploration (clickable mock-ups) before any rebuild. Also: one version only — work on main,
 install every build, v2.0.0 is the fallback.
+
+### Design decisions from the first mock-up review (user, 2026-10-17)
+
+Mock-ups: private design canvas "CoolerScreen 3.0 themes" (claude.ai artifact 477b4p8PYJvfnMZvHucbsS).
+- A theme is ONE thing: a **base** (the simple version stored on the screen) plus an optional **live layer** (the
+  augmented version), "not two separate things".
+- Home shows the theme currently installed on the screen. Keep the current app's header/top bar (the first mock-ups
+  "drifted off"); the nav becomes On screen · My themes · Browse.
+- Theme editor: "a very very good idea" — widget palette on the left to drag and drop onto the background, editing
+  panel on the right. Needs careful implementation design.
+- Applying: a pop-up is good; add an intentional lock so the user can't do anything else while it stores, with a
+  progress bar.
+- Hand-over (fade in/out etc.) is a per-theme option, part of the theme package, not a global setting.
+- No separate "Backgrounds" concept: every item is a theme; a plain clip or even a still image is just a theme that
+  isn't built out yet.
+- Keep the user's installed library (My themes) clearly separate from where pre-built themes come from (Browse).
+  Adding from Browse creates an independent local copy, with no link back; adding again makes a duplicate.
