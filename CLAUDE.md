@@ -17,5 +17,8 @@
 - 2026-10-17: 3.0 is organised around THEMES with two faces: a live face (companion running) and a screen-only face
   (stored clip), both from the same theme, applied once from one place, with a seamless hand-over between them.
   The current MP4-centred UI must be redesigned for this; explore the design with the user before building.
+- 2026-10-18: Claude may close the user's running CoolerScreen whenever needed (e.g. to install a build) without
+  asking: "as long as you can make sure it's not in the process of doing anything" — check first that no job
+  (upload, conversion, apply) is running (device.log / activity); prefer a clean quit so live hands back properly.
 
 Start-of-work reading: `docs/roadmap/2026-10-12-v2-release-and-v3.md` (2.0 state and the 3.0 brief).
