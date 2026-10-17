@@ -202,9 +202,10 @@ impl App {
         let standby = self.settings.load().slot("standby").and_then(|s| s["versionId"].as_str().map(String::from));
         // A base was chosen (Base settings) that is not what the screen holds yet.
         let unstored = current && base.is_some() && standby != t.base_version_id;
-        let fit_key = self.settings.load().screen_fit().key();
+        // "Stale" = the picture inputs differ from the stored base: screen fit with shift, notch, corner radius, baked items (a different base is `unstored`). Live-only things (widgets and props, live layer, hand-over, guides, gap, weather) never count.
+        let fit_key = self.lib.context().notch_key;
         let radius = self.corner_radius_of(&t);
-        let stale = current && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key || (version_radius(v) - radius).abs() > 0.5 || super::fit::Fit::key_of(v["notchKey"].as_str()) != fit_key);
+        let stale = current && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key || (version_radius(v) - radius).abs() > 0.5 || super::mask::base_key(v["notchKey"].as_str()) != fit_key);
         let owner = base.as_ref().and_then(|(boid, _)| self.lib.read_original(boid).map(|bo| json!({ "originalId": boid, "name": bo["name"] })));
         let kinds: Vec<&str> = t.widgets.iter().map(|w| w.kind.as_str()).collect();
         Ok(json!({
@@ -503,8 +504,8 @@ impl App {
         // rounded corners: the theme's radius, or the default from Settings (0 = none)
         let radius = self.corner_radius_of(&t);
         body["corners"] = json!({ "on": radius > 0.0, "r": radius });
-        let fit_key = self.settings.load().screen_fit().key();
-        let reuse = existing.as_ref().filter(|(_, bv)| bv["overlay"]["key"].as_str().map(String::from) == want_key && (version_radius(bv) - radius).abs() <= 0.5 && super::fit::Fit::key_of(bv["notchKey"].as_str()) == fit_key).map(|(_, bv)| bv["id"].as_str().unwrap_or("").to_string());
+        let fit_key = self.lib.context().notch_key;
+        let reuse = existing.as_ref().filter(|(_, bv)| bv["overlay"]["key"].as_str().map(String::from) == want_key && (version_radius(bv) - radius).abs() <= 0.5 && super::mask::base_key(bv["notchKey"].as_str()) == fit_key).map(|(_, bv)| bv["id"].as_str().unwrap_or("").to_string());
         let created = if reuse.is_some() { Err(CoreError::coded("duplicate", "reuse").with("versionId", json!(reuse))) } else { self.lib.create_version(&src_oid, &body) };
         let oid_for_version = src_oid.as_str();
         let vid = match created {

@@ -694,7 +694,7 @@ async function renameTheme(o) {
   const input = el('input', { type: 'text', value: o.name, id: 'thRename', autofocus: true, maxLength: 80 });
   const err = el('div', { class: 'field-err', role: 'alert' });
   const v = await openDialog({ title: 'Rename theme', body: el('div', {}, el('div', { class: 'field' }, el('label', { for: 'thRename', text: 'Name' }), input), err),
-    actions: [{ label: 'Cancel', value: null, kind: 'secondary' }, { label: 'Save', value: 'save', kind: 'primary' }],
+    actions: [{ label: 'Cancel', value: null, kind: 'secondary' }, { label: 'Rename', value: 'save', kind: 'primary' }],
     onOpen: ({ close }) => input.addEventListener('keydown', e => { if (e.key === 'Enter') close('save'); }) });
   if (v !== 'save' || !input.value.trim() || input.value.trim() === o.name) return;
   try { await call('original_patch', { originalId: o.id, name: input.value.trim() }); await loadOriginals(); } catch (e) { toast(e.message, true); }
@@ -888,11 +888,12 @@ async function renderSourcesSettings() {
       if (opt.type !== 'folders') continue;
       const ta = el('textarea', { id: `opt-${s.id}-${opt.key}`, rows: 2, spellcheck: false, value: ((s.values || {})[opt.key] || []).join('\n') });
       ta.value = ((s.values || {})[opt.key] || []).join('\n');
-      row.append(el('div', { class: 'field' }, el('label', { for: ta.id, text: opt.label }), ta,
-        el('button', { class: 'btn ghost', text: 'Save folders', onclick: async () => {
-          await call('source_set', { sourceId: s.id, options: { [opt.key]: ta.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) } }).catch(e => toast(e.message, true));
-          B.data.delete(s.id); await loadSources(); renderSourcesSettings();
-        } })));
+      // kept as soon as the box is left
+      ta.onchange = async () => {
+        await call('source_set', { sourceId: s.id, options: { [opt.key]: ta.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) } }).catch(e => toast(e.message, true));
+        B.data.delete(s.id); await loadSources();
+      };
+      row.append(el('div', { class: 'field' }, el('label', { for: ta.id, text: opt.label }), ta));
     }
     box.append(row);
   }
@@ -2099,7 +2100,7 @@ async function remakeVersion(v) {
 async function renameVersion(v) {
   const input = el('input', { type: 'text', value: v.label || `v${v.n}`, id: 'vLabel', autofocus: true, maxLength: 40 });
   const val = await openDialog({ title: 'Rename version', body: el('div', { class: 'field' }, el('label', { for: 'vLabel', text: 'Name' }), input),
-    actions: [{ label: 'Cancel', value: null, kind: 'secondary' }, { label: 'Save', value: 'save', kind: 'primary' }],
+    actions: [{ label: 'Cancel', value: null, kind: 'secondary' }, { label: 'Rename', value: 'save', kind: 'primary' }],
     onOpen: ({ close }) => input.addEventListener('keydown', e => { if (e.key === 'Enter') close('save'); }) });
   if (val !== 'save') return;
   try { await call('version_patch', { versionId: v.id, label: input.value }); await loadDetail(); loadApp(); } catch (e) { toast(e.message, true); }
@@ -2392,6 +2393,9 @@ function openDrawer(section) {
   if (section) { const s = $(section); s.scrollIntoView({ block: 'start' }); const f = s.querySelector('button:not([hidden]), select, input'); if (f) f.focus(); }
 }
 function closeDrawer() {
+  if (notchT) { clearTimeout(notchT); saveNotch(); }
+  if (fitT) { clearTimeout(fitT); fitPersist(); }
+  if (guidesT) { clearTimeout(guidesT); saveGuides(); }
   $('drawerBack').hidden = true;
   calibrate(null); // the guide lines leave the real screen
   fitEnd(); // the rulers leave the real screen
@@ -2505,7 +2509,18 @@ function applyLiveMask() {
   styleNotch(refs.notch, liveMask());
   applyCorners(); // the corners follow the notch band's inner edge
 }
-function drawNotch() {
+let notchT = 0;
+async function saveNotch() {
+  notchT = 0;
+  try {
+    S.app = await call('settings_update', { mask: formMask() });
+    draftMask = formMask();
+    applyLiveMask();
+    await loadDetail();
+    $('nMsg').textContent = '';
+  } catch (e) { $('nMsg').textContent = e.message; }
+}
+function drawNotch(edited) {
   const m = formMask();
   $('nBand').hidden = m.mode !== 'band';
   $('nCircle').hidden = m.mode !== 'circle';
@@ -2513,33 +2528,24 @@ function drawNotch() {
   $('notchShape').classList.add('edit');
   draftMask = m;
   applyLiveMask();
+  if (edited === true) { clearTimeout(notchT); notchT = setTimeout(saveNotch, 400); } // every change is kept as it is made
   const eff = bandPx(m.band);
   $('nPxNote').textContent = m.mode === 'band' && eff && eff !== m.band.px ? `Applied as ${eff} px (rounded up to the screen's 16 px compression grid so the black area stays clean).` : '';
 }
-$('nPxR').oninput = () => { $('nPx').value = $('nPxR').value; drawNotch(); };
-$('nPx').oninput = () => { $('nPxR').value = $('nPx').value; drawNotch(); };
-for (const id of ['nMode', 'nEdge', 'nCx', 'nCy', 'nR', 'nF']) $(id).addEventListener('input', drawNotch);
-$('nSave').onclick = async () => {
-  try {
-    S.app = await call('settings_update', { mask: formMask() });
-    const n = S.app.oldNotchCount || 0;
-    $('nMsg').textContent = 'Saved. New versions use this notch.' + (n ? ` ${n} version${n > 1 ? 's were' : ' was'} made with an older notch. You can make updated copies from each clip's Versions list.` : '');
-    draftMask = formMask();
-    applyLiveMask();
-    await loadDetail();
-  } catch (e) { $('nMsg').textContent = e.message; }
-};
-$('gSave').onclick = async () => {
-  try { S.app = await call('gallery_set_dir', { dir: $('gDir').value }); $('gDir').value = S.app.galleryDir; $('gMsg').textContent = 'Saved.'; await loadOriginals(); }
+$('nPxR').oninput = () => { $('nPx').value = $('nPxR').value; drawNotch(true); };
+$('nPx').oninput = () => { $('nPxR').value = $('nPx').value; drawNotch(true); };
+for (const id of ['nMode', 'nEdge', 'nCx', 'nCy', 'nR', 'nF']) $(id).addEventListener('input', () => drawNotch(true));
+$('gDir').onchange = async () => {
+  try { S.app = await call('gallery_set_dir', { dir: $('gDir').value }); $('gDir').value = S.app.galleryDir; $('gMsg').textContent = ''; await loadOriginals(); }
   catch (e) { $('gMsg').textContent = e.message; }
 };
 $('gOpen').onclick = () => $('openFolder').click();
 $('cornerR').onchange = async () => {
-  try { S.app = await call('settings_update', { cornerRadius: Number($('cornerR').value) || 0 }); $('thMsg').textContent = 'Saved.'; await loadOriginals(); if (typeof themes !== 'undefined') themes.appChanged(); }
+  try { S.app = await call('settings_update', { cornerRadius: Number($('cornerR').value) || 0 }); $('thMsg').textContent = ''; await loadOriginals(); if (typeof themes !== 'undefined') themes.appChanged(); }
   catch (e) { $('thMsg').textContent = e.message; }
 };
 $('edSnap').onchange = async () => {
-  try { S.app = await call('settings_update', { editor: { snap: $('edSnap').checked } }); $('thMsg').textContent = 'Saved.'; } catch (e) { $('thMsg').textContent = e.message; }
+  try { S.app = await call('settings_update', { editor: { snap: $('edSnap').checked } }); $('thMsg').textContent = ''; } catch (e) { $('thMsg').textContent = e.message; }
 };
 
 // Settings > Weather: the user types a city, picks one; nothing is looked up or stored before that.
@@ -2598,7 +2604,16 @@ function calibrate(g) {
   const send = () => call('calibration_set', { guides: g }).then(r => { const n = $('gcLive'); if (n && g) n.textContent = r.live ? 'The lines are showing on the real screen now.' : 'Turn Live on (top bar) to see the lines on the real screen too.'; }).catch(() => {});
   if (g) GC.t = setTimeout(send, 60); else send();
 }
-function guidesChanged() { renderGuidePreview(); calibrate(GC.g); $('gcMsg').textContent = ''; }
+let guidesT = 0;
+async function saveGuides() {
+  guidesT = 0;
+  try {
+    S.app = await call('settings_update', { screenGuides: GC.g });
+    if (typeof themes !== 'undefined') themes.appChanged();
+    paintDetailGuides();
+  } catch (e) { $('gcMsg').textContent = e.message; }
+}
+function guidesChanged() { renderGuidePreview(); calibrate(GC.g); $('gcMsg').textContent = ''; clearTimeout(guidesT); guidesT = setTimeout(saveGuides, 400); }
 function renderGuidePreview() {
   const o = S.originals.find(x => x.id === S.currentTheme) || S.originals[0];
   const img = $('gcImg');
@@ -2632,16 +2647,7 @@ function renderGuidesForm() {
   syncBand();
   renderGuidePreview();
 }
-$('gcRevert').onclick = () => { loadGuidesForm(); $('gcMsg').textContent = 'Undone.'; };
-$('gcSave').onclick = async () => {
-  try {
-    S.app = await call('settings_update', { screenGuides: GC.g });
-    loadGuidesForm();
-    $('gcMsg').textContent = 'Saved.';
-    if (typeof themes !== 'undefined') themes.appChanged();
-    paintDetailGuides();
-  } catch (e) { $('gcMsg').textContent = e.message; }
-};
+$('gcReset').onclick = () => { GC.g = Ly.clampGuides({ left: { size: 0 }, right: { size: 0 }, curve: { offset: 0, left: 0, right: 0 } }); renderGuidesForm(); guidesChanged(); };
 // Settings > Screen fit: how many pixels the panel hides at each edge. While this section is in use the screen shows rulers
 // (fit_cal); one press of - or + moves an edge by one sent pixel (about 1.4 screen pixels), the numbers are screen pixels.
 // Leaving the section, or closing the settings, gives the screen back.
@@ -2681,7 +2687,7 @@ function renderFitRows() {
       const lim = isShift ? [-14, 14] : [0, 140]; // sent px
       FC.cur[key] = clamp(fitScreen(clamp(fitSent(FC.cur[key]) + d, lim[0], lim[1])), isShift ? -20 : 0, isShift ? 20 : 200);
       $('fitMsg').textContent = '';
-      paintFit(); fitSend();
+      paintFit(); fitSend(); fitKeep();
     };
     const minus = el('button', { type: 'button', class: 'iconbtn', 'aria-label': `${label} less`, text: '−' });
     const plus = el('button', { type: 'button', class: 'iconbtn', 'aria-label': `${label} more`, text: '+' });
@@ -2732,17 +2738,20 @@ document.querySelector('#drawer .drawer-body').addEventListener('focusin', e => 
   if ($('setFit').contains(e.target)) { if (!FC.on) { FC.on = true; fitSend(); } }
   else fitEnd();
 });
-$('fitRevert').onclick = () => { FC.cur = { ...FC.saved }; paintFit(); fitSend(); $('fitMsg').textContent = 'Undone.'; };
-$('fitSave').onclick = async () => {
+// Every press is kept: saved about 300 ms after the last one (the tuning picture on the screen carries on meanwhile).
+let fitT = 0;
+function fitKeep() { clearTimeout(fitT); fitT = setTimeout(fitPersist, 300); }
+async function fitPersist() {
+  fitT = 0;
   try {
     S.app = await call('settings_update', { screenFit: FC.cur });
     FC.saved = { ...FIT0, ...S.app.screenFit };
-    $('fitMsg').textContent = 'Saved.';
     await loadOriginals().catch(() => {});
     if (typeof themes !== 'undefined') themes.appChanged();
     refreshFitStale();
   } catch (e) { $('fitMsg').textContent = e.message; }
-};
+}
+$('fitReset').onclick = () => { FC.cur = { ...FIT0 }; paintFit(); fitSend(); fitKeep(); };
 // ---------- themes: the On screen editor and the Apply dialog ----------
 async function applyTheme(oid, name) {
   await themes.flush(); // unsaved edits first, so the base is made from the saved theme

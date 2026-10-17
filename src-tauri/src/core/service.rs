@@ -155,6 +155,9 @@ impl App {
         if fit_patch.is_some() {
             self.live.set_fit(self.settings.load().screen_fit());
         }
+        if radius.is_some() || body.get("mask").is_some() {
+            self.live.mask_changed();
+        }
         self.lib.bump();
         Ok(self.app_state())
     }

@@ -1105,3 +1105,59 @@ fn live_keeps_streaming_through_checks_edits_and_conversions_and_pauses_once_for
     assert!(log.contains("device task: send"), "the reason is logged");
     app.live.stop();
 }
+
+#[test]
+fn only_picture_inputs_make_the_stored_base_stale() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Stale rules.mp4");
+    app.theme_set(&oid, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3 }] })).unwrap();
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    let stale = |app: &App| {
+        let v = app.theme_get(&oid).unwrap();
+        assert_eq!(v["current"], json!(true));
+        v["baseStale"] == json!(true) || v["baseUnstored"] == json!(true)
+    };
+    assert!(!stale(&app), "just applied");
+
+    // live-only changes never make it stale
+    app.theme_set(&oid, &json!({ "widgets": [
+        { "id": "c", "type": "clock", "x": 0.2, "y": 0.2, "w": 0.4, "h": 0.4, "props": { "seconds": true, "style": "analog" } },
+        { "id": "s", "type": "sensor", "x": 0.5, "y": 0.5, "w": 0.2, "h": 0.2, "props": { "metric": "gpu.temp", "style": "gauge" } },
+        { "id": "m", "type": "music", "x": 0.1, "y": 0.6, "w": 0.3, "h": 0.2 } ],
+        "liveLayer": false, "handover": { "fadeIn": 2, "end": "instant", "musicIdle": "keep" }, "gap": 40, "guidesOffset": { "left": { "size": 30 } } })).unwrap();
+    assert!(!stale(&app), "widgets, live layer, hand-over, gap, guide offsets");
+    app.settings_update(&json!({ "editor": { "snap": false }, "weather": { "unit": "F" }, "screenGuides": { "left": { "size": 100 }, "right": { "size": 180 }, "curve": { "offset": 0, "left": 50, "right": 50 } } })).unwrap();
+    app.weather_set_place(&json!({ "name": "Sydney", "lat": -33.8, "lon": 151.2, "tz": "Australia/Sydney" })).unwrap();
+    assert!(!stale(&app), "snap, weather, global guides");
+    app.theme_set(&oid, &json!({ "widgets": [] })).unwrap();
+    assert!(!stale(&app), "no widgets at all");
+
+    // picture inputs do
+    app.settings_update(&json!({ "screenFit": { "top": 4, "left": 9 } })).unwrap();
+    assert!(stale(&app), "screen fit");
+    app.settings_update(&json!({ "screenFit": { "top": 0, "left": 0 } })).unwrap();
+    assert!(!stale(&app), "back to what the base was made with");
+    app.settings_update(&json!({ "screenFit": { "shiftX": 6 } })).unwrap();
+    assert!(stale(&app), "the shift");
+    app.settings_update(&json!({ "screenFit": { "shiftX": 0 } })).unwrap();
+    app.settings_update(&json!({ "cornerRadius": 60 })).unwrap();
+    assert!(stale(&app), "corner radius");
+    app.settings_update(&json!({ "cornerRadius": 0 })).unwrap();
+    assert!(!stale(&app));
+    app.theme_set(&oid, &json!({ "corners": 40 })).unwrap();
+    assert!(stale(&app), "the theme's own corner radius");
+    app.theme_set(&oid, &json!({ "corners": null })).unwrap();
+    assert!(!stale(&app));
+    let mask = app.app_state()["mask"].clone();
+    let mut m2 = mask.clone();
+    m2["band"]["px"] = json!(200);
+    app.settings_update(&json!({ "mask": m2 })).unwrap();
+    assert!(stale(&app), "the notch");
+    app.settings_update(&json!({ "mask": mask })).unwrap();
+    assert!(!stale(&app));
+    app.theme_set(&oid, &json!({ "widgets": [{ "id": "t", "type": "text", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.2, "onBase": true, "props": { "text": "Baked" } }] })).unwrap();
+    assert!(stale(&app), "an item baked into the base");
+    app.theme_set(&oid, &json!({ "widgets": [{ "id": "t", "type": "text", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.2, "onBase": false, "props": { "text": "Baked" } }] })).unwrap();
+    assert!(!stale(&app), "the same item, live only");
+}

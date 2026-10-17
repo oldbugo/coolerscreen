@@ -155,6 +155,8 @@ pub struct Shared {
     /// Screen fit (hidden edge pixels): every frame is the design canvas scaled into the visible rectangle.
     pub fit: Mutex<crate::core::fit::Fit>,
     pub fit_gen: AtomicU64,
+    /// Bumped when the app changed the notch or the corner radius: the render loop reads the mask again at once.
+    pub mask_gen: AtomicU64,
     /// Hand-over at stop: 0 = none, 1 = fade onto the loop's first frame, 2 = fade to black. Set by `stop()` while the stream runs.
     pub stop_mode: AtomicU8,
     /// The render thread has put the final hand-over frame in the slot; `hand_sent_mark` is the sent-frame count at that moment.
@@ -196,6 +198,7 @@ impl Pipeline {
             calibration_gen: AtomicU64::new(0),
             fit: Mutex::new(crate::core::fit::Fit::default()),
             fit_gen: AtomicU64::new(0),
+            mask_gen: AtomicU64::new(0),
             stop_mode: AtomicU8::new(0),
             hand_done: AtomicBool::new(false),
             hand_sent_mark: AtomicU64::new(0),
@@ -231,6 +234,7 @@ impl Pipeline {
                 let mut applied_src: Option<(PathBuf, bool, String)> = None;
                 let mut fade_in_secs = 0.8f32;
                 let mut last_mask_check = Instant::now();
+                let mut seen_mask_gen = 0u64;
                 let mut next = Instant::now();
                 let mut last_emit = Instant::now();
                 let mut force_apply = true;
@@ -355,7 +359,9 @@ impl Pipeline {
                         fade_pending = false;
                         fade_in_start = Some(Instant::now());
                     }
-                    if cfg.notch != "off" && last_mask_check.elapsed() > Duration::from_secs(3) {
+                    let mg = sh.mask_gen.load(Relaxed);
+                    if cfg.notch != "off" && (mg != seen_mask_gen || last_mask_check.elapsed() > Duration::from_secs(3)) {
+                        seen_mask_gen = mg;
                         last_mask_check = Instant::now();
                         r.set_mask(Mask::from_app_settings().with_corner_override(r.theme().theme.corners)); // picks up a notch change made in the app
                     }
@@ -625,6 +631,11 @@ impl Pipeline {
     }
 
     /// The screen fit (see core::fit); takes effect on the next frame.
+    /// The notch or the corner radius changed in the app: read the mask again at once (not on the 3 s poll).
+    pub fn mask_changed(&self) {
+        self.shared.mask_gen.fetch_add(1, Relaxed);
+    }
+
     pub fn set_fit(&self, f: crate::core::fit::Fit) {
         *self.shared.fit.lock().unwrap() = f;
         self.shared.fit_gen.fetch_add(1, Relaxed);

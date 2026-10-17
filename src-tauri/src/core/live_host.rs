@@ -388,6 +388,13 @@ impl LiveHost {
         }
     }
 
+    /// The notch or the default corner radius changed: the running picture follows at once.
+    pub fn mask_changed(&self) {
+        if let Some(p) = self.pipeline() {
+            p.mask_changed();
+        }
+    }
+
     pub fn set_user_paused(&self, paused: bool) {
         if paused {
             if self.holds.load(SeqCst) == 0 {
