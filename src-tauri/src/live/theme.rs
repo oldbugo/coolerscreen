@@ -542,11 +542,14 @@ pub struct ThemeLive {
     pub base_video: Option<PathBuf>,
     /// The original clip, used as the live background when there is no base yet.
     pub fallback_video: Option<PathBuf>,
+    /// The screen fit the base was made with (None: made before the setting existed = none). Live compares it with the current
+    /// fit and scales the base picture itself when they differ.
+    pub base_fit: Option<crate::core::fit::Fit>,
 }
 
 impl ThemeLive {
     pub fn new(theme: Theme, theme_dir: PathBuf) -> ThemeLive {
-        ThemeLive { theme, theme_dir, base_video: None, fallback_video: None }
+        ThemeLive { theme, theme_dir, base_video: None, fallback_video: None, base_fit: None }
     }
 }
 

@@ -146,6 +146,7 @@ impl App {
             .as_deref()
             .and_then(|v| self.lib.find_version(v).filter(|(_, r)| r["status"] == "ready").map(|(o, _)| (o, v.to_string())));
         tl.base_video = base.as_ref().and_then(|(_, v)| self.lib.device_path(v));
+        tl.base_fit = base.as_ref().map(|_| theme.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).map(|(_, r)| super::fit::Fit::from_value(&r["notch"]["fit"])).unwrap_or_default());
         let owner = base.map(|(o, _)| o).unwrap_or_else(|| oid.to_string());
         tl.theme.corners = Some(self.corner_radius_of(&theme) as f32); // the engine gets the radius in effect (theme or default)
         let o = self.lib.read_original(&owner);

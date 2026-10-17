@@ -251,6 +251,8 @@ pub struct Renderer {
     cal_gen: u64,
     /// Screen fit (screen px hidden at each edge). Not zero: the design canvas is scaled into the visible rectangle.
     fit: crate::core::fit::Fit,
+    /// The fit the stored base picture was made with (only meaningful while the background is the base).
+    bg_fit: crate::core::fit::Fit,
     /// Scratch pictures for the fit (made on first use): the fitted frame and the fitted widget layer.
     fit_pm: Option<Pixmap>,
     fit_layer: Option<Pixmap>,
@@ -301,6 +303,7 @@ impl Renderer {
             calib: None,
             cal_gen: 0,
             fit: crate::core::fit::Fit::default(),
+            bg_fit: crate::core::fit::Fit::default(),
             fit_pm: None,
             fit_layer: None,
             fit_rects: Vec::new(),
@@ -443,6 +446,14 @@ impl Renderer {
         }
     }
 
+    /// The fit the stored base was made with. When it differs from the current fit, the base picture is scaled here.
+    pub fn set_bg_fit(&mut self, f: crate::core::fit::Fit) {
+        if self.bg_fit != f {
+            self.bg_fit = f;
+            self.last_key = None;
+        }
+    }
+
     /// The visible rectangle on this canvas.
     fn visible(&self) -> (usize, usize, usize, usize) {
         self.fit.rect(self.cw, self.ch)
@@ -514,8 +525,9 @@ impl Renderer {
         let s = self.sensors.lock().unwrap().clone();
         let t0 = Instant::now();
         self.background(t, vframe);
-        if !self.fit.is_zero() && !self.bg_is_base {
-            self.fit_background(); // the stored base is already fitted (made that way); anything else is scaled here
+        // The stored base is already fitted the way it was made; anything else (or a base made with another fit) is scaled here.
+        if self.bg_src_fit() != self.fit {
+            self.fit_background();
         }
         self.apply_handover();
         let t1 = Instant::now();
@@ -580,15 +592,21 @@ impl Renderer {
     }
 
     /// Scale the opaque frame in `pm` into the visible rectangle (hidden strips black).
+    /// The fit the background picture has now.
+    fn bg_src_fit(&self) -> crate::core::fit::Fit {
+        if self.bg_is_base { self.bg_fit } else { crate::core::fit::Fit::default() }
+    }
+
     fn fit_background(&mut self) {
         let (cw, ch) = (self.cw, self.ch);
         let vis = self.visible();
+        let src = self.bg_src_fit().rect(cw, ch);
         let mut out = self.fit_pm.take().unwrap_or_else(|| Pixmap::new(cw as u32, ch as u32).unwrap());
         out.data_mut().fill(0);
         for p in out.data_mut().chunks_exact_mut(4) {
             p[3] = 255;
         }
-        resample_into(self.pm.data(), out.data_mut(), cw, ch, vis, vis);
+        resample_into(self.pm.data(), out.data_mut(), cw, ch, src, vis, vis);
         std::mem::swap(&mut self.pm, &mut out);
         self.fit_pm = Some(out);
     }
@@ -602,7 +620,7 @@ impl Renderer {
             for y in reg.1..reg.3 {
                 out.data_mut()[(y * cw + reg.0) * 4..(y * cw + reg.2) * 4].fill(0);
             }
-            resample_into(self.layer.data(), out.data_mut(), cw, ch, vis, reg);
+            resample_into(self.layer.data(), out.data_mut(), cw, ch, (0, 0, cw, ch), vis, reg);
         }
         self.fit_layer = Some(out);
     }
@@ -768,24 +786,25 @@ fn merge_rects(mut rects: Vec<(usize, usize, usize, usize)>) -> Vec<(usize, usiz
     }
 }
 
-/// Bilinear resample of a `cw` x `ch` picture so that it fills the rectangle `vis` of `dst` (same size); only the pixels
+/// Bilinear resample of the `content` rectangle of a `cw` x `ch` picture so that it fills the rectangle `vis` of `dst` (same size); only the pixels
 /// of `region` (inside `vis`) are written. Pixel centres map to pixel centres, the source edges are clamped.
-fn resample_into(src: &[u8], dst: &mut [u8], cw: usize, ch: usize, vis: (usize, usize, usize, usize), region: (usize, usize, usize, usize)) {
+fn resample_into(src: &[u8], dst: &mut [u8], cw: usize, _ch: usize, content: (usize, usize, usize, usize), vis: (usize, usize, usize, usize), region: (usize, usize, usize, usize)) {
     let (vx0, vy0, vx1, vy1) = vis;
-    let (kx, ky) = (cw as f32 / (vx1 - vx0) as f32, ch as f32 / (vy1 - vy0) as f32);
+    let (sx0, sy0, sx1, sy1) = content;
+    let (kx, ky) = ((sx1 - sx0) as f32 / (vx1 - vx0) as f32, (sy1 - sy0) as f32 / (vy1 - vy0) as f32);
     let (rx0, ry0, rx1, ry1) = (region.0.max(vx0), region.1.max(vy0), region.2.min(vx1), region.3.min(vy1));
     // per-column source index and weight (computed once)
     let cols: Vec<(usize, usize, u32)> = (rx0..rx1)
         .map(|x| {
-            let u = ((x as f32 + 0.5 - vx0 as f32) * kx - 0.5).clamp(0.0, (cw - 1) as f32);
+            let u = ((x as f32 + 0.5 - vx0 as f32) * kx - 0.5 + sx0 as f32).clamp(sx0 as f32, (sx1 - 1) as f32);
             let i = u.floor() as usize;
-            (i, (i + 1).min(cw - 1), ((u - i as f32) * 256.0) as u32)
+            (i, (i + 1).min(sx1 - 1), ((u - i as f32) * 256.0) as u32)
         })
         .collect();
     for y in ry0..ry1 {
-        let v = ((y as f32 + 0.5 - vy0 as f32) * ky - 0.5).clamp(0.0, (ch - 1) as f32);
+        let v = ((y as f32 + 0.5 - vy0 as f32) * ky - 0.5 + sy0 as f32).clamp(sy0 as f32, (sy1 - 1) as f32);
         let j = v.floor() as usize;
-        let (j1, wy) = ((j + 1).min(ch - 1), ((v - j as f32) * 256.0) as u32);
+        let (j1, wy) = ((j + 1).min(sy1 - 1), ((v - j as f32) * 256.0) as u32);
         let (r0, r1) = (&src[j * cw * 4..(j + 1) * cw * 4], &src[j1 * cw * 4..(j1 + 1) * cw * 4]);
         let row = &mut dst[(y * cw + rx0) * 4..(y * cw + rx1) * 4];
         for (o, &(i0, i1, wx)) in row.chunks_exact_mut(4).zip(&cols) {
@@ -1138,5 +1157,44 @@ mod tests {
         assert_ne!(px(&f, LW, x0 + 5, y0 + 5), [0, 0, 0], "the picture is inside");
         let widgets_drawn = f.chunks_exact(4).any(|p| p[0] > 120 || p[1] > 120);
         assert!(widgets_drawn, "the clock and the stats still draw (bright text on the dark picture)");
+    }
+
+    /// A stored base made before the fit existed is scaled into the visible rectangle by the engine; one made with the current fit is
+    /// shown as it is; one made with another fit is re-fitted from its own visible rectangle.
+    #[test]
+    fn a_base_made_with_another_fit_is_refitted() {
+        use crate::core::fit::Fit;
+        let f = Fit::new(4, 0, 0, 9);
+        let (black, white) = ([0u8; 3], [255u8; 3]);
+        let base = |r: &mut Renderer| r.set_bg_is_base(true);
+        // made without a fit (white everywhere): the live frame gets the black strips
+        let mut r = white_renderer(LW, LH);
+        base(&mut r);
+        r.set_fit(f);
+        let out = r.render().0.to_vec();
+        assert_eq!((px(&out, LW, 100, 2), px(&out, LW, 100, 3), px(&out, LW, 5, 400), px(&out, LW, 6, 400)), (black, white, black, white));
+        // made with exactly this fit (strips already in the picture): shown as it is
+        let mut pic = vec![255u8; LW * LH * 4];
+        let (x0, y0, ..) = f.rect(LW, LH);
+        for y in 0..LH {
+            for x in 0..LW {
+                if x < x0 || y < y0 {
+                    pic[(y * LW + x) * 4..][..3].fill(0);
+                }
+            }
+        }
+        let mut r = white_renderer(LW, LH);
+        r.set_still_background(Some(Arc::new(pic.clone())));
+        base(&mut r);
+        r.set_bg_fit(f);
+        r.set_fit(f);
+        assert_eq!(r.render().0, &pic[..]);
+        // made with the old fit, the fit now removed: the picture is stretched back over the whole panel
+        let mut r = white_renderer(LW, LH);
+        r.set_still_background(Some(Arc::new(pic)));
+        base(&mut r);
+        r.set_bg_fit(f);
+        let out = r.render().0.to_vec();
+        assert_eq!((px(&out, LW, 0, 0), px(&out, LW, 3, 1), px(&out, LW, LW - 1, LH - 1)), (white, white, white));
     }
 }

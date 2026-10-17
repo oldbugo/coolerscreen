@@ -294,6 +294,7 @@ impl Pipeline {
                             video_on = false;
                             let portrait = applied_src.as_ref().is_some_and(|k| k.1);
                             r.set_bg_is_base(portrait);
+                            r.set_bg_fit(r.theme().base_fit.unwrap_or_default());
                             // The first frame of the stored base, for the hand-over (one short ffmpeg run, off this thread).
                             let slot_first = r.first_frame_slot();
                             *slot_first.lock().unwrap() = None;
@@ -362,6 +363,10 @@ impl Pipeline {
                     };
                     let mode = sh.stop_mode.load(Relaxed);
                     let mut finishing = false;
+                    if mode == 0 && hand_start.is_some() {
+                        hand_start = None; // a pause's hand-over is over (the stop's is final)
+                        r.set_handover(None);
+                    }
                     if mode != 0 {
                         let hs = *hand_start.get_or_insert_with(Instant::now);
                         let p = (hs.elapsed().as_secs_f32() / HANDOVER_FADE_S).min(1.0);
@@ -638,6 +643,32 @@ impl Pipeline {
             self.stop_with(if mode == 2 { Ending::ScreenOff } else { Ending::LoopClip });
         } else {
             self.stop_with(if mode == 2 { Ending::ScreenOff } else { Ending::LoopClip });
+        }
+    }
+
+    /// Pause with the theme's hand-over (the user's Pause): the live layer fades out while the background goes to the stored loop's
+    /// first frame, then the stream ends (the screen plays its loop from that frame). Waits up to about 1.3 s. A theme whose
+    /// hand-over is "instant", or no open session, pauses at once. Resume starts live again (with its fade-in).
+    pub fn pause_with_handover(&self) {
+        let sh = &self.shared;
+        let fade = sh.theme.lock().unwrap().as_ref().is_none_or(|t| t.theme.handover.end != HandoverEnd::Instant);
+        if fade && sh.connected.load(Relaxed) && !sh.paused.load(Relaxed) && !sh.quit.load(Relaxed) && sh.stop_mode.load(Relaxed) == 0 {
+            sh.hand_done.store(false, Relaxed);
+            sh.stop_mode.store(1, Relaxed);
+            let t0 = Instant::now();
+            while !sh.hand_done.load(Relaxed) && t0.elapsed() < Duration::from_millis(1000) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if sh.hand_done.load(Relaxed) {
+                let mark = sh.hand_sent_mark.load(Relaxed);
+                let t1 = Instant::now();
+                while sh.stats.sent.load(Relaxed) <= mark && t1.elapsed() < Duration::from_millis(250) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            sh.paused.store(true, Relaxed); // the sender ends the stream (loop clip) when it sees this
+            sh.stop_mode.store(0, Relaxed);
+            sh.hand_done.store(false, Relaxed);
         }
     }
 

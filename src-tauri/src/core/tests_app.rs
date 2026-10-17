@@ -719,6 +719,8 @@ fn changing_the_screen_fit_makes_the_stored_base_stale() {
     assert_eq!(v["baseStale"], json!(false));
     let made = app.lib.find_version(v["baseVersionId"].as_str().unwrap()).unwrap().1;
     assert_eq!(made["notch"]["fit"], json!({ "top": 4, "right": 0, "bottom": 0, "left": 9 }), "the version records the fit it was made with");
+    let tl = app.theme_live_of(&oid, app.load_theme(&oid));
+    assert_eq!(tl.base_fit, Some(super::fit::Fit::new(4, 0, 0, 9)), "the engine is told which fit the base has");
     // back to no fit: stale again, and the first version (made without a fit) is the one that matches
     app.settings_update(&json!({ "screenFit": { "top": 0, "left": 0 } })).unwrap();
     assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(true));

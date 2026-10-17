@@ -252,6 +252,11 @@ impl LiveHost {
 
     pub fn set_user_paused(&self, paused: bool) {
         if paused {
+            if self.holds.load(SeqCst) == 0 {
+                if let Some(p) = self.pipeline() {
+                    p.pause_with_handover(); // blocks up to ~1.3 s: call from a worker thread
+                }
+            }
             self.holds.fetch_or(USER, SeqCst);
         } else {
             self.holds.fetch_and(!USER, SeqCst);
@@ -488,6 +493,76 @@ mod tests {
         assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(4, 0, 0, 9));
         h.set_fit(Fit::new(1, 2, 3, 4));
         assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(1, 2, 3, 4));
+        h.stop();
+    }
+
+    /// What the sink counters say: pause really stops the frames, resume brings them back, and the fps setting changes the rate.
+    #[test]
+    fn pause_stops_the_frames_and_fps_changes_the_rate() {
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        let mut c = Config::default();
+        c.fps = 60;
+        h.set_config_override(Some(c));
+        h.start();
+        let p = h.pipeline().expect("running");
+        // an animated background (the gradient) so every tick is a new picture
+        let sent = |p: &Arc<Pipeline>| p.shared.stats.snap().sent;
+        let rate = |p: &Arc<Pipeline>, ms: u64| {
+            let a = p.shared.stats.snap();
+            std::thread::sleep(Duration::from_millis(ms));
+            let b = p.shared.stats.snap();
+            (b.rendered - a.rendered, b.sent - a.sent)
+        };
+        std::thread::sleep(Duration::from_millis(500));
+        let (r60, s60) = rate(&p, 2000);
+        assert!(s60 > 5, "frames flow while live runs: {s60}");
+        // 30 fps: the render loop (it paces on the fps setting) runs at about half the rate
+        h.set_fps(30);
+        std::thread::sleep(Duration::from_millis(300));
+        let (r30, _) = rate(&p, 2000);
+        assert!(r30 as f64 <= r60 as f64 * 0.62 && r30 as f64 >= r60 as f64 * 0.38, "render rate follows fps: 60 -> {r60}, 30 -> {r30} frames in 2 s");
+        assert_eq!(h.fps(), 30);
+        h.set_fps(60);
+        // pause: nothing is rendered or sent any more
+        h.set_user_paused(true);
+        std::thread::sleep(Duration::from_millis(800));
+        let before = p.shared.stats.snap();
+        std::thread::sleep(Duration::from_millis(1000));
+        let after = p.shared.stats.snap();
+        assert_eq!((after.rendered, after.sent), (before.rendered, before.sent), "no frames while paused");
+        assert!(!p.session_active() && h.status()["paused"] == json!(true));
+        // resume
+        h.set_user_paused(false);
+        std::thread::sleep(Duration::from_millis(800));
+        assert!(sent(&p) > after.sent, "frames flow again after Resume");
+        h.stop();
+    }
+
+    #[test]
+    fn a_themed_pause_hands_over_before_it_stops_and_resume_starts_again() {
+        use crate::live::theme::{Theme, ThemeLive};
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_theme(ThemeLive::new(Theme::standard_preset(), std::path::PathBuf::new()));
+        h.start();
+        let p = h.pipeline().unwrap();
+        std::thread::sleep(Duration::from_millis(1200));
+        let t = Instant::now();
+        h.set_user_paused(true);
+        let took = t.elapsed();
+        assert!(took >= Duration::from_millis(300) && took < Duration::from_millis(1600), "the fade-out takes its time: {took:?}");
+        assert!(p.shared.paused.load(SeqCst));
+        assert!(!p.shared.hand_done.load(SeqCst) && p.shared.stop_mode.load(SeqCst) == 0, "the hand-over state is cleared for the next start");
+        std::thread::sleep(Duration::from_millis(500));
+        let n = p.shared.stats.snap().sent;
+        std::thread::sleep(Duration::from_millis(600));
+        assert_eq!(p.shared.stats.snap().sent, n, "nothing is sent while paused");
+        h.set_user_paused(false);
+        std::thread::sleep(Duration::from_millis(1000));
+        assert!(p.shared.stats.snap().sent > n, "Resume starts the frames again");
+        assert!(!p.shared.hand_done.load(SeqCst), "and the render loop is not stuck in the old hand-over");
         h.stop();
     }
 }

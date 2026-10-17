@@ -246,12 +246,19 @@ pub fn tray_menu_click(a: &AppHandle, id: &str) {
     match id {
         "open" => show_main(a),
         "pause" => {
-            h.set_user_paused(!h.user_paused());
-            refresh_tray(a);
+            // the fade-out hand-over takes about a second: not on the menu's thread
+            let a = a.clone();
+            std::thread::spawn(move || {
+                let h = host(&a);
+                h.set_user_paused(!h.user_paused());
+                refresh_tray(&a);
+                a.state::<Core>().0.settings_changed(); // the Settings page follows
+            });
         }
         "f30" | "f60" => {
             h.set_fps(if id == "f30" { 30 } else { 60 });
             refresh_tray(a);
+            a.state::<Core>().0.settings_changed();
         }
         "quit" => quit_app(a),
         _ => {}
@@ -271,6 +278,9 @@ pub fn tray_state() -> String {
 pub fn refresh_tray(_app: &AppHandle) {
     let h = host(_app);
     let (paused, fps) = (h.user_paused(), h.fps());
+    if let Some(t) = _app.tray_by_id(TRAY_ID) {
+        let _ = t.set_tooltip(Some(if paused { "CoolerScreen live: paused (the screen plays its own loop)".to_string() } else { format!("CoolerScreen live: {fps} fps") }));
+    }
     if let Some(t) = TRAY.lock().unwrap().as_ref() {
         let _ = t.pause.set_text(if paused { "Resume live" } else { PAUSE_TEXT });
         let _ = t.f30.set_checked(fps < 45);

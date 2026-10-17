@@ -551,3 +551,59 @@ mod fit_tests {
         assert_eq!(super::super::core_engine::parse_mask(&serde_json::json!({ "mode": "off" })).fit, [0; 4]);
     }
 }
+
+#[cfg(test)]
+mod fit_ffmpeg_tests {
+    use super::*;
+
+    /// A real conversion of a plain white clip with the fit 4/0/0/9: in the stored portrait frame (landscape rotated clockwise,
+    /// landscape (x, y) -> row x, column 1079 - y) the first 4 landscape rows are black and so are the first 9 landscape columns.
+    #[test]
+    fn a_real_conversion_puts_the_hidden_strips_at_the_top_and_left_as_the_user_sees_the_screen() {
+        let ff = crate::media::ffmpeg::locate();
+        if !ff.exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (jpg, raw) = (dir.path().join("f.jpg"), dir.path().join("f.raw"));
+        let mut m = Mask::band(Edge::Left, 96.0);
+        m.fit = [4, 0, 0, 9];
+        let b = Base { start: 0.0, length: 1.0, blend: 0.0, fps: 18, src_fps: None, is_image: false, frame: Frame::default(), detail: 0.0, canvas: (W, H), flags: LANCZOS.into(), head: String::new() };
+        let g = device_graph(&b, &m, false);
+        let ok = |o: std::process::Output| o.status.success();
+        let made = std::process::Command::new(&ff)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=white:s=640x360:d=1:r=18", "-filter_complex", &g, "-map", "[out]", "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "2"])
+            .arg(&jpg)
+            .output()
+            .unwrap();
+        assert!(ok(made), "conversion failed");
+        let dec = std::process::Command::new(&ff).args(["-v", "error", "-y", "-i"]).arg(&jpg).args(["-f", "rawvideo", "-pix_fmt", "gray"]).arg(&raw).output().unwrap();
+        assert!(ok(dec));
+        let d = std::fs::read(&raw).unwrap();
+        assert_eq!(d.len(), 1080 * 2400);
+        let at = |row: usize, col: usize| d[row * 1080 + col];
+        // the notch band (96 px) covers landscape columns 0..96, so look at a row below it: landscape x = 500
+        for (col, want_black) in [(1079usize, true), (1076, true), (1075, false), (1000, false)] {
+            let v = at(500, col);
+            assert_eq!(v < 40, want_black, "landscape row {} (portrait column {col}) = {v}", 1079 - col);
+        }
+        // landscape columns: the notch band hides x < 96 anyway, so check the fit on the right side of the band with a no-notch run
+        let mut m2 = Mask::default();
+        m2.fit = [4, 0, 0, 9];
+        let g2 = device_graph(&b, &m2, false);
+        let made = std::process::Command::new(&ff)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "color=white:s=640x360:d=1:r=18", "-filter_complex", &g2, "-map", "[out]", "-frames:v", "1", "-c:v", "mjpeg", "-q:v", "2"])
+            .arg(&jpg)
+            .output()
+            .unwrap();
+        assert!(ok(made));
+        let dec = std::process::Command::new(&ff).args(["-v", "error", "-y", "-i"]).arg(&jpg).args(["-f", "rawvideo", "-pix_fmt", "gray"]).arg(&raw).output().unwrap();
+        assert!(ok(dec));
+        let d = std::fs::read(&raw).unwrap();
+        let at = |row: usize, col: usize| d[row * 1080 + col];
+        for (row, want_black) in [(0usize, true), (8, true), (9, false), (500, false)] {
+            let v = at(row, 500);
+            assert_eq!(v < 40, want_black, "landscape column {row} = {v}");
+        }
+    }
+}
