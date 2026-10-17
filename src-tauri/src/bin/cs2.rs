@@ -39,7 +39,9 @@ fn main() {
                 let t0 = Instant::now();
                 let mut last_pct = -1i64;
                 let mut stream_t0: Option<Instant> = None;
-                let r = ops::send_files(&[(file.clone(), slot)], slot == Slot::Standby, &mut |p, text, a, b| {
+                // the loop file on the screen now, when the app's record of it is complete (its space is released by the new one)
+                let known = cs_core::core::settings::SettingsStore::new(cs_core::core::paths::settings()).load().slot("standby").filter(|s| s["incomplete"] != true).and_then(|s| s["size"].as_u64());
+                let r = ops::send_files_with(&[(file.clone(), slot)], slot == Slot::Standby, known, &mut |p, text, a, b| {
                     if b > 0 {
                         let st = *stream_t0.get_or_insert_with(Instant::now);
                         let pct = (a * 100 / b) as i64;

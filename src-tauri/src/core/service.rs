@@ -672,7 +672,8 @@ impl App {
         let mut loop_started = false;
         let intro_first = items[0].1 == Slot::Startup;
         let mut sent = 0u64;
-        let r = self.device.send_files(&items, true, &mut |frac, msg, a, b| {
+        let known_loop = self.settings.load().slot("standby").filter(|s| !truthy(s.get("incomplete"))).and_then(|s| s["size"].as_u64());
+        let r = self.device.send_files_with(&items, true, known_loop, &mut |frac, msg, a, b| {
             if frac > (n as f64 - 1.0) / (n as f64 + 0.1) {
                 loop_started = true;
             }

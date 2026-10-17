@@ -166,12 +166,39 @@ pub fn loop_limit(info: &Value, intro_bytes: u64) -> Option<u64> {
     (usable > intro_bytes as f64).then(|| (usable - intro_bytes as f64) as u64)
 }
 
+/// Room for a new loop file from the screen's real state: the free bytes now plus the loop file it will replace (only when that
+/// size is known for sure, else nothing), less a 256 KB margin. Without a free-block count: the flash-based `loop_limit`.
+pub fn loop_room(info: &Value, known_loop: Option<u64>, intro_bytes: u64) -> Option<u64> {
+    let d = info.get("data").filter(|d| d.is_object()).unwrap_or(info);
+    match d.get("i_block_free").and_then(Value::as_f64) {
+        Some(free) => {
+            let bs = d.get("i_block_size").and_then(Value::as_f64).unwrap_or(512.0);
+            Some(((free * bs) as u64 + known_loop.unwrap_or(0)).saturating_sub(LOOP_MARGIN))
+        }
+        None => loop_limit(info, intro_bytes),
+    }
+}
+
+/// Kept free when a loop file is stored (the screen stores some bookkeeping of its own).
+pub const LOOP_MARGIN: u64 = 256_000;
+
 /// items uploaded one after another; with play_loop the send ends with a restart (0x01) and a final check
 /// (hardware 2026-10-11: after 0x14 the screen later stopped answering; after a restart it stayed responsive).
 /// progress(0..1 overall, text, bytes sent of current file, file size)
 pub fn send_files(
     items: &[(std::path::PathBuf, Slot)],
     play_loop: bool,
+    progress: &mut dyn FnMut(f64, &str, u64, u64),
+) -> Result<SendResult, DevErr> {
+    send_files_with(items, play_loop, None, progress)
+}
+
+/// `known_loop`: the size of the loop file the screen holds now, when that is certain (the slot record, not flagged incomplete).
+/// The new loop file may use the free space plus that much (the old file is replaced), less a margin.
+pub fn send_files_with(
+    items: &[(std::path::PathBuf, Slot)],
+    play_loop: bool,
+    known_loop: Option<u64>,
     progress: &mut dyn FnMut(f64, &str, u64, u64),
 ) -> Result<SendResult, DevErr> {
     // Read and check every file before touching the screen.
@@ -197,7 +224,7 @@ pub fn send_files(
         if slot == Slot::Standby {
             if let Ok(info) = s.info() {
                 let other = items.iter().position(|(_, sl)| *sl == Slot::Startup).map(|k| datas[k].len() as u64).unwrap_or(560_000);
-                if let Some(max) = loop_limit(&info, other) {
+                if let Some(max) = loop_room(&info, known_loop, other) {
                     if datas[i].len() as u64 > max {
                         s.close();
                         return Err(DevErr::coded("noRoom", format!("This file is {:.2} MB but the screen can store at most about {:.2} MB for the loop clip. Nothing was written.", datas[i].len() as f64 / 1e6, max as f64 / 1e6)));
@@ -289,6 +316,23 @@ mod guard_tests {
         assert!(10_662_507 <= max, "the known good version fits: {max}");
         assert!(12_855_458 > max, "the version that filled the flash does not: {max}");
         assert!(loop_limit(&json!({ "data": {} }), 537_054).is_none());
+    }
+
+    #[test]
+    fn the_room_for_a_loop_file_is_what_the_screen_has_free_plus_the_file_it_replaces() {
+        // hardware 2026-10-17: 792 blocks free with the 10,662,507 byte loop file and the intro on the screen
+        let info = json!({ "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 792 } });
+        let room = loop_room(&info, Some(10_662_507), 537_054).unwrap();
+        assert_eq!(room, 792 * 512 + 10_662_507 - LOOP_MARGIN);
+        assert!(10_662_507 <= room, "replacing the loop with the same file fits");
+        assert!(11_000_000 > room, "11.0 MB does not");
+        // the size of the current file is not known for sure (incomplete record): nothing is counted back
+        assert_eq!(loop_room(&info, None, 537_054).unwrap(), 792 * 512 - LOOP_MARGIN);
+        // a full flash: nothing fits
+        let full = json!({ "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 0 } });
+        assert_eq!(loop_room(&full, None, 537_054), Some(0));
+        // no free count: the flash estimate
+        assert_eq!(loop_room(&json!({ "data": { "i_blocks": 24520, "i_block_size": 512 } }), None, 537_054), loop_limit(&json!({ "data": { "i_blocks": 24520, "i_block_size": 512 } }), 537_054));
     }
 
     #[test]

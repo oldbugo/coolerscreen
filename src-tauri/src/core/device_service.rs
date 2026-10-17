@@ -242,6 +242,11 @@ impl DeviceService {
     /// Upload files one after another; with `play_loop` the send ends with a restart (warning, not failure, if
     /// that restart fails). MJPEG guard enforced in the device layer (and here for fake mode).
     pub fn send_files(&self, items: &[(PathBuf, Slot)], play_loop: bool, progress: SendProgress) -> CoreResult<Value> {
+        self.send_files_with(items, play_loop, None, progress)
+    }
+
+    /// `known_loop`: the size of the loop file on the screen now, when certain (see `ops::send_files_with`).
+    pub fn send_files_with(&self, items: &[(PathBuf, Slot)], play_loop: bool, known_loop: Option<u64>, progress: SendProgress) -> CoreResult<Value> {
         for (f, _) in items {
             let d = std::fs::read(f).map_err(|e| CoreError::new(format!("Cannot read {}: {e}", f.display())))?;
             if !device::mjpeg::is_mjpeg_mp4(&d) {
@@ -249,7 +254,7 @@ impl DeviceService {
             }
         }
         if self.fake.is_none() {
-            let r = ops::send_files(items, play_loop, progress).map_err(CoreError::from)?;
+            let r = ops::send_files_with(items, play_loop, known_loop, progress).map_err(CoreError::from)?;
             let mut v = serde_json::to_value(&r).unwrap_or(json!({}));
             if r.transport == "serial" {
                 v["serialWarning"] = json!(SERIAL_WARNING);

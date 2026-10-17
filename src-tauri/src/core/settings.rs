@@ -457,9 +457,10 @@ pub const UNKNOWN_OTHER: f64 = 1.8e6;
 pub const SAFETY: f64 = 160_000.0;
 /// Splash size before it has been made once (measured: about 0.54 MB).
 pub const SPLASH_EST: f64 = 560_000.0;
-/// The most both clips together can occupy on the SC70 (hardware 2026-10-17: 24520 x 512 B flash, 11.6 MB measured in use).
-/// A measured capacity above this cannot be true (a failed upload once recorded 13.4 MB) and is not used.
-pub const MAX_CAPACITY: f64 = 11_700_000.0;
+/// The most both clips together may be counted as occupying on the SC70. Measured 2026-10-17: 11,605,065 bytes in use with
+/// 405,504 free (a loop budget of 10,908,539); /data also holds ota.cpio (~0.68 MB). Kept a little under that so the loop budget
+/// is about 10.85 MB. A measurement above it (a failed upload once recorded 13.4 MB) is cut down to it.
+pub const MAX_CAPACITY: f64 = 11_550_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Budgets {
@@ -508,10 +509,7 @@ pub fn capacity_from(info: &Value, s: &Settings) -> Option<f64> {
     if blocks.is_finite() && blocks > 0.0 && cap > blocks * bs {
         return None;
     }
-    if cap > MAX_CAPACITY {
-        return None;
-    }
-    Some(cap)
+    Some(cap.min(MAX_CAPACITY))
 }
 
 pub fn is_blank(slot: &Value) -> bool {
@@ -594,7 +592,7 @@ mod tests {
         let s = st.load();
         assert_eq!(s.slot("standby").unwrap()["versionId"], json!("abcdefgh1"));
         let cap = capacity_from(&json!({ "i_block_free": 4480, "i_block_size": 512 }), &s).unwrap();
-        assert_eq!(cap, 4480.0 * 512.0 + 540_000.0 + 8_774_966.0);
+        assert_eq!(cap, (4480.0 * 512.0 + 540_000.0 + 8_774_966.0f64).min(MAX_CAPACITY));
         let real = json!({ "cmd": "info", "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 4480 }, "_transport": "winusb" });
         assert_eq!(capacity_from(&real, &s), Some(cap), "real replies nest the fields under data");
         st.patch_slot("standby", &json!({ "incomplete": true })).unwrap();

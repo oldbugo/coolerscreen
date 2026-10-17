@@ -961,9 +961,12 @@ fn an_inflated_capacity_is_not_trusted() {
     // a record from before (13.39 MB) is capped when the budget is worked out
     app.settings.update(|s| s["capacity"] = json!({ "bytes": 13_392_512, "at": "x" })).unwrap();
     let b = budgets(&app.settings.load(), Some(537_054));
-    assert!(b.total <= MAX_CAPACITY && b.loop_bytes < 11_100_000.0, "budget {:?}", b);
+    assert!(b.total <= MAX_CAPACITY && b.loop_bytes < 10_900_000.0 && b.loop_bytes > 10_800_000.0, "budget {:?}", b);
+    // the startup repair replaces the record, and says so
+    app.repair_library_with(true, &|_| Ok(()));
+    assert_eq!(app.settings.load().capacity().unwrap().0, MAX_CAPACITY, "the inflated record is replaced by the conservative value");
     // a true measurement still works (hardware: 792 free blocks, 10.66 MB loop + 0.54 MB intro = 11.6 MB)
     app.settings.update(|s| s["slots"]["standby"] = json!({ "name": "x", "size": 10_662_507, "at": "t" })).unwrap();
     let ok = json!({ "data": { "i_blocks": 24520, "i_block_size": 512, "i_block_free": 792 } });
-    assert_eq!(capacity_from(&ok, &app.settings.load()), Some(792.0 * 512.0 + 537_054.0 + 10_662_507.0));
+    assert_eq!(capacity_from(&ok, &app.settings.load()), Some(MAX_CAPACITY), "the true 11,605,065 is counted as the conservative value");
 }

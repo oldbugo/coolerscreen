@@ -280,6 +280,14 @@ impl App {
         let _g = REPAIR_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let duplicates = self.repair_duplicates_with(apply, discard);
         let bases = self.repair_theme_bases(apply);
+        // a capacity record above what the screen can really hold (a failed upload recorded 13.39 MB) becomes the conservative value
+        let cap = self.settings.load().capacity();
+        if let Some((bytes, _)) = cap.filter(|(b, _)| *b > super::settings::MAX_CAPACITY) {
+            if apply {
+                let _ = self.settings.update(|s| s["capacity"] = json!({ "bytes": js::num(super::settings::MAX_CAPACITY), "at": js::iso_now() }));
+                crate::device::log(&format!("Library repair: capacity record {bytes} bytes was more than the screen can hold; now {}", super::settings::MAX_CAPACITY));
+            }
+        }
         if apply {
             // always one line, so device.log shows that the check ran
             crate::device::log(&format!("Library repair: checked the library ({} duplicate group(s), {} theme base(s) fixed)", duplicates.len(), bases.len()));
