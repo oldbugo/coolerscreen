@@ -5,6 +5,11 @@ original 3.0 brief are in `2026-10-12-v2-release-and-v3.md`; the theme contract 
 
 ## Where 3.0 ended
 
+**Final 3.0 = 3.0.3 (tag v3.0.3).** User, 2026-10-18: "this is the actual end of version 3". After 3.0.0 came: Use this
+theme vs Embedded (3.0.1), quiet installs and tests (3.0.2), live-fit and theme-corner fixes (3.0.3). The user said the
+result "looks and work[s] pretty good". User flows are kept in the vault page Projects/CoolerScreen user flows (standing
+rule: record flows whenever they are discussed).
+
 - **Shape:** the 2.0 app (Tauri 2, system WebView2, Rust core, ffmpeg) plus a live engine in `src-tauri/src/live/`.
   One version only, on `main`; v2.0.0 (tag) is the fallback. Everything on the screen is a **theme**: a stored **base**
   loop plus an optional **live layer** (widgets drawn by the engine over the base). Pages: On screen (editor), My themes,

@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.3 - 2026-10-18 (final 3.0)
+
+- **Embedded:** the picture stored on the screen is now called **Embedded** everywhere. A theme's background before it is
+  stored is its **Picture**.
+- **Use this theme:** choosing a theme in My themes switches the live picture at once and leaves Embedded alone;
+  **Store as Embedded** is separate. With Live off the one button is **Use and store as Embedded**. Cards show **Live**
+  and **Embedded**; the editor follows the live theme and says "Embedded: …" when they differ, or "Live is off" when it
+  is off. A live theme that differs from Embedded hands over instantly when live stops.
+- **Fixes from the user-flows audit:** a stray "null" in the My themes bar, leftover Save wording, About text, shorter
+  texts, toasts at the top, wider editor preview, Browse empty state.
+- **Quiet installs and tests:** `--background` start (tray if Live is on, otherwise no window, never takes focus); test
+  copies run hidden (`COOLERSCREEN_TEST_QUIET=1`), so nothing interrupts a fullscreen app.
+- **Fixed:** after a background start the live picture ignored the screen fit (corners looked cut off); changing a
+  theme's corner radius changed the global default.
+
 ## 3.0.0 - 2026-10-18
 
 CoolerScreen now draws on the screen while it runs, if you want it to. The 2.0 behaviour is still the default: nothing
