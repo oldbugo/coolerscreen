@@ -251,7 +251,7 @@ pub fn spawn(app: AppHandle, o: Opts) {
             match v.as_str() {
                 "visible" => {
                     if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.show();
+                        crate::window::present(&w, crate::window::Present::Normal);
                     }
                 }
                 "hidden" => {

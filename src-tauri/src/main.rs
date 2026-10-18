@@ -21,6 +21,9 @@ fn main() {
     let measure = live_measure::parse(&args);
     // `--tray` (the Windows start-up entry): no window, live on, icon in the tray.
     let tray_only = args.iter().any(|a| a == cs_core::core::autostart::TRAY_FLAG);
+    // `--background`: start without showing or activating anything (a quiet restart after an install). Live on: tray only, as
+    // set in Settings. Live off: the window is built minimised without activation (so it stays visible and easy to quit).
+    let background = args.iter().any(|a| a == "--background");
     if let Some(m) = &measure {
         // Measuring without the screen must not touch USB at all (the page checks the screen when it starts).
         if m.no_device && std::env::var_os("COOLERSCREEN_FAKE_DEVICE").is_none() {
@@ -34,7 +37,12 @@ fn main() {
     // One CoolerScreen at a time, unless COOLERSCREEN_MULTI is set (UI tests next to the installed app, with a temp COOLERSCREEN_HOME).
     // (The override only works in debug builds: an installed build always focuses the running one.)
     if !(cfg!(debug_assertions) && std::env::var_os("COOLERSCREEN_MULTI").is_some()) {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| live_app::show_main(app)));
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // a second launch brings the window up, except a quiet `--background` restart
+            if !args.iter().any(|a| a == "--background") {
+                live_app::show_main(app);
+            }
+        }));
     }
     let app = builder
         .manage(Core(core.clone()))
@@ -104,7 +112,13 @@ fn main() {
             if let Ok(res) = app.path().resource_dir() {
                 app.state::<Core>().0.device.set_scripts_dir(res.join("scripts"));
             }
-            if !tray_only {
+            if background && !tray_only {
+                if app.state::<Core>().0.settings.load().live_in_app() {
+                    // tray only: the window is built when the user opens it
+                } else {
+                    live_app::create_window_as(app.handle(), Some(window::Present::MinimizedNoActivate))?;
+                }
+            } else if !tray_only {
                 live_app::create_window(app.handle(), true)?;
             }
             let c = app.state::<Core>().0.clone();
@@ -128,7 +142,7 @@ fn main() {
                 live_measure::spawn(app.handle().clone(), o);
             } else if tray_only || c.settings.load().live_in_app() {
                 // Started in the tray without a window the library start-up work waits for the first window; the repairs do not.
-                if tray_only {
+                if tray_only || background {
                     let c2 = c.clone();
                     std::thread::spawn(move || {
                         c2.repair_library();

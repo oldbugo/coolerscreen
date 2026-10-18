@@ -37,6 +37,62 @@ pub fn clear_force_close() {
     FORCE_CLOSE.store(false, Ordering::SeqCst);
 }
 
+/// `COOLERSCREEN_TEST_QUIET=1`: test/development instances never intrude on the user's desktop. The window is created without
+/// focus, off-screen, out of the taskbar and never activated or brought to the front (WebView2 still renders, so the page can
+/// be driven over the debug port). Its position is not remembered.
+pub fn quiet() -> bool {
+    std::env::var("COOLERSCREEN_TEST_QUIET").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
+/// How a window is put on the screen: normally (shown and focused), minimised without activation (`--background` with Live off),
+/// or quietly (test instances: off-screen, never activated).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Present {
+    Normal,
+    MinimizedNoActivate,
+}
+
+/// Show the window. Quiet mode always wins: no activation, no taskbar button, off-screen.
+pub fn present(win: &WebviewWindow, how: Present) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::*;
+        let hwnd = win.hwnd().map(|h| h.0 as *mut core::ffi::c_void);
+        if quiet() {
+            if let Ok(h) = hwnd {
+                unsafe {
+                    let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+                    SetWindowLongPtrW(h, GWL_EXSTYLE, ex | (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) as isize);
+                    SetWindowPos(h, std::ptr::null_mut(), -32000, -32000, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    ShowWindow(h, SW_SHOWNOACTIVATE);
+                }
+                return;
+            }
+        }
+        if how == Present::MinimizedNoActivate {
+            if let Ok(h) = hwnd {
+                unsafe {
+                    ShowWindow(h, SW_SHOWMINNOACTIVE);
+                }
+                return;
+            }
+        }
+    }
+    if quiet() {
+        let _ = win.set_position(tauri::PhysicalPosition::new(-32000, -32000));
+        let _ = win.show();
+        return;
+    }
+    if how == Present::MinimizedNoActivate {
+        let _ = win.minimize();
+        let _ = win.show();
+        return;
+    }
+    let _ = win.unminimize();
+    let _ = win.show();
+    let _ = win.set_focus();
+}
+
 /// Builds the main window (hidden; the caller shows it). The caller adds its own `CloseRequested` guard.
 pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let saved = load_saved(app);
@@ -49,7 +105,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .background_color(tauri::webview::Color(BG.0, BG.1, BG.2, 255))
         .disable_drag_drop_handler() // HTML5 drop reaches the page, as in Electron
         .visible(false)
+        .focused(false)
+        .skip_taskbar(quiet())
         .build()?;
+    let saved = if quiet() { None } else { saved }; // test instances neither restore nor remember a position
     #[cfg(windows)]
     if let Some(s) = saved {
         // Same logical size on the monitor the window lands on (scale may differ from when it was saved).
@@ -150,7 +209,7 @@ fn write_atomic(path: &std::path::Path, text: &str) {
 }
 
 fn remember(win: &WebviewWindow, force: bool) {
-    if win.is_minimized().unwrap_or(false) {
+    if quiet() || win.is_minimized().unwrap_or(false) {
         return;
     }
     let maximized = win.is_maximized().unwrap_or(false);

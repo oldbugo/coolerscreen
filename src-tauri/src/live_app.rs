@@ -85,11 +85,16 @@ fn ensure_startup(app: &AppHandle) {
 
 /// Build the main window (hidden), add the close handler and show it.
 pub fn create_window(app: &AppHandle, show: bool) -> tauri::Result<WebviewWindow> {
+    create_window_as(app, show.then_some(crate::window::Present::Normal))
+}
+
+/// As `create_window`, with how it is shown (None: built hidden).
+pub fn create_window_as(app: &AppHandle, how: Option<crate::window::Present>) -> tauri::Result<WebviewWindow> {
     ensure_startup(app);
     let win = crate::window::create(app)?;
     attach_close_handler(&win);
-    if show {
-        win.show()?;
+    if let Some(h) = how {
+        crate::window::present(&win, h);
     }
     Ok(win)
 }
@@ -97,16 +102,12 @@ pub fn create_window(app: &AppHandle, show: bool) -> tauri::Result<WebviewWindow
 /// Bring the window up (build it again if it was destroyed). Safe from any thread.
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.unminimize();
-        let _ = w.show();
-        let _ = w.set_focus();
+        crate::window::present(&w, crate::window::Present::Normal);
         return;
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        if let Ok(w) = create_window(&app, true) {
-            let _ = w.set_focus();
-        }
+        let _ = create_window(&app, true);
     });
 }
 

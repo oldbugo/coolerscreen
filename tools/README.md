@@ -47,3 +47,18 @@ README under "For developers" and in `docs/roadmap/phase0-results.md`.
 | `cs-companion.exe --help` | Prototype A / measuring tool for the live engine (`--measure`, `--dry-run`, `--theme-of`, `--dump-frames`). |
 
 The double-click launchers `test-live.cmd` and `tune-edges.cmd` were removed in 3.0 (the app covers both).
+
+## UI testing: always set COOLERSCREEN_TEST_QUIET=1
+
+Every test or development run of the app (fake device, WebView2 debug port, helpers) must set `COOLERSCREEN_TEST_QUIET=1`
+(any build). The window is then created without focus, out of the taskbar, positioned off-screen (-32000,-32000) and never
+activated or brought to the front (also not by the tray or a second launch); its position is not remembered. WebView2 still
+renders, so driving it over the debug port (and `Page.captureScreenshot`) works. Without it a test window can steal focus
+from the user's full-screen application. Also set `COOLERSCREEN_HOME`, `COOLERSCREEN_GALLERY`, `COOLERSCREEN_FAKE_DEVICE=winusb`,
+`COOLERSCREEN_MULTI=1` (debug builds) and a separate `WEBVIEW2_USER_DATA_FOLDER`.
+
+## Quiet restart of the installed app: `--background`
+
+`CoolerScreen.exe --background` starts without showing or activating anything: Live on (Settings) = tray only; Live off =
+the window is built minimised without activation (taskbar button, easy to quit). A second launch from the Start menu still
+brings the window up as usual, except a second `--background` launch, which does nothing.
