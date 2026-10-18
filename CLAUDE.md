@@ -34,5 +34,9 @@
   (not base/stored loop/normal clip/screen copy). With Live off, "Use this theme" becomes "Use and store as Embedded"
   (one action). When the live theme differs from the Embedded one and live stops: switch instantly (no fade). The On
   screen editor follows the LIVE theme (shows "Embedded: X" with a store action when they differ).
+- 2026-10-18: Testing and development must never intrude on the user's fullscreen apps (e.g. project Nocturne): no
+  test window may appear, take focus or go fullscreen on the user's desktop — test app instances run hidden/offscreen
+  without focus (COOLERSCREEN_TEST_QUIET=1), and after installing a build, CoolerScreen is restarted quietly (tray or
+  minimised without activation), never brought to the front.
 
 Start-of-work reading: `docs/roadmap/2026-10-12-v2-release-and-v3.md` (2.0 state and the 3.0 brief).
