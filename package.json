@@ -1,6 +1,6 @@
 {
   "name": "coolerscreen",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "private": true,
   "description": "Unofficial open-source tool to put your own videos/GIFs/images on the Lovingcool SC70 AIO cooler USB screen",
   "scripts": {
