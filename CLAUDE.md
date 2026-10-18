@@ -38,5 +38,9 @@
   test window may appear, take focus or go fullscreen on the user's desktop — test app instances run hidden/offscreen
   without focus (COOLERSCREEN_TEST_QUIET=1), and after installing a build, CoolerScreen is restarted quietly (tray or
   minimised without activation), never brought to the front.
+- 2026-10-18: Every milestone gets its own version, numbered in the order it lands on `main` (4.0.0, 4.1.0, 4.2.0, ...;
+  fixes 4.2.1), each with a tag, changelog entry, build and install ("we don't have those micro versions ... let's
+  ensure we do that"). 4.0 is run by a PM session with worker sessions: see `docs/v4/plan.md`.
 
-Start-of-work reading: `docs/roadmap/2026-10-12-v2-release-and-v3.md` (2.0 state and the 3.0 brief).
+Start-of-work reading: `docs/v4/plan.md` (4.0 plan and session rules), `docs/roadmap/2026-10-18-v3-release-and-v4.md`
+(3.0 state and the 4.0 brief).

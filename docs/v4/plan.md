@@ -1,0 +1,78 @@
+# CoolerScreen 4.0 plan (shared by every 4.0 session)
+
+Written 2026-10-18 by the 4.0 PM session. Approved by the user the same day ("Go ahead with the plan as written,
+including the landing-order version numbers"). Every worker session reads this file, the repo `CLAUDE.md` standing list
+and `docs/roadmap/2026-10-18-v3-release-and-v4.md` before starting.
+
+## Scope (user's priorities, 2026-10-18)
+
+1. **Live effects** (top): backgrounds drawn live, "similar to Wallpaper Engine where it's not the actual video itself".
+2. **More widgets** (top): 3.0's widgets are "very lacking ... all the regular ones".
+3. **Small improvements** ("that's nice, implement that"): FPS counter, "screen changed outside the app" check, known
+   gaps from the 3.0 wrap-up.
+4. **UI audit and revision**: the UX (flows, behaviour) is good and stays; the UI (visual design) is "quite a bit of a
+   mess". Audit it, then revise it.
+
+Backlog (not now): theme sharing, calibration for other users, GitHub packaging and signing.
+
+## Sessions
+
+| Stream | Session | Owns |
+|---|---|---|
+| A | Live effects | effect renderer, effect backgrounds in themes, recording the Embedded loop from an effect |
+| B | More widgets | new widget kinds (engine drawing + editor controls + data sources) |
+| C | Small improvements | FPS counter, changed-outside check, flaky tests, dirty "+" hash, countdown DST, GPU power dash |
+| D | UI audit, then revision | `docs/v4/ui-audit.md`, `docs/v4/ui-style-guide.md`; later the restyle of `public/` |
+| E | Contingency | idle until the PM assigns stuck or broken work |
+| PM | this session | plan, merges into `main`, versions, changelog, builds, installs, device checks, morning report |
+
+D's revision of `public/` starts only after A and B have landed their first milestones (the PM says when). Until then A
+and B follow `docs/v4/ui-style-guide.md` for any new UI as soon as it exists (the PM tells them).
+
+## Rules for worker sessions
+
+- **Work on your own branch** (your worktree). Commit in small focused commits. Never commit to `main`, never push,
+  never merge other branches yourself; the PM merges. When the PM says `main` moved, merge `main` into your branch.
+- **Never touch the real screen.** Only the PM talks to the device and installs builds. Never run `cs2` against the
+  device, never close or restart the user's running CoolerScreen.
+- **Test app instances** run with all of: `COOLERSCREEN_FAKE_DEVICE=1`, `COOLERSCREEN_MULTI=1`,
+  `COOLERSCREEN_HOME=<a folder in your scratchpad>`, `COOLERSCREEN_TEST_QUIET=1`. Nothing may appear on, focus or go
+  fullscreen on the user's desktop. `COOLERSCREEN_DUMP_FRAMES` writes live frames to disk for checking pictures.
+- **Builds:** use your own `CARGO_TARGET_DIR` (e.g. `%TEMP%\cs-target-<stream>`). Tests:
+  `cargo test --release --lib -- --test-threads=4` under a timeout. Run long builds in the background.
+- **Do not edit:** `CHANGELOG.md`, the version in `Cargo.toml` / `tauri.conf.json` / `package.json`, `CLAUDE.md`,
+  this plan. Write your release notes and verification evidence in `docs/v4/notes/<stream>.md` (A-effects.md,
+  B-widgets.md, C-improvements.md, D-ui.md); the PM turns them into the changelog.
+- **Theme contract** (`docs/v3/theme-format.md`): add your own clearly headed section; do not renumber. The PM assigns
+  the contract version at merge. Old themes must load and look exactly as before.
+- **Prefer new files** over growing shared ones (`public/app.js`, `public/style.css`, `src-tauri/src/live/render.rs`,
+  `theme.rs`): put new code in new modules and keep edits to shared files small hooks, so merges stay clean.
+- **Standing rules** (from CLAUDE.md): defaults behave like 3.0 (nothing new turns on by itself); every option is a
+  setting; no Save buttons (changes apply and save at once); the stored picture is called "Embedded"; never upload
+  non-MJPEG to clip slots; never send 0x05, 0x0C or 0x23; nothing hidden in the background.
+- **Device facts** you must design for: live frames portrait 756x1680, JPEG 4:2:0, keep re-sending; motion along the
+  landscape vertical axis tears (move sideways or fade); large numbers (48 px+ on the 2400 canvas); flash ~11 MB total.
+- **Milestones:** when a milestone is done (built, tests pass, checked with a quiet test instance, notes written), end
+  your turn with a report that starts `MILESTONE READY: <stream> <short name>` and gives the branch, commit, what it
+  does, how you verified it and what is not verified. Then wait for the PM. Also report `BLOCKED:` with the question
+  if you cannot continue; the user is asleep overnight, so make a sensible choice, record it in your notes, and only
+  block on things that are truly unsafe.
+
+## Versions (user, 2026-10-18)
+
+Each milestone gets its own version in the order it lands on `main`: the first is 4.0.0, then 4.1.0, 4.2.0, ...;
+fixes get a patch number (4.2.1). Every version gets a tag `vX.Y.Z`, a changelog entry naming its stream, a build and an
+install. Only the PM sets versions.
+
+## Milestones (initial; the PM may reorder)
+
+- **C1** FPS counter + quick fixes (flaky tests, dirty hash, countdown DST, GPU power dash).
+- **C2** "Screen changed outside the app" check (read-only device queries only; PM verifies on hardware).
+- **A1** Effect renderer in the engine with 3 or more generated effects as theme backgrounds, editor controls, CPU
+  measured against the budget (live total about 5% of the PC's CPU or less with an effect; heavier ones off by default).
+- **A2** Embedded face for effect themes: record a seamless loop of the effect as the stored clip (MJPEG only).
+- **A3** More effects / web or scene import (only if A1 and A2 are solid).
+- **B1** First batch of new widgets (the session proposes the list in its notes; widely expected ones first).
+- **B2** Second batch, including CPU temperature through an opt-in source we never install or elevate.
+- **D1** UI audit + style guide (documents only).
+- **D2** UI revision of `public/` (after A1 and B1 land).
