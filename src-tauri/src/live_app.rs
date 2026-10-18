@@ -339,7 +339,7 @@ pub fn apply(app: &AppHandle, force: bool) {
     let _ = HOST.set(core.live.clone());
     if l.in_app || force {
         ensure_tray(app, true);
-        core.refresh_live_theme(); // the current theme (or the Standard layout) is what live shows
+        core.prepare_live(); // the saved screen fit and the live theme (a window-less start never ran the start-up work)
         core.live.start_with(core.live_config());
     } else {
         let a = app.clone();

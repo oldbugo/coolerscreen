@@ -581,6 +581,36 @@ fn use_this_theme_switches_live_without_touching_embedded() {
     assert_eq!(app.live_theme_oid().as_deref(), Some(b.as_str()));
 }
 
+/// A start without a window never ran `startup`: live must still get the saved screen fit (regression: live frames had no top inset).
+#[test]
+fn live_gets_the_saved_fit_before_it_starts_without_a_window() {
+    let (_d, app, _rec, _gallery) = setup();
+    app.settings.update(|s| s["screenFit"] = json!({ "top": 4, "left": 9 })).unwrap();
+    assert!(app.live.effective_fit().is_zero(), "nothing gave live the fit yet (no startup)");
+    app.prepare_live();
+    assert_eq!(app.live.effective_fit(), crate::core::fit::Fit::new(4, 0, 0, 9));
+}
+
+/// Storing a theme with its own corner radius never changes the default in Settings (regression: the default became the theme's value).
+#[test]
+fn a_theme_corner_radius_does_not_change_the_default() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "corners.mp4");
+    assert_eq!(app.settings.load().corner_radius(), 0.0);
+    app.theme_set(&oid, &json!({ "corners": 24, "widgets": [] })).unwrap();
+    assert_eq!(app.settings.load().corner_radius(), 0.0, "saving the theme leaves the default alone");
+    let r = app.theme_apply(&oid).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    assert_eq!(app.settings.load().corner_radius(), 0.0, "storing it as Embedded too");
+    assert_eq!(app.load_theme(&oid).corners, Some(24.0));
+    let v = app.lib.versions(&oid);
+    assert_eq!(v[0]["settings"]["corners"]["r"].as_f64(), Some(24.0), "the version itself was made with the theme's radius");
+    // the default only changes in Settings, and a theme without an override follows it
+    app.settings_update(&json!({ "cornerRadius": 40 })).unwrap();
+    app.theme_set(&oid, &json!({ "corners": null, "widgets": [] })).unwrap();
+    assert_eq!(app.corner_radius_of(&app.load_theme(&oid)), 40.0);
+}
+
 /// The stale flag follows the picture the screen holds, also while another theme is live.
 #[test]
 fn stale_embedded_is_reported_for_the_theme_that_owns_the_picture() {

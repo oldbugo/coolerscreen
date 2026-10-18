@@ -1278,6 +1278,46 @@ mod tests {
         assert!(widgets_drawn, "the clock and the stats still draw (bright text on the dark picture)");
     }
 
+    /// A background that is not the stored base (the original clip, or the gradient when the base could not be decoded) always gets
+    /// the screen fit from the engine: black strips on the hidden edges, the picture inside the visible rectangle.
+    #[test]
+    fn a_fallback_background_gets_the_fit() {
+        use crate::core::fit::Fit;
+        let f = Fit::new(4, 0, 0, 9);
+        let mut r = white_renderer(LW, LH);
+        r.set_bg_is_base(false); // what the pipeline does when the base does not decode
+        r.set_bg_fit(f); // a stale base fit must not matter
+        r.set_fit(f);
+        let out = r.render().0.to_vec();
+        assert_eq!((px(&out, LW, 100, 2), px(&out, LW, 100, 3), px(&out, LW, 5, 400), px(&out, LW, 6, 400)), ([0; 3], [255; 3], [0; 3], [255; 3]));
+    }
+
+    /// With the fit never given to the engine (the old window-less start) the fitted base is stretched over the panel: the top strip is
+    /// gone. Given the saved fit, the base made with it is shown as it is (rows 0-3 stay black).
+    #[test]
+    fn a_base_made_with_the_saved_fit_keeps_its_strips() {
+        use crate::core::fit::Fit;
+        let f = Fit::new(4, 0, 0, 9);
+        let mut pic = vec![255u8; LW * LH * 4];
+        let (x0, y0, ..) = f.rect(LW, LH);
+        for y in 0..LH {
+            for x in 0..LW {
+                if x < x0 || y < y0 {
+                    pic[(y * LW + x) * 4..][..3].fill(0);
+                }
+            }
+        }
+        let mut r = white_renderer(LW, LH);
+        r.set_still_background(Some(Arc::new(pic.clone())));
+        r.set_bg_is_base(true);
+        r.set_bg_fit(f);
+        let no_fit = r.render().0.to_vec();
+        assert_eq!(px(&no_fit, LW, 100, 0), [255; 3], "the bug: no fit given, the picture is stretched and the strip is gone");
+        r.set_fit(f);
+        let out = r.render().0.to_vec();
+        assert_eq!((px(&out, LW, 100, 0), px(&out, LW, 100, 2), px(&out, LW, 100, 3)), ([0; 3], [0; 3], [255; 3]));
+    }
+
     /// A stored base made before the fit existed is scaled into the visible rectangle by the engine; one made with the current fit is
     /// shown as it is; one made with another fit is re-fitted from its own visible rectangle.
     #[test]

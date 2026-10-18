@@ -534,12 +534,7 @@ impl Library {
                     .with("versionId", d["id"].clone()));
             }
         }
-        // Remember the corner choice as the default for the next clip's tuning.
-        let s = self.settings.load();
-        if s.mask()["corners"] != st["corners"] {
-            let c = st["corners"].clone();
-            self.settings.update(|v| v["mask"]["corners"] = c)?;
-        }
+        // (3.0: the corner radius of a version never changes the default in Settings > Themes; a theme's own radius is its override.)
         let n = vs.iter().map(|v| v["n"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max) + 1.0;
         let mut settings = st.as_object().cloned().unwrap_or_default();
         settings.insert("fps".into(), num(DEVICE_FPS));

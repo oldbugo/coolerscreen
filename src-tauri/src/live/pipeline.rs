@@ -324,7 +324,23 @@ impl Pipeline {
                                 publish_video_info(&v, &vc, &vd);
                                 r.set_video(Some(v));
                             }
-                            Err(e) => log(&format!("background clip not used: {e}")),
+                            Err(e) => {
+                                log(&format!("background clip not used: {e}"));
+                                // The stored picture could not be decoded: the original clip (or the plain gradient) is drawn instead, and
+                                // the engine applies the screen fit to it itself (a "base" would be taken as already fitted).
+                                r.set_bg_is_base(false);
+                                if portrait {
+                                    if let Some(fb) = r.theme().fallback_video.clone().filter(|p| p.exists()) {
+                                        match VideoBg::start(&fb, &dec) {
+                                            Ok(v) => {
+                                                publish_video_info(&v, &vc, &vd);
+                                                r.set_video(Some(v));
+                                            }
+                                            Err(e2) => log(&format!("fallback clip not used either: {e2}")),
+                                        }
+                                    }
+                                }
+                            }
                         }
                         video_on = true;
                     } else if !want_video && video_on {

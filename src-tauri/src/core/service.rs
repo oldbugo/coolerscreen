@@ -1071,8 +1071,16 @@ impl App {
     pub fn startup(&self) {
         self.lib.reset_interrupted();
         self.settings.migrate_edge_offsets();
-        self.live.set_fit(self.settings.load().screen_fit());
+        self.prepare_live();
         self.gallery_init(true);
+        self.refresh_live_theme();
+    }
+
+    /// What Live needs before it starts drawing: the saved screen fit and the live theme. A start without a window (`--background`,
+    /// `--tray`) never runs `startup`, so this is also called when live starts; without the fit live would stretch the fitted
+    /// picture over the whole panel and draw the corners at the panel edge.
+    pub fn prepare_live(&self) {
+        self.live.set_fit(self.settings.load().screen_fit());
         self.refresh_live_theme();
     }
 
