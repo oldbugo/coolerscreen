@@ -663,7 +663,7 @@ impl Pipeline {
     ///   instant    (and without a theme, or when no session is open) the plain stop: loop clip ending at once
     /// Waits for the threads.
     pub fn stop(&self) {
-        let end = self.shared.theme.lock().unwrap().as_ref().map(|t| t.theme.handover.end);
+        let end = self.shared.theme.lock().unwrap().as_ref().map(|t| if t.not_embedded && t.theme.handover.end == HandoverEnd::LoopStart { HandoverEnd::Instant } else { t.theme.handover.end });
         let mode = match end {
             Some(HandoverEnd::LoopStart) => 1,
             Some(HandoverEnd::ScreenOff) => 2,
@@ -694,7 +694,7 @@ impl Pipeline {
     /// hand-over is "instant", or no open session, pauses at once. Resume starts live again (with its fade-in).
     pub fn pause_with_handover(&self) {
         let sh = &self.shared;
-        let fade = sh.theme.lock().unwrap().as_ref().is_none_or(|t| t.theme.handover.end != HandoverEnd::Instant);
+        let fade = sh.theme.lock().unwrap().as_ref().is_none_or(|t| t.theme.handover.end != HandoverEnd::Instant && !(t.not_embedded && t.theme.handover.end == HandoverEnd::LoopStart));
         if fade && sh.connected.load(Relaxed) && !sh.paused.load(Relaxed) && !sh.quit.load(Relaxed) && sh.stop_mode.load(Relaxed) == 0 {
             sh.hand_done.store(false, Relaxed);
             sh.stop_mode.store(1, Relaxed);
@@ -924,6 +924,21 @@ mod handover_tests {
         let s = Instant::now();
         p.stop();
         assert!(s.elapsed() < Duration::from_millis(300));
+    }
+
+    #[test]
+    fn a_theme_that_is_not_embedded_stops_at_once() {
+        let mut c = Config::default();
+        c.music.enabled = false;
+        c.notch = "off".into();
+        let p = Pipeline::start(&c, Sink::Null);
+        let mut t = ThemeLive::new(Theme::standard_preset(), PathBuf::new());
+        t.not_embedded = true; // the default end is the fade onto the stored loop: wrong when the stored picture is another theme's
+        p.set_theme(t);
+        std::thread::sleep(Duration::from_millis(500));
+        let s = Instant::now();
+        p.stop();
+        assert!(s.elapsed() < Duration::from_millis(300), "no fade expected: {:?}", s.elapsed());
     }
 
     fn quiet() -> Config {

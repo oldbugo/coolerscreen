@@ -165,7 +165,7 @@ fn theme_of(id: &str) -> ThemeLive {
     let base = cs_core::core::paths::base();
     let app = cs_core::core::App::new(base, cs_core::backends_with_work_dir(std::env::temp_dir().join("CoolerScreen-media-companion")), std::sync::Arc::new(cs_core::core::app::NoEvents), env!("CARGO_PKG_VERSION"));
     let oid = if id == "current" {
-        app.current_theme_oid().unwrap_or_else(|| {
+        app.live_theme_oid().unwrap_or_else(|| {
             eprintln!("no theme is on the screen yet");
             std::process::exit(2);
         })

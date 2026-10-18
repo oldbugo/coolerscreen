@@ -383,7 +383,7 @@ fn apply_stores_the_base_and_switches_the_theme() {
     let (_d, app, _rec, gallery) = setup();
     let oid = one_original(&app, &gallery, "Apply me.mp4");
     app.theme_set(&oid, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.4, "h": 0.3 }] })).unwrap();
-    assert!(app.current_theme_oid().is_none());
+    assert!(app.live_theme_oid().is_none());
     let r = app.theme_apply(&oid).unwrap();
     let jid = r["jobId"].as_str().unwrap().to_string();
     let mut seen = std::collections::BTreeSet::new();
@@ -398,9 +398,9 @@ fn apply_stores_the_base_and_switches_the_theme() {
         std::thread::sleep(Duration::from_millis(2));
     };
     assert_eq!(j["state"], "done", "{j}");
-    assert!(seen.iter().any(|m| m.starts_with("Step 1 of 3") || m.starts_with("Step 2 of 3")), "steps are reported: {seen:?}");
+    assert!(seen.iter().any(|m| m.starts_with("Step 1 of 2") || m.starts_with("Step 2 of 2")), "steps are reported: {seen:?}");
     let vid = j["result"]["versionId"].as_str().unwrap().to_string();
-    assert_eq!(app.current_theme_oid().as_deref(), Some(oid.as_str()));
+    assert_eq!(app.live_theme_oid().as_deref(), Some(oid.as_str()));
     assert_eq!(app.settings.load().slot("standby").unwrap()["versionId"], json!(vid));
     let v = app.theme_get(&oid).unwrap();
     assert_eq!(v["current"], json!(true));
@@ -437,7 +437,7 @@ fn stopping_an_apply_keeps_the_previous_theme() {
     let j = wait_job(&app, &jid);
     assert_eq!(j["state"], "cancelled", "{j}");
     assert!(app.settings.load().slot("standby").is_none(), "nothing was stored on the screen");
-    assert!(app.current_theme_oid().is_none());
+    assert!(app.live_theme_oid().is_none());
     assert!(app.theme_get(&oid).unwrap()["theme"]["baseVersionId"].is_null());
     assert!(app.lib.versions(&oid).is_empty(), "no half-made base is left behind");
 }
@@ -448,9 +448,9 @@ fn deleting_the_current_theme_clears_it() {
     let oid = one_original(&app, &gallery, "Gone.mp4");
     let r = app.theme_apply(&oid).unwrap();
     assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
-    assert_eq!(app.current_theme_oid().as_deref(), Some(oid.as_str()));
+    assert_eq!(app.live_theme_oid().as_deref(), Some(oid.as_str()));
     app.original_delete(&oid).unwrap();
-    assert!(app.current_theme_oid().is_none());
+    assert!(app.live_theme_oid().is_none());
 }
 
 #[test]
@@ -519,6 +519,84 @@ fn layers_groups_hidden_and_live_layer_are_kept_and_validated() {
     assert_eq!(app.theme_set(&oid, &baked).unwrap()["hasBaseItems"], json!(false));
 }
 
+/// Live can show one theme while the screen holds (Embedded) another one's picture.
+#[test]
+fn use_this_theme_switches_live_without_touching_embedded() {
+    let (_d, app, _rec, gallery) = setup();
+    let (a, b) = two_originals(&app, &gallery);
+    let store = |oid: &str| {
+        let r = app.theme_apply(oid).unwrap();
+        let j = wait_job(&app, r["jobId"].as_str().unwrap());
+        assert_eq!(j["state"], "done", "{j}");
+        j["result"]["versionId"].as_str().unwrap().to_string()
+    };
+    let va = store(&a);
+    assert_eq!(app.live_theme_oid().as_deref(), Some(a.as_str()));
+    assert!(app.settings.load().live_theme().is_none(), "no explicit choice: live follows Embedded");
+    // Beta has its own base (a ready version), not stored
+    let v = app.lib.create_version(&b, &json!({ "start": 0, "length": 2, "force": true })).unwrap();
+    let vb = v["id"].as_str().unwrap().to_string();
+    app.version_handle(&b, &v).wait().unwrap();
+    app.theme_set_base(&b, &vb).unwrap();
+    // Use Beta: live switches, the slot is untouched
+    let view = app.theme_use(&b).unwrap();
+    assert_eq!(app.live_theme_oid().as_deref(), Some(b.as_str()));
+    assert_eq!(app.embedded_theme_oid().as_deref(), Some(a.as_str()));
+    assert_eq!(app.settings.load().slot("standby").unwrap()["versionId"], json!(va), "Embedded was not changed");
+    assert_eq!((view["live"].clone(), view["embedded"].clone(), view["embeddedDiffers"].clone()), (json!(true), json!(false), json!(true)));
+    assert_eq!(view["embeddedTheme"]["name"], json!(app.lib.read_original(&a).unwrap()["name"]));
+    assert_eq!(view["baseUnstored"], json!(false), "the Embedded-theme banner is about Embedded's own theme");
+    let l = app.originals_list();
+    assert_eq!((l["currentTheme"].clone(), l["embeddedTheme"].clone()), (json!(b), json!(a)));
+    let theme_flags = |id: &str| l["originals"].as_array().unwrap().iter().find(|o| o["id"] == json!(id)).unwrap()["theme"].clone();
+    assert_eq!((theme_flags(&a)["live"].clone(), theme_flags(&a)["embedded"].clone()), (json!(false), json!(true)));
+    assert_eq!((theme_flags(&b)["live"].clone(), theme_flags(&b)["embedded"].clone()), (json!(true), json!(false)));
+    // the engine: Beta's base is not what the screen holds, so live must stream it and stop instantly; Alpha's is fine
+    let tb = app.theme_live_of(&b, app.load_theme(&b));
+    assert!(tb.not_embedded && !tb.nothing_to_stream(crate::core::fit::Fit::default()));
+    assert!(!app.theme_live_of(&a, app.load_theme(&a)).not_embedded);
+    // editing the live theme refreshes live; editing the Embedded one (not live) does not touch it
+    app.theme_set(&b, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.4, "h": 0.3 }] })).unwrap();
+    assert_eq!(app.live_theme_oid().as_deref(), Some(b.as_str()));
+    // survives a restart: the choice is in settings.json
+    assert_eq!(app.settings.load().live_theme().as_deref(), Some(b.as_str()));
+    // storing Beta as Embedded: the slot changes, live stays on Beta and goes back to following Embedded
+    let stored = store(&b);
+    assert_eq!(stored, vb);
+    assert_eq!(app.embedded_theme_oid().as_deref(), Some(b.as_str()));
+    assert!(app.settings.load().live_theme().is_none());
+    assert!(!app.theme_live_of(&b, app.load_theme(&b)).not_embedded);
+    let view = app.theme_get(&b).unwrap();
+    assert_eq!((view["embedded"].clone(), view["embeddedDiffers"].clone(), view["baseUnstored"].clone()), (json!(true), json!(false), json!(false)));
+    // Use Alpha again, then store Beta again: Alpha stays live
+    app.theme_use(&a).unwrap();
+    assert_eq!(app.live_theme_oid().as_deref(), Some(a.as_str()));
+    store(&b);
+    assert_eq!(app.live_theme_oid().as_deref(), Some(a.as_str()), "storing does not change the live theme");
+    // choosing the Embedded theme goes back to following it
+    app.theme_use(&b).unwrap();
+    assert!(app.settings.load().live_theme().is_none());
+    // a theme that vanished: live falls back to Embedded
+    app.settings.update(|s| s["liveTheme"] = json!("gone")).unwrap();
+    assert_eq!(app.live_theme_oid().as_deref(), Some(b.as_str()));
+}
+
+/// The stale flag follows the picture the screen holds, also while another theme is live.
+#[test]
+fn stale_embedded_is_reported_for_the_theme_that_owns_the_picture() {
+    let (_d, app, _rec, gallery) = setup();
+    let (a, b) = two_originals(&app, &gallery);
+    let r = app.theme_apply(&a).unwrap();
+    assert_eq!(wait_job(&app, r["jobId"].as_str().unwrap())["state"], "done");
+    app.theme_use(&b).unwrap();
+    assert_eq!(app.theme_get(&a).unwrap()["baseStale"], json!(false));
+    app.settings_update(&json!({ "cornerRadius": 40 })).unwrap();
+    assert_eq!(app.theme_get(&a).unwrap()["baseStale"], json!(true), "corners are baked into Embedded");
+    app.settings_update(&json!({ "cornerRadius": 0 })).unwrap();
+    app.theme_set(&a, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.4, "h": 0.3 }] })).unwrap();
+    assert_eq!(app.theme_get(&a).unwrap()["baseStale"], json!(false), "live-only items never mark Embedded");
+}
+
 #[test]
 fn live_layer_off_of_the_current_theme_holds_live() {
     let (_d, app, _rec, gallery) = setup();
@@ -561,7 +639,7 @@ fn a_theme_can_use_a_version_of_another_clip_as_its_base() {
     assert_eq!(j["state"], "done", "{j}");
     assert_eq!(j["result"]["versionId"], json!(vb), "no new version was made");
     assert_eq!(app.settings.load().slot("standby").unwrap()["versionId"], json!(vb));
-    assert_eq!(app.current_theme_oid().as_deref(), Some(a.as_str()));
+    assert_eq!(app.live_theme_oid().as_deref(), Some(a.as_str()));
     let view = app.theme_get(&a).unwrap();
     assert_eq!(view["current"], json!(true));
     assert_eq!(view["baseUnstored"], json!(false));
@@ -574,7 +652,7 @@ fn a_theme_can_use_a_version_of_another_clip_as_its_base() {
     assert_eq!(view["baseUnstored"], json!(true));
     assert_eq!(app.settings.load().slot("standby").unwrap()["versionId"], json!(vb), "the screen still has the old base");
     // a restart keeps who is current (themeId lives in the slot record)
-    assert_eq!(app.current_theme_oid().as_deref(), Some(a.as_str()));
+    assert_eq!(app.live_theme_oid().as_deref(), Some(a.as_str()));
 }
 
 // ---------- theme format v1.2 / v1.3 ----------
@@ -802,9 +880,11 @@ fn duplicates_of_one_file_are_merged_into_the_one_the_screen_uses() {
     assert_eq!(plan[0]["applied"], json!(false));
     assert_eq!(app.originals_list()["originals"].as_array().unwrap().len(), 2, "planning changes nothing");
     assert!(app.lib.find_version(&vb).is_some_and(|(o, _)| o == b));
-    // apply
+    // apply (the user had chosen the duplicate with "Use this theme": live then points at the one that stays)
+    app.settings.update(|s| s["liveTheme"] = json!(b)).unwrap();
     let done = app.repair_duplicates_with(true, &trash(d.path()));
     assert_eq!(done.len(), 1);
+    assert_eq!(app.settings.load().live_theme().as_deref(), Some(a.as_str()), "the live theme was repointed");
     let list = app.originals_list();
     assert_eq!(list["originals"].as_array().unwrap().len(), 1);
     assert_eq!(list["originals"][0]["id"], json!(a));

@@ -90,6 +90,7 @@ fn main() {
             cc::theme_preview,
             cc::theme_asset_add,
             cc::theme_apply,
+            cc::theme_use,
             cc::theme_set_base,
             cc::calibration_set,
             cc::fit_cal,

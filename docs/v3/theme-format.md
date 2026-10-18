@@ -233,3 +233,30 @@ Every edit (theme, notch, screen fit, screen guides, corner radius, Gallery fold
 and applies to the live picture at once; closing the window or quitting to the tray changes nothing. Reset replaces Save/Undo.
 Only changes that alter the stored clip (screen fit and shift, corner radius, notch, text/pictures drawn into the base, base
 clip or version) mark the base as needing to be stored again, using the full notch+fit key; live-only changes never do.
+
+## v1.8 (user, 2026-10-18): live theme vs Embedded
+
+- **Vocabulary.** The picture stored on the screen is **Embedded** everywhere in the UI (not base / stored loop / normal clip /
+  screen copy; "base" stays in code and in `theme.json`). A theme's own picture is "Picture" in the UI. Labels: "Use this theme",
+  "Store as Embedded" / "Update Embedded", "Use and store as Embedded", chips "Live" and "Embedded", "Picture only" /
+  "Picture + live: ...". Tray: "Pause live (screen shows Embedded)".
+- **Two roles.** The *Embedded theme* is the original named by the loop slot (`slots.standby.themeId`, else the version's owner).
+  The *live theme* is what Live shows: `liveTheme` in settings.json (written only when set), else the Embedded theme (2.0 behaviour).
+  `live_theme_oid()` / `embedded_theme_oid()`; a `liveTheme` naming a vanished theme falls back to Embedded; the duplicate repair
+  repoints it.
+- **Use this theme** (`theme_use`): sets `liveTheme` (cleared when the theme is the Embedded one) and refreshes live at once.
+  Embedded is not touched. **Store as Embedded** is the old Apply job minus its third step (`theme_apply`, job kind `apply`, two
+  steps: make or reuse the picture, write it to the loop slot); it does not change `liveTheme`, and clears it when it names the
+  stored theme (live then follows Embedded again). With Live **off** the primary My themes button is "Use and store as Embedded":
+  `theme_use` then the store job.
+- **`theme_get`** returns `live`, `embedded` (this theme owns Embedded), `embeddedDiffers` (live shows it, but the screen holds
+  another picture) and `embeddedTheme { originalId, name }`. `baseUnstored` is about the Embedded theme's chosen picture;
+  `baseStale` is computed for any theme whose picture is the stored version. `originals_list` returns `currentTheme` (live) and
+  `embeddedTheme`; each card's `theme` has `live` and `embedded`.
+- **Engine.** `ThemeLive.not_embedded` = the theme's base version is not the one in the slot. Then (a) `nothing_to_stream` is false:
+  live streams the theme's own picture instead of idling on the loop; (b) when live stops (quit, pause, sleep, lock) the hand-over
+  is **instant** (no fade, no first-frame cross-fade; "screen off" endings are unchanged). Same theme: the existing hand-over.
+- **On screen** edits the live theme. When Embedded differs it shows a terse bar "Embedded: <name>" with "Store this as Embedded";
+  stale: "Embedded is out of date (screen fit/corners/notch/text/pictures changed) · Update Embedded". With Live off the title
+  says "Live is off · the screen shows Embedded".
+- The "App responsibilities" Apply description above (3 steps) is superseded by this section.

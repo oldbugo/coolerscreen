@@ -389,7 +389,7 @@ summary h3 { display: inline; color: var(--text); }
 }
 .g-sec { margin: var(--s5) 0 var(--s2); font-size: 15px; line-height: 22px; }
 .g-sec:first-of-type { margin-top: var(--s3); }
-.toast { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); background: var(--surface-3); border: 1px solid var(--border-strong); padding: var(--s2) var(--s4);
+.toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); background: var(--surface-3); border: 1px solid var(--border-strong); padding: var(--s2) var(--s4);
   border-radius: var(--r-md); box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 60; max-width: 80vw; }
 .toast.show { opacity: 1; }
 .toast.bad { border-color: var(--danger); }
@@ -418,7 +418,7 @@ summary h3 { display: inline; color: var(--text); }
 
 /* On screen: the theme editor */
 .screen-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.ed { flex: 1; min-height: 0; display: grid; grid-template-columns: 264px minmax(0, 1fr) 300px; }
+.ed { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(220px, 18vw, 250px) minmax(0, 1fr) clamp(230px, 20vw, 280px); }
 .ed-left, .ed-right { background: var(--surface-1); overflow-y: auto; padding: var(--s4); min-height: 0; }
 .ed-left { border-right: 1px solid var(--border); }
 .ed-right { border-left: 1px solid var(--border); }

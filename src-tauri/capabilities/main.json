@@ -59,6 +59,7 @@
     "allow-theme-preview",
     "allow-theme-asset-add",
     "allow-theme-apply",
+    "allow-theme-use",
     "allow-theme-set-base",
     "allow-calibration-set",
     "allow-fit-cal",

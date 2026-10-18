@@ -75,7 +75,8 @@ const S = {
   missingDismissed: false, outcomes: new Map(), dismissed: new Set(), loadedAt: Date.now(),
   view: null, // 'screen' (On screen) | 'mine' (My themes) | 'browse' (Browse) | 'detail' (a theme's base settings)
   home: 'screen', // the view the open base settings were reached from ('screen' | 'mine')
-  currentTheme: null, // the original whose version is in the screen's loop slot
+  currentTheme: null, // the LIVE theme: what Live shows (the one chosen with "Use this theme", else the Embedded one)
+  embeddedTheme: null, // the theme whose picture is stored on the screen (Embedded)
   selTheme: null, // the card selected in My themes
   baseFor: null, // the theme whose base is being chosen in Base settings
   manualLoop: false, // "Edit loop manually…" panel open
@@ -106,9 +107,9 @@ function renderLiveSwitch() {
   sw.disabled = !S.app;
   const hold = stt.paused || stt.deviceHold || stt.systemHold;
   box.dataset.state = !c.inApp ? 'off' : hold ? 'paused' : 'on';
-  box.title = !c.inApp ? 'Live is off: the screen plays its stored loop. Turn it on to draw the clock, music and PC stats of the theme on top.'
-    : stt.deviceHold ? 'Live is paused while the screen is being updated.' : stt.systemHold ? 'Live is paused while the PC sleeps or is locked.' : stt.paused ? 'Live is paused from the tray.'
-    : stt.connected ? 'Live is on the screen.' : 'Live is on; connecting to the screen…';
+  box.title = !c.inApp ? 'Live is off: the screen shows Embedded.'
+    : stt.deviceHold ? 'Live is paused: the screen is being updated.' : stt.systemHold ? 'Live is paused: the PC sleeps or is locked.' : stt.paused ? 'Live is paused from the tray.'
+    : stt.connected ? 'Live is on.' : 'Live is on; connecting…';
   sw.setAttribute('aria-label', 'Live on the screen: ' + (c.inApp ? 'on' : 'off'));
   // Live is on but the theme draws nothing live: say so, and where to fix it
   const none = !!c.inApp && stt.liveItems === false;
@@ -138,8 +139,8 @@ function renderBanners() {
     el('button', { class: 'btn secondary', text: 'Try again', onclick: () => checkScreen() }));
   const os = S.app && S.app.onScreen;
   if (os && os.incomplete && !S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'))) {
-    add('danger', `The last upload of "${os.originalName} · ${os.label}" didn't finish, so the screen may show a broken picture.`,
-      os.exists ? el('button', { class: 'btn primary', text: 'Push again', onclick: () => startSend(os.versionId) }) : null);
+    add('danger', `Embedded ("${os.originalName} · ${os.label}") didn't finish storing; the screen may show a broken picture.`,
+      os.exists ? el('button', { class: 'btn primary', text: 'Store again', onclick: () => startSend(os.versionId) }) : null);
   }
   if (S.longMissing.length && !S.missingDismissed) {
     const n = S.longMissing.length;
@@ -198,7 +199,7 @@ async function loadApp() {
 }
 async function loadOriginals() {
   const r = await call('originals_list');
-  S.originals = r.originals; S.longMissing = r.longMissing; S.rev = r.rev; S.currentTheme = r.currentTheme || null;
+  S.originals = r.originals; S.longMissing = r.longMissing; S.rev = r.rev; S.currentTheme = r.currentTheme || null; S.embeddedTheme = r.embeddedTheme || null;
   if (S.selTheme && !S.originals.some(o => o.id === S.selTheme)) S.selTheme = null;
   if (S.sel && !S.originals.find(o => o.id === S.sel)) { S.sel = null; S.detail = null; if (S.view === 'detail') setView(S.home); }
   renderLibrary();
@@ -266,7 +267,7 @@ function renderLibrary() {
     if (o.assets === 'error' && !o.versionCount) { sub.className = 'sub err'; sub.append('Can\'t read this file'); sub.title = o.assetsError || ''; }
     else if (o.busy) sub.append(el('span', { class: 'spinner', 'aria-hidden': 'true' }), 'Preparing version…');
     else sub.append(o.versionCount ? `${o.versionCount} version${o.versionCount > 1 ? 's' : ''}` : 'No versions yet');
-    if (o.onScreen) sub.append(el('span', { class: 'chip ok', text: 'On screen' }));
+    if (o.onScreen) sub.append(el('span', { class: 'chip accent', text: 'Embedded' }));
     const thumb = o.assets === 'ready' ? el('img', { class: 'thumb', src: backend.mediaUrl(o.id, 'thumb.jpg') + `?r=${encodeURIComponent(o.created)}`, alt: '', loading: 'lazy' })
       : el('div', { class: 'thumb' + (o.assets === 'pending' ? ' skeleton' : '') });
     const li = el('li', { class: 'librow', role: 'option', id: 'opt-' + o.id, 'aria-selected': String(o.id === S.sel), 'data-id': o.id, title: o.name },
@@ -579,11 +580,11 @@ function renderGallery() {
 }
 
 // ----- My clips -----
-const MINE_SORTS = [['added', 'Recently added'], ['name', 'Name (A–Z)'], ['longest', 'Longest first'], ['shortest', 'Shortest first'], ['onscreen', 'On screen first']];
+const MINE_SORTS = [['added', 'Recently added'], ['name', 'Name (A–Z)'], ['longest', 'Longest first'], ['shortest', 'Shortest first'], ['onscreen', 'Embedded first']];
 const KIND_NAMES = { clock: 'clock', music: 'music', stats: 'stats', text: 'text', image: 'picture', weather: 'weather' };
 const themeLabel = o => {
   const w = (o.theme && o.theme.widgets) || [];
-  return w.length ? 'Base + live: ' + [...new Set(w)].map(k => KIND_NAMES[k] || k).join(' · ') : 'Base only';
+  return w.length ? 'Picture + live: ' + [...new Set(w)].map(k => KIND_NAMES[k] || k).join(' · ') : 'Picture only';
 };
 const M = { q: '', sort: MINE_SORTS.some(([v]) => v === lsGet('cs.mineSort')) ? lsGet('cs.mineSort') : 'added', order: [] };
 function mineCmp(sort) {
@@ -652,7 +653,7 @@ function renderMine() {
     const list = q ? all.filter(o => matches(o.name, q) || matches(o.fileName, q)) : all;
     u.count.textContent = !all.length ? '' : q ? `${list.length} of ${all.length}` : `${all.length} theme${all.length > 1 ? 's' : ''}`;
     u.tools.hidden = all.length < 2 && !q; // nothing to sort or filter yet
-    if (!all.length && !S.adding.length) u.body.append(el('p', { class: 'muted g-empty' }, 'Put your own picture on the cooler screen: add a video, GIF, image or LOVINGCOOL theme (.ht). Every item here is a theme: pick one and apply it, then design its live layer in On screen. ',
+    if (!all.length && !S.adding.length) u.body.append(el('p', { class: 'muted g-empty' }, 'Add a video, GIF, image or LOVINGCOOL theme (.ht). Every item here is a theme. ',
       'Or ', el('button', { class: 'btn ghost inline-btn', text: 'browse your sources', onclick: () => goHome('browse') }), '.'));
     const entries = [];
     if (!q) entries.push({ key: 'add-tile', sig: 'x', make: () => el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
@@ -675,20 +676,30 @@ function renderMine() {
   });
 }
 
-// The selected theme's actions: Apply (the main one), its base settings, rename, delete.
+// The selected theme's actions. Live on: "Use this theme" (live switches now; Embedded is not touched) and "Store as Embedded".
+// Live off: one action, "Use and store as Embedded".
+function liveOn() { return !!(S.app && S.app.live && S.app.live.settings && S.app.live.settings.inApp); }
 function renderSelBar() {
   const bar = mineUI.bar, o = S.originals.find(x => x.id === S.selTheme);
   bar.hidden = !o;
   bar.textContent = '';
   if (!o) return;
-  const cur = S.currentTheme === o.id;
-  bar.append(el('span', { class: 'sel-name', text: o.name, title: o.name }),
-    cur ? el('span', { class: 'chip ok', text: 'On screen' }) : null,
-    el('span', { class: 'small muted', text: themeLabel(o) }),
-    el('button', { class: 'btn primary big', text: cur ? 'Apply again' : 'Apply to screen', disabled: o.missing && !o.versionCount, title: 'Make its base, store it on the screen and switch the live layer', onclick: () => applyTheme(o.id, o.name) }),
-    el('button', { class: 'btn secondary', text: 'Base settings…', title: 'Choose the base picture: any clip, its loop, quality and versions', onclick: () => openBase(o.id, { name: o.name }) }),
+  const isLive = S.currentTheme === o.id, isEmb = S.embeddedTheme === o.id;
+  const off = o.missing && !o.versionCount;
+  const kids = [el('span', { class: 'sel-name', text: o.name, title: o.name })];
+  if (isLive) kids.push(el('span', { class: 'chip ok', text: 'Live' }));
+  if (isEmb) kids.push(el('span', { class: 'chip accent', text: 'Embedded' }));
+  kids.push(el('span', { class: 'small muted', text: themeLabel(o) }));
+  if (liveOn()) {
+    kids.push(el('button', { class: 'btn primary big', text: isLive ? 'Using' : 'Use this theme', disabled: off || isLive, title: 'Live switches to it now. Embedded stays as it is.', onclick: () => useTheme(o.id, o.name) }));
+    kids.push(el('button', { class: 'btn secondary', text: isEmb ? 'Update Embedded' : 'Store as Embedded', disabled: off, title: 'Write its picture to the screen', onclick: () => storeTheme(o.id, o.name) }));
+  } else {
+    kids.push(el('button', { class: 'btn primary big', text: isEmb && isLive ? 'Update Embedded' : 'Use and store as Embedded', disabled: off, title: 'Live is off: this writes its picture to the screen', onclick: () => useAndStore(o.id, o.name) }));
+  }
+  kids.push(el('button', { class: 'btn secondary', text: 'Picture…', title: 'Choose its picture: any clip, its loop, quality and versions', onclick: () => openBase(o.id, { name: o.name }) }),
     el('button', { class: 'btn secondary', text: 'Rename…', onclick: () => renameTheme(o) }),
     el('button', { class: 'btn danger', text: o.missing ? 'Remove…' : 'Delete…', onclick: () => deleteTheme(o) }));
+  bar.append(...kids);
 }
 async function renameTheme(o) {
   const input = el('input', { type: 'text', value: o.name, id: 'thRename', autofocus: true, maxLength: 80 });
@@ -746,7 +757,7 @@ const browseUI = (() => {
   const head = el('div', { class: 'g-head' }, el('h1', { class: 'g-title', id: 'browseTitle', text: 'Browse' }), el('span', { class: 'grow' }),
     el('div', { class: 'g-actions' }, linkBtn, refresh));
   const chips = el('div', { class: 'src-chips', role: 'group', 'aria-label': 'Show clips from' });
-  const note = el('p', { class: 'muted small browse-note', text: 'Adding puts an independent copy in My themes; the original stays here.' });
+  const note = el('p', { class: 'muted small browse-note', text: 'Adding makes your own copy in My themes.' });
   const q = el('input', { type: 'search', id: 'browseQ', class: 'g-filter', placeholder: 'Filter by title', autocomplete: 'off' });
   q.spellcheck = false;
   q.addEventListener('input', () => { BV.q = q.value; renderGallery(); });
@@ -758,7 +769,7 @@ const browseUI = (() => {
     el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Sort' }), sort));
   const body = el('div');
   box.append(head, note, chips, tools, body);
-  return { box, linkBtn, refresh, chips, q, tools, body };
+  return { box, linkBtn, refresh, note, chips, q, tools, body };
 })();
 function renderBrowse() {
   const u = browseUI;
@@ -766,6 +777,7 @@ function renderBrowse() {
   keepScroll(u.box, () => {
     u.linkBtn.hidden = !B.sources.some(s => s.id === 'link' && s.enabled);
     u.refresh.disabled = BV.refreshing;
+    u.refresh.hidden = !enabledSources().length; u.note.hidden = !enabledSources().length;
     u.refresh.textContent = BV.refreshing ? 'Refreshing…' : 'Refresh';
     // source chips (only sources enabled in Settings); a chip that had focus keeps it across the rebuild
     const focused = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.src;
@@ -785,7 +797,7 @@ function renderBrowse() {
     u.tools.hidden = !ticked.length;
     if (!B.loaded) return;
     if (!srcs.length) {
-      u.body.append(el('p', { class: 'muted g-empty' }, 'Browse shows themes and clips from sources such as Wallpaper Engine, Lively or the LOVINGCOOL theme library. ',
+      u.body.append(el('p', { class: 'muted g-empty' }, 'Themes and clips from Wallpaper Engine, Lively or the LOVINGCOOL library. ',
         el('button', { class: 'btn ghost inline-btn', text: 'Turn on sources…', onclick: () => openDrawer('setSources') })));
       return;
     }
@@ -820,7 +832,7 @@ function renderBrowse() {
       g.note.hidden = !g.note.childNodes.length;
       shown.push({ id: s.id, name: s.name, g });
       if (d.error) notes.push(el('div', { class: 'notice danger' }, `${s.name}: ${d.error} `, el('button', { class: 'btn secondary', text: 'Try again', onclick: () => { d.error = null; loadSourcePage(s.id, !d.items.length); } })));
-      if (s.id === 'lovingcool' || s.id === 'otherbrands') notes.push(el('p', { class: 'muted small', text: `${s.name}: themes from the vendor's online library; they remain theirs.` }));
+      if (s.id === 'lovingcool' || s.id === 'otherbrands') notes.push(el('p', { class: 'muted small', text: `${s.name}: the vendor's online library; the themes stay theirs.` }));
     }
     for (const k of [...GRID.keys()]) if (k !== 'mine' && !shown.some(x => x.id === k)) GRID.delete(k);
     for (const x of shown) {
@@ -838,13 +850,14 @@ function themeCard(o) {
   const pic = (t.card || o.frameUrl);
   const thumb = el('div', { class: 'g-thumb' + (o.assets === 'pending' ? ' skeleton' : '') }, pic ? el('img', { src: pic, alt: '', loading: 'lazy' }) : null);
   const chips = el('div', { class: 'g-chips' });
-  if (S.currentTheme === o.id) chips.append(el('span', { class: 'chip ok', text: 'On screen' }));
+  if (S.currentTheme === o.id) chips.append(el('span', { class: 'chip ok', text: 'Live' }));
+  if (S.embeddedTheme === o.id) chips.append(el('span', { class: 'chip accent', text: 'Embedded' }));
   if (o.missing) chips.append(el('span', { class: 'chip warn', text: 'File missing' }));
   if (o.needsRemake) chips.append(el('span', { class: 'chip warn', text: 'Needs re-make' }));
   if (o.busy) chips.append(el('span', { class: 'chip accent', text: 'Preparing…' }));
   if (o.assets === 'error' && !o.versionCount) chips.append(el('span', { class: 'chip danger', text: 'Can\'t read this file' }));
   const sel = S.selTheme === o.id;
-  const card = el('button', { class: 'g-card' + (sel ? ' sel' : ''), 'data-id': o.id, 'aria-pressed': String(sel), 'aria-label': `${o.name}, ${themeLabel(o)}${S.currentTheme === o.id ? ', on screen' : ''}`,
+  const card = el('button', { class: 'g-card' + (sel ? ' sel' : ''), 'data-id': o.id, 'aria-pressed': String(sel), 'aria-label': `${o.name}, ${themeLabel(o)}${S.currentTheme === o.id ? ', live' : ''}${S.embeddedTheme === o.id ? ', embedded' : ''}`,
     onclick: () => { S.selTheme = S.selTheme === o.id ? null : o.id; renderGallery(); const c = mineUI.box.querySelector(`.g-card[data-id="${CSS.escape(o.id)}"]`); if (c) c.focus({ preventScroll: true }); } },
     thumb, el('div', { class: 'g-name', text: o.name, title: o.name }), el('div', { class: 'g-sub', text: themeLabel(o) }), chips);
   let v = null; // hover (or keyboard focus) plays a muted preview
@@ -858,7 +871,7 @@ function themeCard(o) {
   const stop = () => { if (v) { v.remove(); v = null; } };
   card.addEventListener('mouseenter', play); card.addEventListener('mouseleave', stop);
   card.addEventListener('focus', play); card.addEventListener('blur', stop);
-  card.addEventListener('dblclick', () => applyTheme(o.id, o.name));
+  card.addEventListener('dblclick', () => (liveOn() ? useTheme(o.id, o.name) : useAndStore(o.id, o.name)));
   return card;
 }
 
@@ -939,7 +952,7 @@ function buildDetail(d) {
   main.append(el('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
     el('button', { class: 'btn ghost back', text: backLabel(), onclick: showGallery }), el('span', { class: 'muted', 'aria-hidden': 'true', text: '/' }),
     el('span', { class: 'muted small crumb-name', text: d.name })));
-  refs.ctxBar = el('div', { class: 'ctx-bar', role: 'region', 'aria-label': 'Choosing a base' });
+  refs.ctxBar = el('div', { class: 'ctx-bar', role: 'region', 'aria-label': 'Choosing the picture' });
   main.append(refs.ctxBar);
   main.append(el('div', { class: 'detail-head' }, refs.titles, refs.renameBtn,
     el('div', { class: 'menu-wrap' }, refs.versionsBtn, refs.versions), refs.more));
@@ -968,8 +981,8 @@ function buildDetail(d) {
   refs.tune = el('section', { class: 'panel tune-panel', 'aria-labelledby': 'hTune' });
   main.append(refs.tune);
   // bottom action bar
-  refs.saveBtn = el('button', { class: 'btn secondary big', text: 'Save as version', onclick: saveVersion });
-  refs.pushBtn = el('button', { class: 'btn primary big', text: 'Use as this theme\'s base', title: 'Nothing is sent to the screen: the theme then offers to store it', onclick: pushToScreen });
+  refs.saveBtn = el('button', { class: 'btn secondary big', text: 'Make a version', onclick: saveVersion });
+  refs.pushBtn = el('button', { class: 'btn primary big', text: 'Use', title: 'Nothing is written to the screen', onclick: pushToScreen });
   refs.saveReason = el('span', { class: 'reason', role: 'status' });
   refs.saveFix = el('button', { class: 'btn secondary', hidden: true });
   refs.actionBar = el('div', { class: 'action-bar' }, refs.saveReason, refs.saveFix, el('span', { class: 'grow' }), refs.saveBtn, refs.pushBtn);
@@ -992,9 +1005,9 @@ function updateDetail(d) {
   refs.versionsBtn.setAttribute('aria-label', `Versions (${n})${busy ? ', one is being prepared' : ''}`);
   refs.notices.textContent = '';
   if (d.missing) refs.notices.append(el('div', { class: 'notice' },
-    `The original file is no longer in the Gallery folder (missing since ${fmtDate(d.missing.since)}). Its versions are kept and can still be sent` +
-    (d.canTune ? '.' : ', but new versions can\'t be made until the file is back.')));
-  else if (d.sourceChanged) refs.notices.append(el('div', { class: 'notice info', text: 'The original file has changed since its versions were made. They can still be sent; new versions use the changed file.' }));
+    `The file is gone from the Gallery folder (since ${fmtDate(d.missing.since)}). Its versions are kept` +
+    (d.canTune ? '.' : '; new ones need the file back.')));
+  else if (d.sourceChanged) refs.notices.append(el('div', { class: 'notice info', text: 'The file changed since its versions were made. New versions use the changed file.' }));
   if (d.assets === 'error') refs.notices.append(el('div', { class: 'notice danger' }, 'CoolerScreen can\'t read this file. It may be damaged or in a format that isn\'t supported.',
     el('details', {}, el('summary', { text: 'Show details' }), el('pre', { text: d.assetsError || '' }))));
   renderCtxBar();
@@ -1183,7 +1196,7 @@ function buildTune(d) {
       el('button', { class: 'btn secondary', text: 'Fill the screen', onclick: () => { dr.frame = { ...DEFAULT_FRAME }; applyGeometry(); draftChanged(); } }),
       el('button', { class: 'btn secondary', text: 'Show the whole picture', onclick: () => { dr.frame = { zoom: Math.round(fitZoom(natural.w, natural.h) * 1000) / 1000, x: 0.5, y: 0.5 }; applyGeometry(); draftChanged(); } }),
       el('span', { class: 'muted small', text: 'Tip: drag the preview to move the picture.' })),
-    el('p', { class: 'muted small', text: 'Rounded corners are set per theme (On screen > Theme settings), with a default in Settings.' }));
+    el('p', { class: 'muted small', text: 'Corners: per theme (On screen), default in Settings.' }));
   refs.zoom.oninput = () => { dr.frame.zoom = Number(refs.zoom.value); applyGeometry(); };
   refs.posX.oninput = () => { dr.frame.x = Number(refs.posX.value); applyGeometry(); };
   refs.posY.oninput = () => { dr.frame.y = Number(refs.posY.value); applyGeometry(); };
@@ -1232,7 +1245,7 @@ async function confirmDeleteOriginal() {
   const lines = [];
   if (d.missing || !d.file) lines.push(`Its ${n} version${n === 1 ? '' : 's'} will be deleted.`);
   else lines.push(`The file "${d.fileName}" goes to the Recycle Bin and ${n ? `its ${n} version${n === 1 ? '' : 's'} ${n === 1 ? 'is' : 'are'}` : 'nothing else is'} deleted.`);
-  if (onScreen) lines.push('The screen keeps playing it until you send something else.');
+  if (onScreen) lines.push('The screen keeps playing it until you store another Embedded.');
   const ok = await openDialog({
     title: `${d.missing ? 'Remove' : 'Delete'} "${d.name}"?`, body: el('div', {}, lines.map(t => el('p', { text: t }))),
     actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: d.missing ? 'Remove' : 'Delete', value: true, kind: 'danger' }],
@@ -1444,7 +1457,7 @@ function updateShowingLabel() {
   const d = S.detail;
   const v = S.showing && d && d.versions.find(x => x.id === S.showing);
   if (v) refs.showing.textContent = `Showing: ${v.label || 'v' + v.n}${v.onScreen ? ' · on the screen now' : ''}`;
-  else refs.showing.textContent = d && d.canTune ? 'Showing: your tuning (not saved yet)' : d && d.previewUrl ? 'Showing: the original' : '';
+  else refs.showing.textContent = d && d.canTune ? 'Showing: your tuning' : d && d.previewUrl ? 'Showing: the original' : '';
 }
 
 // drag the picture inside the frame to move it
@@ -1983,7 +1996,7 @@ function updateTuneState() {
   refs.saveBtn.disabled = disabled;
   // Push sends the saved twin of this tuning if there is one, else makes a version first.
   refs.pushBtn.disabled = !S.baseFor || (dup ? dup.status === 'error' || (dup.status === 'ready' && dup.tooBig) : disabled);
-  refs.pushBtn.textContent = S.baseFor ? `Use as base of “${S.baseFor.name}”` : 'Use as base';
+  refs.pushBtn.textContent = S.baseFor ? `Use for “${S.baseFor.name}”` : 'Use';
   refs.saveReason.textContent = dup && !danger ? '' : reason;
   refs.saveReason.className = 'reason' + (danger ? ' danger' : '');
 }
@@ -2033,14 +2046,14 @@ function renderVersions(d) {
   const box = refs.versions;
   box.textContent = '';
   box.append(el('h3', { id: 'hVersions', text: `Versions (${d.versions.length})` }));
-  if (!d.versions.length) { box.append(el('p', { class: 'muted small', text: 'No versions yet. "Use as base" or "Save as version" keeps one here.' })); return; }
+  if (!d.versions.length) { box.append(el('p', { class: 'muted small', text: 'No versions yet.' })); return; }
   const ul = el('ul', { class: 'vlist' });
   for (const v of d.versions) {
     const name = v.label || `v${v.n}`;
     const chips = [];
-    if (v.onScreen) chips.push(el('span', { class: 'chip ok', text: v.onScreenIncomplete ? 'On screen (upload didn\'t finish)' : 'On screen' }));
+    if (v.onScreen) chips.push(el('span', { class: 'chip accent', text: v.onScreenIncomplete ? 'Embedded (didn\'t finish)' : 'Embedded' }));
     const isBase = !!(S.baseFor && S.baseFor.versionId === v.id);
-    if (isBase) chips.push(el('span', { class: 'chip accent', text: `Base of “${S.baseFor.name}”` }));
+    if (isBase) chips.push(el('span', { class: 'chip accent', text: `Picture of “${S.baseFor.name}”` }));
     const vjob = jobFor(v.id, 'version');
     if (v.status === 'ready') {
       if (v.tooBig) chips.push(el('span', { class: 'chip danger', text: 'Too big for the screen' }));
@@ -2062,8 +2075,8 @@ function renderVersions(d) {
     const btns = el('div', { class: 'vbtns' });
     if (v.status === 'ready') {
       btns.append(el('button', { class: 'btn secondary', text: '▶ Preview', 'aria-label': `Preview ${name}`, onclick: e => { e.stopPropagation(); closeVersions(false); showPreview(v.id); refs.stage.scrollIntoView({ block: 'nearest' }); } }));
-      btns.append(el('button', { class: 'btn ' + (isBase ? 'secondary' : 'primary'), text: isBase ? 'This is the base' : 'Use as base', disabled: v.tooBig || isBase || !S.baseFor,
-        title: v.tooBig ? 'Too big for the screen. Make a shorter version or choose Best that fits.' : 'Nothing is sent to the screen: the theme then offers to store it.',
+      btns.append(el('button', { class: 'btn ' + (isBase ? 'secondary' : 'primary'), text: isBase ? 'In use' : (S.baseFor ? `Use for “${S.baseFor.name}”` : 'Use'), disabled: v.tooBig || isBase || !S.baseFor,
+        title: v.tooBig ? 'Too big for the screen. Make a shorter version.' : 'Nothing is written to the screen.',
         onclick: e => { e.stopPropagation(); useAsBase(v.id); } }));
     }
     if (v.status === 'error') btns.append(el('button', { class: 'btn secondary', text: 'Try again', onclick: e => { e.stopPropagation(); retryVersion(v.id); } }));
@@ -2108,7 +2121,7 @@ async function renameVersion(v) {
 async function deleteVersion(v) {
   const name = v.label || `v${v.n}`;
   const body = el('div', {}, el('p', { text: `"${S.detail.name} · ${name}" will be deleted. The original clip is kept.` }),
-    v.onScreen ? el('p', { text: 'This version is on the screen now. Deleting it here does not remove it from the screen.' }) : null);
+    v.onScreen ? el('p', { text: 'This version is Embedded. Deleting it here does not remove it from the screen.' }) : null);
   const ok = await openDialog({ title: `Delete ${name}?`, body, actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Delete', value: true, kind: 'danger' }] });
   if (!ok) return;
   try {
@@ -2141,7 +2154,7 @@ async function pushToScreen() {
     let vid = dup && dup.id;
     if (!vid) vid = (await call('version_create', { originalId: d.id, settings: JSON.parse(JSON.stringify(S.draft)) })).versionId;
     pendingPush = { oid: d.id, vid };
-    toast('Preparing the version; it becomes the base as soon as it is ready.');
+    toast('Preparing; it is used as soon as it is ready.');
     await loadDetail();
     pollSoon();
   } catch (e) { toast(e.message, true); }
@@ -2162,8 +2175,8 @@ async function useAsBase(vid) {
     S.baseFor = { ...b, versionId: v.baseVersionId, guidesOffset: (v.theme && v.theme.guidesOffset) || null };
     await loadOriginals();
     const cur = S.currentTheme === b.oid;
-    if (cur) { goHome('screen'); toast(`New base for “${b.name}”. Store it on the screen when you are ready.`, false, 8000); }
-    else { S.selTheme = b.oid; goHome('mine'); toast(`“${b.name}” has a new base. Apply it to put it on the screen.`, false, 8000); }
+    if (cur) { goHome('screen'); toast(`New picture for “${b.name}”.`, false, 6000); }
+    else { S.selTheme = b.oid; goHome('mine'); toast(`“${b.name}” has a new picture.`, false, 6000); }
   } catch (e) { toast(e.message, true); }
 }
 function renderCtxBar() {
@@ -2175,9 +2188,8 @@ function renderCtxBar() {
   if (!b) return;
   const cur = S.detail && S.detail.versions.find(v => v.id === b.versionId);
   const back = b.home === 'screen' || S.currentTheme === b.oid ? 'On screen' : 'My themes';
-  bar.append(el('p', {}, el('b', { text: `Choosing the base for “${b.name}”. ` }),
-    'Pick any clip on the left, choose or make a version of it, then press ',
-    el('b', { text: 'Use as base' }), '. Nothing is sent to the screen from here' + (cur ? `; the current base is ${S.detail.name} · ${cur.label || 'v' + cur.n}.` : '.')),
+  bar.append(el('p', {}, el('b', { text: `Picture for “${b.name}”. ` }),
+    'Pick any clip, make a version, then ', el('b', { text: `Use for “${b.name}”` }), '.' + (cur ? ` Now: ${S.detail.name} · ${cur.label || 'v' + cur.n}.` : '')),
     el('button', { class: 'btn secondary', text: `‹ Back to ${back}`, onclick: showGallery }));
 }
 function paintDetailGuides() {
@@ -2221,17 +2233,17 @@ function renderActivity() {
     } else if (outcome.result && outcome.result.restartFailed) {
       box.classList.add('warn');
       const rf = outcome.result.restartFailed;
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `"${outcome.label}" was sent, but the screen didn't answer after restarting. ${rf.failedUsb ? 'Windows lost its USB connection.' : ''}` }),
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `"${outcome.label}" was written, but the screen didn't answer after restarting. ${rf.failedUsb ? 'Windows lost its USB connection.' : ''}` }),
         rf.failedUsb ? el('button', { class: 'btn primary', text: 'Reconnect', onclick: runReconnect }) : el('button', { class: 'btn primary', text: 'Check again', onclick: checkScreen }),
         el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
     } else if (outcome.result && outcome.result.serialWarning) {
       box.classList.add('warn');
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Done. "${outcome.label}" is on the screen. The screen is not set up yet, so it will switch off about 30 seconds after this app closes.` }),
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Embedded: "${outcome.label}". The screen is not set up yet, so it switches off about 30 seconds after this app closes.` }),
         el('button', { class: 'btn primary', text: 'Set up screen', onclick: runSetup }),
         el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
     } else if (now - outcome.finishedAt < 8000) {
       box.classList.add('ok');
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt', text: `Done. "${outcome.label}" is on the screen.` +
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt', text: `Embedded: "${outcome.label}".` +
         (outcome.result && outcome.result.restarted ? ' (The screen wasn\'t answering, so it was restarted first.)' : '') })));
       setTimeout(renderActivity, 8000 - (now - outcome.finishedAt) + 50);
     }
@@ -2246,13 +2258,13 @@ function activityRow(j) {
   if (j.status === 'waiting') text = `${j.label}: ${plainWait(j.message)}`;
   else if (j.kind === 'send') {
     const m = j.message || '';
-    if (/Connecting/.test(m)) text = `Sending "${j.label}": connecting to the screen`;
-    else if (/intro/.test(m)) text = `Sending "${j.label}": writing the start-up logo · ${pct}%`;
-    else if (/Starting playback/.test(m)) text = `Sending "${j.label}": starting playback`;
-    else if (/Restarting the screen to show/.test(m)) text = `"${j.label}" is on the screen: restarting it to show the new clip`;
-    else if (/Waiting for screen/.test(m)) text = `Sending "${j.label}": waiting for the screen to come back`;
+    if (/Connecting/.test(m)) text = `Storing "${j.label}": connecting`;
+    else if (/intro/.test(m)) text = `Storing "${j.label}": start-up logo · ${pct}%`;
+    else if (/Starting playback/.test(m)) text = `Storing "${j.label}": starting playback`;
+    else if (/Restarting the screen to show/.test(m)) text = `"${j.label}": restarting the screen`;
+    else if (/Waiting for screen/.test(m)) text = `Storing "${j.label}": waiting for the screen`;
     else {
-      text = `Sending "${j.label}" to the screen · ${pct}%`;
+      text = `Storing "${j.label}" as Embedded · ${pct}%`;
       const elapsed = (Date.now() - (j.runningSince || j.startedAt)) / 1000;
       if (elapsed > 10 && j.progress > 0.02) text += ` · ${fmtLeft(elapsed / j.progress - elapsed)}`;
       else if (j.bytesTotal) text += ` · ${fmtLeft(j.bytesTotal * (1 - j.progress) / (S.app.uploadRate || 50000))}`;
@@ -2450,13 +2462,15 @@ function renderLiveSettings() {
   $('lvAuto').disabled = !c.inApp && !l.autostart;
   renderLiveSwitch();
   for (const id of ['lvFps', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut']) $(id).disabled = !c.inApp;
-  $('lvMsg').textContent = !c.inApp ? '' : st.deviceHold ? 'Paused while the screen is busy.' : st.systemHold ? 'Paused while the PC sleeps or is locked.' : st.paused ? 'Paused from the tray.' : st.connected ? 'Live on the screen.' : 'Connecting to the screen…';
+  $('lvMsg').textContent = !c.inApp ? '' : st.deviceHold ? 'Paused: the screen is busy.' : st.systemHold ? 'Paused: the PC sleeps or is locked.' : st.paused ? 'Paused from the tray.' : st.connected ? 'Running.' : 'Connecting…';
 }
 async function liveSet(patch) {
   try { S.app = await call('live_set', { patch }); }
   catch (e) { toast(e.message, true); }
   renderLiveSettings();
   renderLiveSwitch();
+  if (typeof themes !== 'undefined') themes.appChanged();
+  renderSelBar();
 }
 const liveBind = (id, key, get) => { $(id).onchange = () => liveSet({ [key]: get($(id)) }); };
 liveBind('lvOn', 'inApp', e => e.checked);
@@ -2663,14 +2677,14 @@ const fitScreen = p => Math.sign(p) * Math.round(Math.abs(p) * 10 / 7);        /
 async function refreshFitStale() {
   const note = $('fitStale');
   note.hidden = true;
-  if (!S.currentTheme) return;
+  if (!S.embeddedTheme) return;
   try {
-    const t = await call('theme_get', { originalId: S.currentTheme });
+    const t = await call('theme_get', { originalId: S.embeddedTheme });
     note.hidden = !(t.baseStale || t.baseUnstored);
-    note.dataset.oid = S.currentTheme; note.dataset.name = t.name || '';
+    note.dataset.oid = S.embeddedTheme; note.dataset.name = t.name || '';
   } catch { /* the note stays hidden */ }
 }
-$('fitStore').onclick = () => { closeDrawer(); applyTheme($('fitStale').dataset.oid, $('fitStale').dataset.name); };
+$('fitStore').onclick = () => { closeDrawer(); storeTheme($('fitStale').dataset.oid, $('fitStale').dataset.name); };
 function loadFitForm() {
   refreshFitStale();
   FC.saved = { ...FIT0, ...((S.app && S.app.screenFit) || {}) };
@@ -2711,7 +2725,7 @@ function paintFitMode() {
   $('fitModeTheme').classList.toggle('on', FC.mode === 'theme');
   $('fitModeRulers').setAttribute('aria-pressed', String(FC.mode === 'rulers'));
   $('fitModeTheme').setAttribute('aria-pressed', String(FC.mode === 'theme'));
-  $('fitNote').textContent = FC.mode === 'rulers' ? 'The screen shows rulers. Move each red edge in until its first mark just shows.' : 'The screen shows your theme with these values, live. Adjust until it looks right, then Save.';
+  $('fitNote').textContent = FC.mode === 'rulers' ? 'The screen shows rulers. Move each red edge in until its first mark just shows.' : 'The screen shows your theme with these values.';
 }
 function fitMode(m) {
   FC.mode = m;
@@ -2752,17 +2766,34 @@ async function fitPersist() {
   } catch (e) { $('fitMsg').textContent = e.message; }
 }
 $('fitReset').onclick = () => { FC.cur = { ...FIT0 }; paintFit(); fitSend(); fitKeep(); };
-// ---------- themes: the On screen editor and the Apply dialog ----------
-async function applyTheme(oid, name) {
-  await themes.flush(); // unsaved edits first, so the base is made from the saved theme
+// ---------- themes: the On screen editor and the Store dialog ----------
+async function storeTheme(oid, name) {
+  await themes.flush(); // unsaved edits first, so the picture is made from the saved theme
   const r = await runApply(oid, name);
   await loadApp().catch(() => {});
   await loadOriginals().catch(() => {});
-  if (r === 'done') { S.selTheme = null; goHome('screen'); toast(`"${name}" is on the screen.`); }
-  else if (r === 'stopped') toast('Stopped. The previous theme is still on the screen.');
+  if (r === 'done') { toast(`Embedded: “${name}”.`); if (S.view === 'mine' && S.currentTheme === oid) { S.selTheme = null; goHome('screen'); } }
+  else if (r === 'stopped') toast('Stopped. Embedded is unchanged.');
   return r;
 }
-const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openBase, applyTheme, openSettings: openDrawer });
+// "Use this theme": live switches at once; Embedded is not touched.
+async function useTheme(oid, name) {
+  try { await themes.flush(); await call('theme_use', { originalId: oid }); } catch (e) { toast(e.message, true); return 'failed'; }
+  await loadApp().catch(() => {});
+  await loadOriginals().catch(() => {});
+  S.selTheme = null; goHome('screen');
+  const emb = S.embeddedTheme && S.embeddedTheme !== oid ? S.originals.find(o => o.id === S.embeddedTheme) : null;
+  toast(`Live: “${name}”.` + (emb ? ` Embedded: “${emb.name}”.` : ''), false, 6000);
+  return 'done';
+}
+// Live off: one action, use it and store it as Embedded.
+async function useAndStore(oid, name) {
+  try { await themes.flush(); await call('theme_use', { originalId: oid }); } catch (e) { toast(e.message, true); return; }
+  await loadOriginals().catch(() => {});
+  const r = await storeTheme(oid, name);
+  if (r === 'done') { S.selTheme = null; goHome('screen'); }
+}
+const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openBase, storeTheme, openSettings: openDrawer });
 initApply({ call, backend, plainWait });
 
 // ---------- start ----------

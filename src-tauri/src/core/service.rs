@@ -181,16 +181,17 @@ impl App {
             .iter()
             .map(|o| json!({ "id": o["id"], "name": o["name"], "since": o["missing"]["since"] }))
             .collect();
-        let cur = self.current_theme_oid();
+        let cur = self.live_theme_oid();
+        let emb = self.embedded_theme_oid();
         let originals: Vec<Value> = all
             .iter()
             .map(|o| {
                 let mut s = self.lib.summary(o, &ctx);
-                s["theme"] = self.theme_summary(o["id"].as_str().unwrap_or(""), cur.as_deref());
+                s["theme"] = self.theme_summary(o["id"].as_str().unwrap_or(""), cur.as_deref(), emb.as_deref());
                 s
             })
             .collect();
-        json!({ "rev": self.lib.rev(), "originals": originals, "longMissing": long, "currentTheme": cur })
+        json!({ "rev": self.lib.rev(), "originals": originals, "longMissing": long, "currentTheme": cur, "embeddedTheme": emb })
     }
 
     /// POST /api/import: the bytes of a dropped file.
@@ -586,7 +587,7 @@ impl App {
         let mut req = self.encode_req(&oid, &o, &st, &c2)?;
         if let Some(f) = v["overlay"]["file"].as_str() {
             if !std::path::Path::new(f).is_file() {
-                let msg = "The text and pictures for this base are missing. Apply the theme again to make them.";
+                let msg = "The text and pictures for this base are missing. Update Embedded to make them.";
                 self.lib.patch_version(vid, &json!({ "status": "error", "error": msg }))?;
                 return Err(CoreError::new(msg));
             }

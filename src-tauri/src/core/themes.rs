@@ -2,11 +2,12 @@
 //! plus an optional live layer (widgets the engine draws on top while CoolerScreen runs) and hand-over options.
 //! `theme.json` lives in the original's folder (library/<originalId>/theme.json); a missing file means the defaults.
 //!
-//! "Current theme" = the original whose version is in the loop slot (`on_screen`). The live engine always shows the current
-//! theme; `refresh_live_theme` tells it. Applying a theme (`theme_apply`) is one visible job with three steps:
+//! "Embedded theme" = the original whose version is in the loop slot (`on_screen`). The "live theme" is what the live engine
+//! shows: the one the user chose with "Use this theme" (`liveTheme` in settings.json), or, when none was chosen, the Embedded
+//! theme (2.0 behaviour). `refresh_live_theme` tells the engine. Storing a theme as Embedded (`theme_apply`) is one visible job:
 //! 1. make or reuse the base version (with the text/picture items baked in when the theme has `onBase` items),
-//! 2. send it to the loop slot (the normal send job; live pauses and resumes around it),
-//! 3. switch the live layer to this theme.
+//! 2. send it to the loop slot (the normal send job; live pauses and resumes around it).
+//! It does not change which theme is live (unless none was chosen: then live follows Embedded).
 use super::app::App;
 use super::error::{CoreError, CoreResult};
 use super::gallery::{sanitize_name, unique_path};
@@ -58,7 +59,7 @@ fn normalize_groups(t: &mut Theme) {
 const ASSET_EXT: [&str; 6] = ["png", "jpg", "jpeg", "webp", "gif", "bmp"];
 const MAX_ASSET_BYTES: usize = 25 * 1024 * 1024;
 const MAX_WIDGETS: usize = 40;
-/// Apply: step 1 (base) ends here, step 2 (send) ends at `SEND_END`, step 3 is the rest.
+/// Store: step 1 (base) ends here, step 2 (send) ends at `SEND_END`.
 const BASE_END: f64 = 0.45;
 const SEND_END: f64 = 0.97;
 
@@ -127,7 +128,7 @@ impl App {
     ///
     /// A theme's base may be a version of another clip, so the slot record also names the theme it was stored for
     /// (`themeId`); without it (a plain push, an older build) the owner of the version is the theme.
-    pub fn current_theme_oid(&self) -> Option<String> {
+    pub fn embedded_theme_oid(&self) -> Option<String> {
         let s = self.settings.load();
         let sb = s.slot("standby")?;
         let vid = sb["versionId"].as_str()?.to_string();
@@ -136,6 +137,35 @@ impl App {
             return Some(t.to_string());
         }
         self.lib.read_original(&owner).map(|_| owner)
+    }
+
+    /// The theme live shows: the one chosen with "Use this theme" (if it still exists), else the Embedded theme.
+    pub fn live_theme_oid(&self) -> Option<String> {
+        if let Some(t) = self.settings.load().live_theme().filter(|t| self.lib.read_original(t).is_some()) {
+            return Some(t);
+        }
+        self.embedded_theme_oid()
+    }
+
+    /// "Use this theme": live switches to it at once; Embedded is not touched. Choosing the Embedded theme goes back to following it.
+    pub fn theme_use(&self, oid: &str) -> CoreResult<Value> {
+        self.lib.read_original(oid).ok_or_else(gone)?;
+        let follow = self.embedded_theme_oid().as_deref() == Some(oid);
+        self.settings
+            .update(|s| {
+                if follow {
+                    if let Some(o) = s.as_object_mut() {
+                        o.remove("liveTheme");
+                    }
+                } else {
+                    s["liveTheme"] = json!(oid);
+                }
+            })
+            .map_err(|e| CoreError::new(e.to_string()))?;
+        self.refresh_live_theme();
+        self.theme_card_soon(oid);
+        self.lib.bump();
+        self.theme_view(oid)
     }
 
     /// What the engine needs: the theme, its folder, the base file and the original clip as a fallback background.
@@ -149,6 +179,9 @@ impl App {
         tl.base_video = base.as_ref().and_then(|(_, v)| self.lib.device_path(v));
         tl.base_fit = base.as_ref().map(|_| theme.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).map(|(_, r)| super::fit::Fit::from_value(&r["notch"]["fit"])).unwrap_or_default());
         let owner = base.map(|(o, _)| o).unwrap_or_else(|| oid.to_string());
+        // Is this theme's base the picture the screen holds (Embedded)? Only then may live hand over to / idle on the loop.
+        let standby = self.settings.load().slot("standby").and_then(|s| s["versionId"].as_str().map(String::from));
+        tl.not_embedded = theme.base_version_id.is_some() && theme.base_version_id != standby;
         tl.theme.corners = Some(self.corner_radius_of(&theme) as f32); // the engine gets the radius in effect (theme or default)
         let o = self.lib.read_original(&owner);
         tl.fallback_video = o.as_ref().filter(|o| !truthy(o.get("isImage"))).and_then(|o| self.lib.source_path(o));
@@ -157,7 +190,7 @@ impl App {
 
     /// Tell the live engine which theme to show: the current one, or today's Standard layout when nothing was applied yet.
     pub fn refresh_live_theme(&self) {
-        let tl = match self.current_theme_oid() {
+        let tl = match self.live_theme_oid() {
             Some(oid) => {
                 let t = self.load_theme(&oid);
                 self.theme_live_of(&oid, t)
@@ -195,22 +228,29 @@ impl App {
     pub fn theme_view(&self, oid: &str) -> CoreResult<Value> {
         let o = self.lib.read_original(oid).ok_or_else(gone)?;
         let t = self.load_theme(oid);
-        let current = self.current_theme_oid().as_deref() == Some(oid);
+        let live = self.live_theme_oid().as_deref() == Some(oid);
+        let embedded_oid = self.embedded_theme_oid();
+        let is_embedded = embedded_oid.as_deref() == Some(oid);
         let base = t.base_version_id.as_deref().and_then(|v| self.lib.find_version(v));
         let key = self.overlay_key(oid, &t);
         // The stored base was made without (or with other) baked items than the theme has now.
         let standby = self.settings.load().slot("standby").and_then(|s| s["versionId"].as_str().map(String::from));
         // A base was chosen (Base settings) that is not what the screen holds yet.
-        let unstored = current && base.is_some() && standby != t.base_version_id;
+        let unstored = is_embedded && base.is_some() && standby != t.base_version_id;
+        // This theme's base is the picture the screen holds (also when two themes share a base).
+        let same_base = base.is_some() && standby == t.base_version_id;
+        // Live shows a theme whose base is not what the screen holds (and it is not the Embedded theme with a changed base).
+        let embedded_differs = live && !is_embedded && !same_base;
+        let embedded_theme = embedded_oid.as_deref().and_then(|e| self.lib.read_original(e)).map(|eo| json!({ "originalId": eo["id"], "name": eo["name"] }));
         // "Stale" = the picture inputs differ from the stored base: screen fit with shift, notch, corner radius, baked items (a different base is `unstored`). Live-only things (widgets and props, live layer, hand-over, guides, gap, weather) never count.
         let fit_key = self.lib.context().notch_key;
         let radius = self.corner_radius_of(&t);
-        let stale = current && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key || (version_radius(v) - radius).abs() > 0.5 || super::mask::base_key(v["notchKey"].as_str()) != fit_key);
+        let stale = same_base && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key || (version_radius(v) - radius).abs() > 0.5 || super::mask::base_key(v["notchKey"].as_str()) != fit_key);
         let owner = base.as_ref().and_then(|(boid, _)| self.lib.read_original(boid).map(|bo| json!({ "originalId": boid, "name": bo["name"] })));
         let kinds: Vec<&str> = t.widgets.iter().map(|w| w.kind.as_str()).collect();
         Ok(json!({
             "originalId": oid, "name": o["name"], "theme": theme_value(&t),
-            "current": current, "baseVersionId": t.base_version_id, "baseExists": base.is_some(),
+            "current": live, "live": live, "embedded": is_embedded, "embeddedDiffers": embedded_differs, "embeddedTheme": embedded_theme, "baseVersionId": t.base_version_id, "baseExists": base.is_some(),
             "cornersDefault": self.settings.load().corner_radius(), "cornersEffective": radius,
             "guides": super::settings::guides_value(&crate::live::theme::Guides::from_value(&self.settings.load().screen_guides()).effective(&t.guides_offset)),
             "baseStale": stale, "baseUnstored": unstored, "baseOwner": owner, "hasBaseItems": t.has_base_items(), "widgetKinds": kinds,
@@ -264,7 +304,7 @@ impl App {
             t.base_version_id = Some(vid.to_string());
             self.save_theme_locked(oid, &t)?;
         }
-        if self.current_theme_oid().as_deref() == Some(oid) {
+        if self.live_theme_oid().as_deref() == Some(oid) {
             self.refresh_live_theme();
         }
         self.theme_card_soon(oid);
@@ -278,7 +318,7 @@ impl App {
         let t = self.clean_theme(oid, theme)?;
         self.save_theme_locked(oid, &t)?;
         drop(_g);
-        if self.current_theme_oid().as_deref() == Some(oid) {
+        if self.live_theme_oid().as_deref() == Some(oid) {
             self.refresh_live_theme();
         }
         self.theme_card_soon(oid);
@@ -386,6 +426,14 @@ impl App {
                 }
             }
             let _ = self.settings.patch_slot("standby", &json!({ "themeId": oid }));
+            // the chosen live theme is now also the Embedded one: from here live simply follows Embedded again
+            if self.settings.load().live_theme().as_deref() == Some(oid.as_str()) {
+                let _ = self.settings.update(|s| {
+                    if let Some(o) = s.as_object_mut() {
+                        o.remove("liveTheme");
+                    }
+                });
+            }
         }
         self.refresh_live_theme();
         self.theme_card_soon(&oid);
@@ -443,7 +491,7 @@ impl App {
             }
             if let Some(j) = self.sched.job(&h.id) {
                 let text = if j.status == "waiting" { "Waiting for the screen to be free".to_string() } else { what.to_string() };
-                ctx.progress(from + (to - from) * j.progress.clamp(0.0, 1.0), &format!("Step {step} of 3: {text}"));
+                ctx.progress(from + (to - from) * j.progress.clamp(0.0, 1.0), &format!("Step {step} of 2: {text}"));
             }
         }
     }
@@ -461,13 +509,13 @@ impl App {
                     let job = self.sched.activity(0).into_iter().find(|j| j.version_id.as_deref() == Some(vid) && j.kind == "version" && !j.state.finished());
                     // queued/converting with no job behind it: it was interrupted, never finish waiting for it
                     if job.is_none() && idle_since.get_or_insert_with(std::time::Instant::now).elapsed() > Duration::from_secs(3) {
-                        return Err(CoreError::new("The base picture was interrupted. Apply the theme again."));
+                        return Err(CoreError::new("The Embedded picture was interrupted. Store it again."));
                     }
                     if job.is_some() {
                         idle_since = None;
                     }
                     let p = job.map(|j| j.progress).unwrap_or(0.0);
-                    ctx.progress(BASE_END * p, "Step 1 of 3: Preparing the picture");
+                    ctx.progress(BASE_END * p, "Step 1 of 2: Preparing the picture");
                     ctx.sleep(Duration::from_millis(100))?;
                 }
             }
@@ -477,7 +525,7 @@ impl App {
     fn run_apply(&self, ctx: &TaskCtx, oid: &str) -> CoreResult<Value> {
         let o = self.lib.read_original(oid).ok_or_else(gone)?;
         let t = self.load_theme(oid);
-        ctx.progress(0.0, "Step 1 of 3: Preparing the picture");
+        ctx.progress(0.0, "Step 1 of 2: Preparing the picture");
         // 1. the base: the version with the clip's settings (and the baked items), reused when it already exists
         let overlay = self.make_overlay(oid, &t)?;
         let want_key = overlay.as_ref().and_then(|ov| ov["key"].as_str().map(String::from));
@@ -527,41 +575,41 @@ impl App {
         };
         ctx.check()?;
         // 2. send it to the loop slot (live pauses while the screen is written)
-        ctx.progress(BASE_END, "Step 2 of 3: Sending to the screen");
+        ctx.progress(BASE_END, "Step 2 of 2: Storing as Embedded");
         target_set(oid, &vid);
-        let sent = self.send_handle(&vid).and_then(|h| self.wait_sub(ctx, &h, (BASE_END, SEND_END), 2, "Sending to the screen"));
+        let sent = self.send_handle(&vid).and_then(|h| self.wait_sub(ctx, &h, (BASE_END, SEND_END), 2, "Storing as Embedded"));
         if sent.is_err() {
             target_clear(&vid);
         }
         sent?;
-        // 3. switch the live layer
-        ctx.progress(SEND_END, "Step 3 of 3: Switching the live layer");
+        // done: the slot names this theme (live follows it unless another theme was chosen with "Use this theme")
+        ctx.progress(SEND_END, "Step 2 of 2: Storing as Embedded");
         self.after_base_sent(&vid);
         target_clear(&vid);
         ctx.progress(1.0, "Done");
         Ok(json!({ "originalId": oid, "versionId": vid }))
     }
 
-    /// Apply a theme: base picture, store it on the screen, switch the live layer. Returns `{ jobId }`.
+    /// Store a theme as Embedded: make its base picture and write it to the screen. Returns `{ jobId }`.
     pub fn theme_apply(&self, oid: &str) -> CoreResult<Value> {
         let o = self.lib.read_original(oid).ok_or_else(gone)?;
         if self.lib.source_path(&o).is_none() && self.load_theme(oid).base_version_id.and_then(|v| self.lib.find_version(&v)).is_none() {
-            return Err(CoreError::new("The original file is missing, so this theme can't be applied."));
+            return Err(CoreError::new("The original file is missing, so this theme can't be stored as Embedded."));
         }
         let name = o["name"].as_str().unwrap_or("theme").to_string();
-        let spec = TaskSpec::new("apply", format!("Applying \"{name}\""), Resources::none()).original(oid).priority(Priority::User).visible();
+        let spec = TaskSpec::new("apply", format!("Storing \"{name}\" as Embedded"), Resources::none()).original(oid).priority(Priority::User).visible();
         let (app, oid2) = (self.arc(), oid.to_string());
         let h = self.sched.submit(spec, move |ctx| app.run_apply(ctx, &oid2));
         Ok(json!({ "jobId": h.id }))
     }
 
     /// For the list: which kinds of items a theme has, and its card picture.
-    pub(crate) fn theme_summary(&self, oid: &str, current: Option<&str>) -> Value {
+    pub(crate) fn theme_summary(&self, oid: &str, current: Option<&str>, embedded: Option<&str>) -> Value {
         let t = self.load_theme(oid);
         let card = self.theme_dir(oid).join("theme-card.png");
         let kinds: Vec<&str> = t.widgets.iter().map(|w| w.kind.as_str()).collect();
         json!({
-            "widgets": kinds, "current": current == Some(oid),
+            "widgets": kinds, "current": current == Some(oid), "live": current == Some(oid), "embedded": embedded == Some(oid),
             "card": if card.is_file() && !t.widgets.is_empty() { json!(self.lib.url(&format!("/media/o/{oid}/theme-card.png?t={}", std::fs::metadata(&card).ok().and_then(|m| m.modified().ok()).and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis()).unwrap_or(0)))) } else { Value::Null },
         })
     }

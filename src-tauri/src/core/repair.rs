@@ -214,6 +214,9 @@ impl App {
                     }
                 }
             }
+            if is_dup(&s["liveTheme"]) {
+                s["liveTheme"] = json!(kid);
+            }
             if is_dup(&s["live"]["background"]) {
                 s["live"]["background"] = json!(kid);
             }
@@ -256,7 +259,7 @@ impl App {
                 o["name"].as_str().unwrap_or(""),
                 size / 1e6,
                 budget / 1e6,
-                to.as_str().unwrap_or("none (made again when the theme is applied)")
+                to.as_str().unwrap_or("none (made again when the theme is stored as Embedded)")
             );
             if apply {
                 theme["baseVersionId"] = to.clone();

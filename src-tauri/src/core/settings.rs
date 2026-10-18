@@ -69,6 +69,10 @@ impl Settings {
     pub fn live_destroy_window(&self) -> bool {
         self.live().destroy_window
     }
+    /// The theme Live shows when the user chose one with "Use this theme" that is not the Embedded one (None = follows Embedded).
+    pub fn live_theme(&self) -> Option<String> {
+        self.0.get("liveTheme").and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from)
+    }
 }
 
 /// 3.0 live screen (all off or "like 2.0" by default; `destroy_window` is on once live is on, by the user's decision).
@@ -337,6 +341,10 @@ pub fn sanitize(s: &Value) -> Settings {
     let live = LiveSettings::from_value(s.get("live")).to_min_value();
     if !live.as_object().is_none_or(|o| o.is_empty()) {
         out["live"] = live;
+    }
+    // 3.0 (v1.8): the live theme when it is not the Embedded one; written only when set.
+    if let Some(t) = str80(s.get("liveTheme"), 80) {
+        out["liveTheme"] = json!(t);
     }
     Settings(out)
 }

@@ -745,13 +745,16 @@ pub struct ThemeLive {
     /// The screen fit the base was made with (None: made before the setting existed = none). Live compares it with the current
     /// fit and scales the base picture itself when they differ.
     pub base_fit: Option<crate::core::fit::Fit>,
+    /// This theme's base is not the picture the screen holds (Embedded): live must stream its base itself, and when live stops it
+    /// hands over instantly (the stored picture is another one, so a fade or a first-frame cross-fade would be wrong).
+    pub not_embedded: bool,
 }
 
 impl ThemeLive {
     /// Live has nothing to add to the screen's own loop: no live items, and the stored base is fitted the way the screen fit is
     /// now (otherwise streaming is what applies the fit). The engine then need not stream at all.
     pub fn nothing_to_stream(&self, fit: crate::core::fit::Fit) -> bool {
-        self.theme.live_layer && self.base_video.is_some() && !self.theme.has_live_items(true) && self.base_fit.unwrap_or_default() == fit
+        self.theme.live_layer && !self.not_embedded && self.base_video.is_some() && !self.theme.has_live_items(true) && self.base_fit.unwrap_or_default() == fit
     }
 
     pub fn has_live_items(&self) -> bool {
@@ -759,7 +762,7 @@ impl ThemeLive {
     }
 
     pub fn new(theme: Theme, theme_dir: PathBuf) -> ThemeLive {
-        ThemeLive { theme, theme_dir, base_video: None, fallback_video: None, base_fit: None }
+        ThemeLive { theme, theme_dir, base_video: None, fallback_video: None, base_fit: None, not_embedded: false }
     }
 }
 

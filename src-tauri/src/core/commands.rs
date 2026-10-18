@@ -326,7 +326,13 @@ pub async fn fit_cal(core: State<'_, Core>, request: tauri::ipc::Request<'_>) ->
     run(&core, move |app| app.fit_cal(&a)).await
 }
 
-/// Apply a theme: base picture, store it on the screen, switch the live layer -> `{ jobId }`.
+/// "Use this theme": live switches to it at once, Embedded is not touched -> the theme's view.
+#[tauri::command]
+pub async fn theme_use(core: State<'_, Core>, original_id: String) -> Result<Value, CoreError> {
+    run(&core, move |a| a.theme_use(&original_id)).await
+}
+
+/// Store a theme as Embedded (base picture, written to the screen) -> `{ jobId }`.
 #[tauri::command]
 pub async fn theme_apply(core: State<'_, Core>, original_id: String) -> Result<Value, CoreError> {
     run(&core, move |a| a.theme_apply(&original_id)).await
@@ -392,7 +398,7 @@ pub const COMMANDS: &[&str] = &[
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
-    "theme_preview", "theme_asset_add", "theme_apply", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place",
+    "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place",
 ];
 
 // ---------- weather place ----------

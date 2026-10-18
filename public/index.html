@@ -10,11 +10,11 @@
 <header class="topbar" id="topbar">
   <span class="appname">CoolerScreen</span>
   <nav class="topnav" aria-label="Main">
-    <button type="button" id="navScreen" class="home-btn" title="On screen: the theme on your screen now, with its editor">
+    <button type="button" id="navScreen" class="home-btn" title="On screen: the live theme, with its editor">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5v2h2v2H8v-2h2v-2H5a2 2 0 0 1-2-2zm2 0v10h14V5z"/></svg>
       <span>On screen</span>
     </button>
-    <button type="button" id="navMine" class="home-btn" title="My themes: the themes in your library">
+    <button type="button" id="navMine" class="home-btn" title="My themes: choose a theme">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2 0v2h2V5zm10 0v2h2V5zM6 9v2h2V9zm10 0v2h2V9zM6 13v2h2v-2zm10 0v2h2v-2zM6 17v2h2v-2zm10 0v2h2v-2zM10 5v14h4V5z"/></svg>
       <span>My themes</span>
     </button>
@@ -27,7 +27,7 @@
   <div class="status-combo" role="group" aria-label="Screen and live">
     <button type="button" id="pill" class="pill" data-state="checking" aria-describedby="pillHint"><span class="dot" aria-hidden="true"></span><span id="pillText">Checking screen…</span></button>
     <span id="pillHint" class="sr-only">Opens the screen settings</span>
-    <label class="live-switch" for="liveSwitch" title="Show live information (clock, music, PC stats) on the screen while CoolerScreen runs">
+    <label class="live-switch" for="liveSwitch" title="Live: draw the clock, music and PC stats on the screen">
       <span class="live-label">Live</span>
       <input type="checkbox" id="liveSwitch" role="switch" aria-label="Live on the screen">
       <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
@@ -48,14 +48,13 @@
 <div class="panes" hidden>
   <aside class="library" aria-labelledby="libHead">
     <div class="pane-head">
-      <h2 id="libHead">Library</h2>
-      <button type="button" id="addBtn" class="btn outline">+ Add clip</button>
+      <h2 id="libHead">Themes</h2>
+      <button type="button" id="addBtn" class="btn outline">+ Add</button>
       <input type="file" id="fileInput" multiple accept="video/*,image/*,.gif,.mkv,.webm,.mov,.avi,.ht,.zip" hidden>
     </div>
     <ul id="libList" class="liblist" role="listbox" aria-labelledby="libHead" tabindex="0"></ul>
     <div class="lib-foot">
       <button type="button" id="openFolder" class="btn ghost">Open Gallery folder</button>
-      <p class="muted small">Files you put there appear here automatically.</p>
     </div>
     <div id="dropHint" class="drop-hint" hidden>Drop to add</div>
   </aside>
@@ -68,11 +67,11 @@
 
 <div id="applyBack" class="apply-back" hidden>
   <div id="applyBox" class="dialog apply-box" role="dialog" aria-modal="true" aria-labelledby="applyTitle" aria-describedby="applyNote" tabindex="-1">
-    <h2 id="applyTitle">Applying</h2>
+    <h2 id="applyTitle">Storing as Embedded</h2>
     <ol id="applySteps" class="apply-steps"></ol>
     <div class="progress apply-bar" id="applyBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Progress"><div></div></div>
     <p id="applyNote" class="muted small apply-note" role="status" aria-live="polite"></p>
-    <div class="dialog-actions"><button type="button" id="applyStop" class="btn secondary">Stop and keep the previous theme</button></div>
+    <div class="dialog-actions"><button type="button" id="applyStop" class="btn secondary">Stop (Embedded stays as it was)</button></div>
   </div>
 </div>
 
@@ -97,7 +96,7 @@
 
       <section id="setNotch" aria-labelledby="hNotch">
         <h3 id="hNotch">Notch</h3>
-        <p class="muted small">Your screen's camera hole is on the left edge. This area is kept black in every new version.</p>
+        <p class="muted small">The camera hole is kept black in every picture.</p>
         <div class="screenframe small-frame" id="notchFrame">
           <img id="notchBg" alt="">
           <div id="notchShape" class="notch edit" hidden></div>
@@ -127,7 +126,7 @@
           <div class="field"><label for="nR">Size (radius)</label><input type="number" id="nR" min="0" max="600"></div>
           <div class="field"><label for="nF">Soft edge</label><input type="number" id="nF" min="0" max="200"></div>
         </div>
-        <p class="muted small">Rounded corners are set below (a default) and per theme.</p>
+        <p class="muted small">Corners: default below, or per theme.</p>
         <p id="nMsg" class="muted small" role="status"></p>
       </section>
 
@@ -163,13 +162,13 @@
         <p id="fitNote" class="muted small"></p>
         <div id="fitRows" class="fit-rows"></div>
         <div class="row"><button type="button" id="fitReset" class="btn ghost">Reset</button></div>
-        <p id="fitStale" class="small" hidden>Live uses the new values now; the screen's own copy updates when you store the base again. <button type="button" id="fitStore" class="linkbtn">Store now</button></p>
+        <p id="fitStale" class="small" hidden>Embedded is out of date. <button type="button" id="fitStore" class="linkbtn">Update Embedded</button></p>
         <p id="fitMsg" class="muted small" role="status"></p>
       </section>
 
       <section id="setSources" aria-labelledby="hSources">
         <h3 id="hSources">Sources</h3>
-        <p class="muted small">Extra places to find clips. Each one you turn on gets a checkbox in Browse.</p>
+        <p class="muted small">Extra places to find clips; each shows in Browse.</p>
         <div id="srcList"></div>
       </section>
 
@@ -182,7 +181,7 @@
 
       <section id="setLive" aria-labelledby="hLive">
         <h3 id="hLive">Live screen</h3>
-        <p class="muted small">Off by default. When on, the screen shows the live layer of your On screen theme (clock, music, PC stats, text and pictures) drawn by CoolerScreen. What is shown is set per theme, in On screen. Closing the window then keeps CoolerScreen running in the tray (the icon near the clock); use Quit in its menu to end it, and the screen goes back to its stored loop. Sending a theme or restarting the screen pauses live and brings it back afterwards.</p>
+        <p class="muted small">Draws your theme's clock, music and PC stats. Closing the window keeps it in the tray; Quit there stops it and the screen shows Embedded.</p>
         <div class="src-row">
           <div class="src-top"><label for="lvOn" class="src-name">Live on the screen</label><input type="checkbox" id="lvOn" role="switch"></div>
           <p id="lvMsg" class="muted small" role="status"></p>
@@ -191,29 +190,29 @@
           <div class="field"><label for="lvFps">Smoothness</label>
             <select id="lvFps"><option value="60">60 frames per second</option><option value="30">30 frames per second</option></select></div>
           <div class="src-row"><div class="src-top"><label for="lvDestroy" class="src-name">Free memory when the window is closed</label><input type="checkbox" id="lvDestroy" role="switch"></div>
-            <p class="muted small">Recommended. The window takes a moment longer to come back from the tray.</p></div>
+            <p class="muted small">Recommended. Reopening takes a moment longer.</p></div>
           <div class="field"><label for="lvSleep">When the PC goes to sleep</label>
-            <select id="lvSleep"><option value="loop">Show the normal clip</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
+            <select id="lvSleep"><option value="loop">Show Embedded</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
           <div class="field"><label for="lvLock">When the PC is locked</label>
-            <select id="lvLock"><option value="loop">Show the normal clip</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
+            <select id="lvLock"><option value="loop">Show Embedded</option><option value="keep">Keep live running</option><option value="off">Turn the screen off</option></select></div>
           <div class="src-row"><div class="src-top"><label for="lvShut" class="src-name">Turn the screen off when the PC shuts down</label><input type="checkbox" id="lvShut" role="switch"></div>
-            <p class="muted small">Off: the screen keeps playing its normal clip.</p></div>
+            <p class="muted small">Off: the screen keeps showing Embedded.</p></div>
           <div class="src-row"><div class="src-top"><label for="lvAuto" class="src-name">Start CoolerScreen when Windows starts</label><input type="checkbox" id="lvAuto" role="switch"></div>
-            <p class="muted small">It starts hidden in the tray. Turn this off any time; uninstalling also removes it.</p></div>
+            <p class="muted small">Starts in the tray. Uninstalling removes it.</p></div>
         </div>
       </section>
 
       <section id="setAdvanced" aria-labelledby="hAdv">
         <details>
           <summary><h3 id="hAdv">Advanced</h3></summary>
-          <p class="muted small">Restoring the original driver lets the vendor app (LOVINGCOOL MONITOR) see the screen again. The screen then switches its display off 30 seconds after any program closes its connection.</p>
+          <p class="muted small">Lets the vendor app (LOVINGCOOL MONITOR) see the screen again. The screen then switches off 30 seconds after a program closes its connection.</p>
           <div class="row"><button type="button" id="aRestore" class="btn danger">Restore original driver…</button></div>
         </details>
       </section>
 
       <section id="setAbout" aria-labelledby="hAbout">
         <h3 id="hAbout">About</h3>
-        <p class="muted small">CoolerScreen <span id="appVer"></span>. Unofficial tool for the Lovingcool SC70 USB screen. Nothing runs in the background: close the app and the screen keeps playing.
+        <p class="muted small">CoolerScreen <span id="appVer"></span>. Unofficial tool for the Lovingcool SC70 USB screen. With Live off nothing runs in the background; with Live on it runs in the tray.
           <a href="https://github.com/oldbugo/coolerscreen#readme" target="_blank" rel="noopener">Help and troubleshooting</a></p>
         <p class="muted small" id="buildLine" style="user-select:text"></p>
       </section>

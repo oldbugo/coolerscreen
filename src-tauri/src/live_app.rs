@@ -15,7 +15,7 @@ use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry, WebviewWindow, WindowEvent};
 
-const PAUSE_TEXT: &str = "Pause live (screen shows its normal clip)";
+const PAUSE_TEXT: &str = "Pause live (screen shows Embedded)";
 
 /// True while the tray icon exists (closing the window then hides it, and the app does not exit with its last window).
 static TRAY_ON: AtomicBool = AtomicBool::new(false);
@@ -286,7 +286,7 @@ pub fn refresh_tray(_app: &AppHandle) {
     let st = h.status();
     let (paused, fps) = (h.user_paused(), h.fps());
     if let Some(t) = _app.tray_by_id(TRAY_ID) {
-        let _ = t.set_tooltip(Some(if paused { "CoolerScreen live: paused (the screen plays its own loop)".to_string() } else { if st["liveItems"] == false { "CoolerScreen live: no live items (the screen plays its own loop)".to_string() } else { format!("CoolerScreen live: {fps} fps") } }));
+        let _ = t.set_tooltip(Some(if paused { "CoolerScreen live: paused (the screen shows Embedded)".to_string() } else { if st["liveItems"] == false { "CoolerScreen live: no live items (the screen shows Embedded)".to_string() } else { format!("CoolerScreen live: {fps} fps") } }));
     }
     if let Some(t) = TRAY.lock().unwrap().as_ref() {
         let _ = t.pause.set_text(if paused { "Resume live" } else { PAUSE_TEXT });

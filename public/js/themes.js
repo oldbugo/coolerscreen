@@ -18,9 +18,9 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* not rem
 
 const STAT_ITEMS = [['cpu', 'PC load'], ['ram', 'Memory'], ['gpuLoad', 'Graphics card load'], ['gpuTemp', 'Graphics card temperature'], ['gpuClock', 'Graphics card speed'], ['cpuTemp', 'Processor temperature']];
 const END_CHOICES = [
-  ['loopStart', 'Fade out onto the stored loop', 'The live layer fades away and the screen carries on from the first frame of its stored loop. Nothing jumps.'],
-  ['instant', 'Stop at once', 'The live layer disappears and the stored loop plays.'],
-  ['screenOff', 'Fade to black and turn the screen off', 'The screen goes dark when CoolerScreen stops.'],
+  ['loopStart', 'Fade to Embedded', 'The live layer fades away and Embedded carries on from its first frame. Only when this theme is Embedded; otherwise it stops at once.'],
+  ['instant', 'Stop at once', 'The live layer disappears and Embedded plays.'],
+  ['screenOff', 'Fade to black, screen off', 'The screen goes dark when CoolerScreen stops.'],
 ];
 
 const SVG_EYE = on => `<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/>${on ? '<circle cx="12" cy="12" r="3" fill="currentColor"/>' : '<path stroke="currentColor" stroke-width="2" d="M4 20 20 4"/>'}</svg>`;
@@ -75,7 +75,7 @@ export function createThemes(ctx) {
     const oid = currentId();
     if (!oid) {
       E.oid = null; E.ui = null;
-      renderEmpty(S.originals.length ? 'Nothing has been applied to the screen yet.' : 'You have no themes yet.');
+      renderEmpty(S.originals.length ? 'No theme is live yet.' : 'No themes yet.');
       return;
     }
     if (E.oid !== oid || !E.ui) await open(oid);
@@ -122,6 +122,7 @@ export function createThemes(ctx) {
   /** The app settings changed (guides, default radius): redraw what depends on them. */
   function appChanged() {
     if (!E.ui) return;
+    paintTitle(); paintBar();
     // a new screen fit makes the stored base stale: read the editor's view again so the banner shows
     const fk = JSON.stringify((S.app && S.app.screenFit) || {});
     if (E.fitKey !== undefined && E.fitKey !== fk) syncFromServer();
@@ -132,8 +133,8 @@ export function createThemes(ctx) {
   function renderEmpty(text) {
     root.textContent = '';
     root.append(el('div', { class: 'ed-empty' },
-      el('h1', { id: 'screenTitle', text: 'Nothing on the screen yet' }),
-      el('p', { class: 'muted', text: `${text} Pick a theme in My themes and apply it: it is stored on the screen, and this page then lets you design what CoolerScreen draws on top of it (clock, music, PC stats, text, pictures).` }),
+      el('h1', { id: 'screenTitle', text: 'No live theme' }),
+      el('p', { class: 'muted', text: `${text} Pick one in My themes; this page then edits what is drawn on top of it.` }),
       el('div', { class: 'row' },
         el('button', { class: 'btn primary big', text: 'Go to My themes', onclick: () => ctx.goHome('mine') }),
         el('button', { class: 'btn secondary big', text: 'Browse', onclick: () => ctx.goHome('browse') }))));
@@ -160,7 +161,7 @@ export function createThemes(ctx) {
     }
     buildPicker();
     u.layers = el('div', { class: 'layers', role: 'listbox', 'aria-multiselectable': 'true', 'aria-label': 'Layers, top of the picture first' });
-    u.layersNone = el('p', { class: 'muted small', text: 'Nothing yet: this theme shows its base only.' });
+    u.layersNone = el('p', { class: 'muted small', text: 'Nothing yet.' });
     u.btnGroup = el('button', { class: 'iconbtn', title: 'Group the selected layers (Ctrl+G)', 'aria-label': 'Group the selected layers', text: '▣', onclick: () => doGroup() });
     u.btnUngroup = el('button', { class: 'iconbtn', title: 'Ungroup (Ctrl+Shift+G)', 'aria-label': 'Ungroup', text: '▢', onclick: () => doUngroup() });
     u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', text: '✕', onclick: () => doDelete() });
@@ -178,10 +179,10 @@ export function createThemes(ctx) {
     u.snapSw = el('input', { type: 'checkbox', id: 'snapSw', onchange: e => { E.snap = e.target.checked; } });
     u.guidesSw = el('input', { type: 'checkbox', id: 'guidesSw', onchange: e => { E.guides = e.target.checked; lsSet('cs.guides', E.guides ? '1' : '0'); paintStage(); } });
     u.bar = el('div', { class: 'ed-bar' },
-      el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the clock, music and other items are drawn on the screen. Off: the screen shows only its base.' }, u.layerSw, el('span', { class: 'switch-track', 'aria-hidden': 'true' }, el('span', { class: 'switch-knob' })), el('span', { text: 'Live layer' })),
+      el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the items are drawn on the screen. Off: only the picture.' }, u.layerSw, el('span', { class: 'switch-track', 'aria-hidden': 'true' }, el('span', { class: 'switch-knob' })), el('span', { text: 'Live layer' })),
       u.layerHint = el('span', { class: 'muted small', hidden: true, text: 'No live items yet. Add one from the left.' }),
-      el('label', { class: 'check', title: 'Items snap gently to each other, the middle and the guides. Hold Alt to move freely.' }, u.snapSw, 'Snap'),
-      el('label', { class: 'check', title: 'Show where the screen curves and the hard-to-see areas (calibrate them in Settings > Screen guides)' }, u.guidesSw, 'Guides'));
+      el('label', { class: 'check', title: 'Items snap to each other, the middle and the guides. Alt = free.' }, u.snapSw, 'Snap'),
+      el('label', { class: 'check', title: 'Where the screen curves or is hard to see (Settings > Screen guides)' }, u.guidesSw, 'Guides'));
     u.stage = el('div', { class: 'stage', role: 'application', 'aria-label': 'Preview of the screen. Drag items to move them; use the handles to resize.' });
     u.imgBase = el('img', { class: 'layer', alt: '', draggable: false });
     u.imgLive = el('img', { class: 'layer', alt: '', draggable: false });
@@ -204,7 +205,7 @@ export function createThemes(ctx) {
     });
     u.stage.addEventListener('pointerdown', ev => { if (ev.target === u.stage || ev.target.closest('.guides-layer') || ev.target === u.imgBase || ev.target === u.imgLive) setSel([]); });
     u.stageWrap = el('div', { class: 'stage-wrap' }, u.stage);
-    u.baseBtn = el('button', { class: 'btn ghost', text: 'Base settings…', title: 'Choose the base picture: any clip, its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) });
+    u.baseBtn = el('button', { class: 'btn ghost', text: 'Picture…', title: 'Choose its picture: any clip, its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) });
     const center = el('section', { class: 'ed-center', 'aria-labelledby': 'screenTitle' },
       el('div', { class: 'ed-title' }, u.title, u.sub, el('span', { class: 'grow' }), u.saveState, u.baseBtn),
       u.banner, u.bar, u.stageWrap);
@@ -219,7 +220,7 @@ export function createThemes(ctx) {
   function paintTitle() {
     const u = E.ui;
     u.title.textContent = E.info.name;
-    u.sub.textContent = 'is on the screen' + (S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? ' · live layer is off' : widgets().some(w => !hiddenNow(w) && !w.onBase) ? ' · live is on' : ' · no live items') : '');
+    u.sub.textContent = S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? 'live layer is off' : widgets().some(w => !hiddenNow(w) && !w.onBase) ? 'live' : 'no live items') : 'Live is off · the screen shows Embedded';
   }
   function paintSave() {
     const u = E.ui;
@@ -237,17 +238,11 @@ export function createThemes(ctx) {
   function paintBanner() {
     const u = E.ui;
     u.banner.textContent = '';
-    const run = () => ctx.applyTheme(E.oid, E.info.name);
-    if (E.info.baseUnstored) {
-      const o = E.info.baseOwner;
-      u.banner.append(el('div', { class: 'base-banner', role: 'status' },
-        el('p', { text: `Base changed — store it on the screen. The new base${o ? ` (from “${o.name}”)` : ''} is already used by the live preview; the screen still holds the old one.` }),
-        el('button', { class: 'btn primary', text: 'Store it on the screen', onclick: run })));
-    } else if (E.info.baseStale) {
-      u.banner.append(el('div', { class: 'base-banner', role: 'status' },
-        el('p', { text: 'Base needs re-storing: the screen fit, corners, text or pictures changed since it was stored. Live already shows the change.' }),
-        el('button', { class: 'btn primary', text: 'Store the base again', onclick: run })));
-    }
+    const run = () => ctx.storeTheme(E.oid, E.info.name);
+    const row = (text, btn) => u.banner.append(el('div', { class: 'base-banner', role: 'status' }, el('p', { text }), el('button', { class: 'btn primary', text: btn, onclick: run })));
+    if (E.info.baseUnstored) row(`Embedded is out of date (new picture chosen)${S.app?.live?.settings?.inApp ? '' : ''}`, 'Update Embedded');
+    else if (E.info.baseStale) row('Embedded is out of date (screen fit/corners/notch/text/pictures changed)', 'Update Embedded');
+    else if (E.info.embeddedDiffers) row(`Embedded: ${E.info.embeddedTheme ? E.info.embeddedTheme.name : 'none'}`, 'Store this as Embedded');
   }
 
   // ------------------------------------------------------------------ the working theme
@@ -336,8 +331,8 @@ export function createThemes(ctx) {
     u.imgLive.style.display = on && E.liveUrl ? '' : 'none';
     u.imgBase.style.display = '';
     const any = widgets().some(shownOnStage);
-    if (!E.previewOk) { u.note.hidden = false; u.note.textContent = 'The rendered preview is not available yet; showing the base picture and the item boxes.'; }
-    else if (!on) { u.note.hidden = false; u.note.textContent = 'Live layer is off: the screen shows only its base' + (any ? ' (and the text and pictures marked as part of it).' : '.'); }
+    if (!E.previewOk) { u.note.hidden = false; u.note.textContent = 'Preview not ready; showing the picture and the item boxes.'; }
+    else if (!on) { u.note.hidden = false; u.note.textContent = 'Live layer is off: only the picture' + (any ? ' and the items marked “Also in Embedded”.' : '.'); }
     else u.note.hidden = true;
   }
   function placeBox(b, w) {
@@ -750,7 +745,7 @@ export function createThemes(ctx) {
       });
     } else if (w.type === 'music') {
       u.props.append(swRow('Show the cover', p.cover !== false, v => set('cover', v)), swRow('Show the progress bar', p.progress !== false, v => set('progress', v)),
-        el('p', { class: 'muted small', text: 'Shows what is playing in Spotify, the browser or any other player. Hidden when nothing plays (change this in the theme settings).' }));
+        el('p', { class: 'muted small', text: 'Shows what is playing in Spotify, the browser or any other player. Hidden when nothing plays (theme settings).' }));
     } else if (w.type === 'stats') {
       const items = Array.isArray(p.items) ? p.items : [];
       const box = el('div', { class: 'checks', role: 'group', 'aria-label': 'What to show' });
@@ -787,9 +782,9 @@ export function createThemes(ctx) {
         field('Fit', select2('pFit', p.fit || 'contain', [['contain', 'Whole picture'], ['cover', 'Fill the box']], v => set('fit', v)), 'pFit'));
     }
     if (Wd.canBeOnBase(w.type)) {
-      u.props.append(el('hr', { class: 'sep' }), swRow('Also on the stored base', w.onBase, v => {
+      u.props.append(el('hr', { class: 'sep' }), swRow('Also in Embedded', w.onBase, v => {
         w.onBase = v; paintStage(); E.baseSig = null; edited();
-      }, 'Draws it into the picture stored on the screen, so it stays there when CoolerScreen is closed. Changing it later means storing the base again.'));
+      }, 'Drawn into the picture on the screen, so it stays when the app is closed. Changing it means updating Embedded.'));
     }
     const hit = Ly.bandHit(w, guidesNow());
     if (hit && E.guides) u.props.append(el('p', { class: 'warn-text small', text: `⚠ Overlaps ${hit}` }));
@@ -857,19 +852,16 @@ export function createThemes(ctx) {
       gBox,
       el('hr', { class: 'sep' }),
       el('h3', { text: 'Hand-over' }),
-      field('Fade-in when live starts', range('hoFade', clamp(Number(h.fadeIn ?? 0.8), 0, 3), 0, 3, 0.1, v => { h.fadeIn = Math.round(v * 10) / 10; edited({ preview: false }); }, v => v.toFixed(1) + ' s'), 'hoFade'),
-      el('p', { class: 'small muted', text: 'When CoolerScreen stops:' }));
-    for (const [v, tt, d] of END_CHOICES) {
-      u.props.append(radio('hoEnd', v, (h.end || 'loopStart') === v, tt, () => { h.end = v; edited({ preview: false }); }));
-      u.props.append(el('p', { class: 'muted small hint', text: d }));
-    }
-    u.props.append(field('Music when nothing is playing', select2('hoMusic', h.musicIdle || 'hide', [['hide', 'Hide the music item'], ['keep', 'Keep it, showing an idle card']], v => { h.musicIdle = v; edited({ preview: false }); }), 'hoMusic'),
+      field('Fade-in', range('hoFade', clamp(Number(h.fadeIn ?? 0.8), 0, 3), 0, 3, 0.1, v => { h.fadeIn = Math.round(v * 10) / 10; edited({ preview: false }); }, v => v.toFixed(1) + ' s'), 'hoFade'),
+      field('When live stops', select2('hoEnd', h.end || 'loopStart', END_CHOICES.map(([v, tt]) => [v, tt]), v => { h.end = v; edited({ preview: false }); }), 'hoEnd'),
+      el('p', { class: 'muted small hint', text: 'Another theme stops at once.' }),
+      field('Music when idle', select2('hoMusic', h.musicIdle || 'hide', [['hide', 'Hide it'], ['keep', 'Keep an idle card']], v => { h.musicIdle = v; edited({ preview: false }); }), 'hoMusic'),
       el('hr', { class: 'sep' }),
-      el('h3', { text: 'Base' }),
-      el('p', { class: 'small muted', text: E.info.baseOwner ? `The base is “${E.info.baseOwner.name}”, the picture stored on the screen. It keeps playing when CoolerScreen is closed.` : 'The base picture has not been stored yet.' }),
+      el('h3', { text: 'Picture' }),
+      el('p', { class: 'small muted', text: E.info.embeddedTheme ? `Embedded: “${E.info.embeddedTheme.name}”` : 'Nothing is Embedded yet.' }),
       el('div', { class: 'row' },
-        el('button', { class: 'btn secondary', text: 'Base settings…', title: 'Choose any clip as the base, with its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) }),
-        el('button', { class: 'btn ghost', text: 'Store the base again', title: 'Make the base picture again and send it to the screen', onclick: () => ctx.applyTheme(E.oid, E.info.name) })));
+        el('button', { class: 'btn secondary', text: 'Picture…', title: 'Choose any clip, its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) }),
+        el('button', { class: 'btn ghost', text: E.info.embedded ? 'Update Embedded' : 'Store as Embedded', title: 'Write this theme\'s picture to the screen', onclick: () => ctx.storeTheme(E.oid, E.info.name) })));
   }
   async function usePreset() {
     if (widgets().length) {
@@ -886,11 +878,11 @@ export function createThemes(ctx) {
 
 // ---------------------------------------------------------------------- the Apply dialog
 let applying = false;
-const STEPS = ['Preparing the picture', 'Storing it on the screen', 'Switching the live layer'];
+const STEPS = ['Preparing the picture', 'Storing as Embedded'];
 
 /**
- * Apply a theme: a modal that locks the whole window while the base is made, stored on the screen and the live layer is
- * switched. Resolves 'done' | 'stopped' | 'failed'. The only button stops it and keeps the previous theme.
+ * Store a theme as Embedded: a modal that locks the whole window while its picture is made and written to the screen.
+ * Resolves 'done' | 'stopped' | 'failed'. The only button stops it and keeps the previous Embedded.
  */
 async function runApply(oid, name) {
   const { call, backend } = runApply.ctx;
@@ -901,7 +893,7 @@ async function runApply(oid, name) {
   const prevFocus = document.activeElement;
   const inerted = [];
   for (const c of document.body.children) if (c !== back && c.tagName !== 'SCRIPT' && !c.inert) { c.inert = true; inerted.push(c); }
-  $('applyTitle').textContent = `Applying “${name}”`;
+  $('applyTitle').textContent = `Storing “${name}” as Embedded`;
   const steps = $('applySteps');
   steps.textContent = '';
   const rows = STEPS.map((t, i) => {
@@ -922,7 +914,7 @@ async function runApply(oid, name) {
   const clampN = v => Math.min(1, Math.max(0, v || 0));
   setStep(1); setBar(0);
   note.textContent = 'Starting…';
-  stop.disabled = false; stop.hidden = false; stop.textContent = 'Stop and keep the previous theme';
+  stop.disabled = false; stop.hidden = false; stop.textContent = 'Stop (Embedded stays as it was)';
   back.hidden = false;
   stop.focus();
   const onKey = e => {
@@ -942,25 +934,25 @@ async function runApply(oid, name) {
   stop.onclick = async () => {
     stopping = true;
     stop.disabled = true;
-    note.textContent = 'Stopping… the previous theme stays on the screen.';
+    note.textContent = 'Stopping… Embedded stays as it was.';
     if (jobId) { try { await call('job_cancel', { jobId }); } catch { /* it ends on its own */ } }
   };
   try {
     ({ jobId } = await call('theme_apply', { originalId: oid }));
     await backend.job(jobId, j => {
-      const m = /^Step (\d) of 3: (.*)$/.exec(j.message || '');
+      const m = /^Step (\d) of 2: (.*)$/.exec(j.message || '');
       if (m) setStep(Number(m[1]));
       shown = Math.max(shown, j.progress || 0); // the bar never goes back
       setBar(shown);
       // Writing to the screen cannot be stopped halfway (it would leave a broken picture): that part finishes first.
       const writing = !!m && Number(m[1]) === 2 && !/Waiting/.test(m[2]);
       if (!stopping) stop.disabled = writing;
-      note.textContent = stopping ? note.textContent : writing ? 'Writing to the screen. This part is not stopped halfway, because that could leave the screen with a broken picture.'
+      note.textContent = stopping ? note.textContent : writing ? 'Writing to the screen. This can\'t be stopped halfway.'
         : j.status === 'waiting' ? runApply.ctx.plainWait(j.message) : m ? m[2] : j.message || '';
     });
     rows.forEach(r => { r.li.className = 'done'; r.mark.textContent = '✓'; });
     setBar(1);
-    note.textContent = 'Done. The theme is on the screen.';
+    note.textContent = 'Done.';
     stop.hidden = true;
     result = 'done';
     await new Promise(r => setTimeout(r, 900));
@@ -970,7 +962,7 @@ async function runApply(oid, name) {
     } else {
       const m = /^Step (\d)/.exec((e.data && e.data.message) || '');
       setStep(m ? Number(m[1]) : 1, true);
-      note.textContent = `${e.message} The previous theme is still on the screen.`;
+      note.textContent = `${e.message} Embedded is unchanged.`;
       stop.disabled = false; stop.textContent = 'Close';
       await new Promise(r => { stop.onclick = r; });
       result = 'failed';
