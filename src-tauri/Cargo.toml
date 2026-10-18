@@ -1,6 +1,6 @@
 [package]
 name = "coolerscreen"
-version = "3.0.2"
+version = "3.0.3"
 description = "CoolerScreen: put your own videos on the Lovingcool SC70 cooler screen"
 edition = "2021"
 default-run = "coolerscreen"

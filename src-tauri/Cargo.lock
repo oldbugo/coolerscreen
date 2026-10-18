@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "coolerscreen"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "ab_glyph",
  "dirs 6.0.0",
