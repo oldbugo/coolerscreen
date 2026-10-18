@@ -24,5 +24,11 @@
   closing the window or quitting to the tray changes nothing ("I don't wanna have another save"). Only changes that
   affect the stored clip (screen fit/shift, corner radius, notch, baked text/pictures, base clip/version) mark the
   base as needing to be stored again; live-only changes never do ("otherwise ... it shouldn't do anything").
+- 2026-10-18: Record user flows every time they are discussed: "every time we talk about it, we should be noting it
+  down and slowly building up a repository of the user flow ... within the vault". Vault page: Projects/CoolerScreen
+  user flows (see the vault). Add/adjust the flow in the same turn the user describes it.
+- 2026-10-18: Choosing a theme in My themes = "Use this theme": the live picture switches immediately; the screen's
+  stored base is NOT changed by that — make that clear and offer storing it separately (user's hardware: top edge 6 px
+  is the user's own value, not a product default; other users tune their own).
 
 Start-of-work reading: `docs/roadmap/2026-10-12-v2-release-and-v3.md` (2.0 state and the 3.0 brief).
