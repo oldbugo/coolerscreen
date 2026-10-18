@@ -30,5 +30,9 @@
 - 2026-10-18: Choosing a theme in My themes = "Use this theme": the live picture switches immediately; the screen's
   stored base is NOT changed by that — make that clear and offer storing it separately (user's hardware: top edge 6 px
   is the user's own value, not a product default; other users tune their own).
+- 2026-10-18 (decisions after the flows audit): the picture stored on the screen is called **"Embedded"** everywhere
+  (not base/stored loop/normal clip/screen copy). With Live off, "Use this theme" becomes "Use and store on the screen"
+  (one action). When the live theme differs from the Embedded one and live stops: switch instantly (no fade). The On
+  screen editor follows the LIVE theme (shows "Embedded: X" with a store action when they differ).
 
 Start-of-work reading: `docs/roadmap/2026-10-12-v2-release-and-v3.md` (2.0 state and the 3.0 brief).
