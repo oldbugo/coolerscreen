@@ -399,7 +399,7 @@ pub const COMMANDS: &[&str] = &[
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
-    "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place", "ext_sensor_status",
+    "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place", "ext_sensor_status", "game_fps_status",
     "screen_preview", "screen_preview_end", "twin_watch",
 ];
 
@@ -411,6 +411,16 @@ pub async fn ext_sensor_status(core: State<'_, Core>) -> Result<Value, CoreError
     run(&core, move |_a| {
         let s = crate::live::extsensors::status();
         Ok(json!({ "source": s.source, "ok": s.ok, "message": s.message }))
+    })
+    .await
+}
+
+/// `{}` -> `{ ok, state, message, command }`: where the game frame rate comes from, or why it is unavailable (4.0 G2).
+#[tauri::command]
+pub async fn game_fps_status(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, move |_a| {
+        let s = crate::live::gamefps::status();
+        Ok(json!({ "ok": s.ok, "state": s.state, "message": s.message, "command": s.command }))
     })
     .await
 }

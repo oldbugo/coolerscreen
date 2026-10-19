@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.17.0 - 2026-10-19 (stream B: game FPS)
+
+- **Game FPS widget:** the game in front, its frame rate as a big number, optional 1% low and a frame-time graph. It reads
+  Windows' own graphics timing events (like Intel PresentMon), so it never touches the game (DirectX 9 to 12; Vulkan and
+  OpenGL are not covered yet). Falls back to RivaTuner or HWiNFO if they run.
+- **One-time Windows setting:** until your account is in "Performance Log Users", the widget says so and shows the exact
+  command, with Copy and Check again. CoolerScreen never asks for administrator rights itself.
+- Runs only while a Game FPS widget is on the live picture; stops 30 s after it is gone and on quit.
+- Not yet checked with a real game. Theme contract v1.17.
+
 ## 4.16.0 - 2026-10-19 (stream E: music looks)
 
 - **Four new music looks** besides the current card, which stays the default: **Cover** (large cover with text),

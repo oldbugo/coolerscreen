@@ -67,6 +67,7 @@
     "allow-weather-search",
     "allow-weather-set-place",
     "allow-ext-sensor-status",
+    "allow-game-fps-status",
     "allow-screen-preview",
     "allow-screen-preview-end",
     "allow-twin-watch"

@@ -24,6 +24,7 @@ mod sunmoon;
 mod todo;
 mod headlines;
 mod webpicture;
+mod gamefps;
 mod sensors;
 mod widgets;
 pub(crate) use widgets::resize_exact;

@@ -404,3 +404,14 @@ Additive; old themes load and look exactly as before (a `music` item without `st
   ("line": only its thin line).
 - "line" and a spinning "disc" redraw at 30 Hz; the others at 10 Hz as before. Covers are decoded up to 640 px (was 320); the card scales from
   a 320 px copy so it looks as before. Nothing moves up or down.
+
+
+## v1.17 (4.17.0, stream B G2): game FPS
+
+- `gamefps`: the frame rate of the game in front (not CoolerScreen's own). Props: `low` bool (true: "1 % low"), `graph` bool (true: frame-time graph
+  growing sideways), `history` 10-120 s (30), `hideIdle` bool (false: draw nothing at all while no game is in front, otherwise a dim "No game in front"),
+  `color` ("#5ac8ff"). Sources, in order: (1) CoolerScreen's own ETW present counter (Windows graphics events, DX9-12; needs the user in
+  "Performance Log Users" once), (2) RivaTuner Statistics Server shared memory if RTSS runs, (3) HWiNFO frame-rate sensors if HWiNFO shares them.
+  Nothing is injected, installed or elevated by the app. Reason lines instead of a number: "Needs a one-time Windows setting", "Blocked while the
+  game runs: restart CoolerScreen before the game", "Frame rate unavailable", "No game in front". Editor command `game_fps_status` returns
+  `{ ok, state, message, command }` (state "ok"|"noGame"|"needsGroup"|"blocked"|"unavailable"|"ready"; `command` is the one-time PowerShell command).
