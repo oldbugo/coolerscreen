@@ -389,3 +389,18 @@ dropped by the app. Redirects: at most 3, never https to http. Code: `live/headl
   Only real pictures are accepted (checked by their first bytes, not the server's word): PNG, JPEG, GIF (first frame), WebP, BMP; 8 MB and
   6000 px / 36 megapixel limits, shown at most 1680 px wide. Uses the per-item `radius` (clipped only when the item has its own radius).
   A failed refresh keeps the old picture with an "(old picture)" note.
+
+## v1.x (stream E M3; the PM numbers it): music looks
+
+Additive; old themes load and look exactly as before (a `music` item without `style` is today's card, pixel-identical). Code:
+`live/render/music.rs`, `public/js/w-music.js`.
+
+- `music` gets `style`: "card" (default, today's look) | "cover" (the cover fills the box height, big title beside it) | "line" (one line
+  "Title · Artist", no cover; a long line slides sideways, pauses, fades out and back in; a new track fades in) | "disc" (the cover in a vinyl disc
+  that turns while playing) | "blur" (the box filled with the blurred, darkened cover, a sharp cover and text on top). Unknown or non-string = "card".
+  Written only when not "card".
+- `spin` bool (true), "disc" only: turn while playing (one turn per 8 s, by time); holds its angle when paused. Written only when false.
+- `cover` false: the new looks keep their layout with a neutral note tile (Blur: a dark gradient). `progress` false hides bar, sign and times
+  ("line": only its thin line).
+- "line" and a spinning "disc" redraw at 30 Hz; the others at 10 Hz as before. Covers are decoded up to 640 px (was 320); the card scales from
+  a 320 px copy so it looks as before. Nothing moves up or down.

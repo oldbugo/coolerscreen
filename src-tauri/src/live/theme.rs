@@ -205,11 +205,30 @@ impl Default for ClockProps {
 pub struct MusicProps {
     pub cover: bool,
     pub progress: bool,
+    /// "card" (today's look, the default) | "cover" | "line" | "disc" | "blur". Anything else (or a non-string) is "card".
+    #[serde(deserialize_with = "lenient_style", skip_serializing_if = "is_card")]
+    pub style: String,
+    /// Only for "disc": the disc turns while playing.
+    #[serde(skip_serializing_if = "is_true")]
+    pub spin: bool,
 }
 impl Default for MusicProps {
     fn default() -> Self {
-        MusicProps { cover: true, progress: true }
+        MusicProps { cover: true, progress: true, style: "card".into(), spin: true }
     }
+}
+fn lenient_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let v = <Value as Deserialize>::deserialize(d)?;
+    Ok(match v.as_str() {
+        Some(s @ ("card" | "cover" | "line" | "disc" | "blur")) => s.to_string(),
+        _ => "card".to_string(),
+    })
+}
+fn is_card(s: &String) -> bool {
+    s == "card"
+}
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

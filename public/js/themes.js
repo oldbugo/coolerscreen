@@ -9,6 +9,7 @@ import { openDialog } from './dialog.js';
 import * as Ly from './layers.js';
 import * as Safe from './safearea.js';
 import * as Wd from './widgets.js';
+import { paintMusicProps } from './w-music.js';
 import { backgroundSection, effectSpeed } from './effects.js';
 import { icon, widgetIcon } from './icons.js';
 import { createTwin } from './twin.js';
@@ -793,8 +794,7 @@ export function createThemes(ctx) {
         openSettings: sec => ctx.openSettings && ctx.openSettings(sec),
       });
     } else if (w.type === 'music') {
-      u.props.append(swRow('Show the cover', p.cover !== false, v => set('cover', v)), swRow('Show the progress bar', p.progress !== false, v => set('progress', v)),
-        el('p', { class: 'muted small', text: 'Shows what is playing in Spotify, the browser or any other player. Hidden when nothing plays (theme settings).' }));
+      paintMusicProps(w, u.props, { el, swRow, set, repaint: () => paintProps() });
     } else if (w.type === 'stats') {
       const items = Array.isArray(p.items) ? p.items : [];
       const box = el('div', { class: 'checks', role: 'group', 'aria-label': 'What to show' });

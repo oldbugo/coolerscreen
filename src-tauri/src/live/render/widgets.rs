@@ -42,7 +42,7 @@ impl Renderer {
         format!("{}\u{2026}", out.trim_end())
     }
 
-    fn fill_path(&mut self, pts: &[(f32, f32)], rgba: [u8; 4]) {
+    pub(super) fn fill_path(&mut self, pts: &[(f32, f32)], rgba: [u8; 4]) {
         let mut pb = PathBuilder::new();
         for (i, (x, y)) in pts.iter().enumerate() {
             if i == 0 {
@@ -129,6 +129,9 @@ impl Renderer {
         if a < 0.01 {
             return;
         }
+        if p.style != "card" && self.draw_music_style(b, p, np, a) {
+            return;
+        }
         let u = (b.h / 220.0).min(b.w / 890.0).clamp(0.2, 4.0);
         let rad = self.card_radius(b, (24.0 * u).min(b.h / 4.0));
         round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, [SCRIM[0], SCRIM[1], SCRIM[2], (SCRIM[3] as f32 * a) as u8]);
@@ -141,7 +144,10 @@ impl Renderer {
         if p.cover {
             let tid = np.map(|n| n.track_id).unwrap_or(0);
             if self.cover.as_ref().map(|c| (c.0, c.1)) != Some((tid, side)) {
-                self.cover = Some((tid, side, scale_cover(np.and_then(|n| n.cover.as_deref()), side)));
+                // covers are decoded up to 640 px; the card scales from at most 320 px, as it always did
+                let small = np.and_then(|n| n.cover.as_deref()).and_then(super::music::shrink_cover);
+                let src = small.as_ref().or(np.and_then(|n| n.cover.as_deref()));
+                self.cover = Some((tid, side, scale_cover(src, side)));
             }
             if let Some((_, _, px)) = &self.cover {
                 let Renderer { layer, cw, ch, .. } = self;
@@ -336,7 +342,7 @@ impl Renderer {
     }
 }
 
-fn fmt_time(s: f64) -> String {
+pub(super) fn fmt_time(s: f64) -> String {
     let t = s.max(0.0) as u64;
     if t >= 3600 { format!("{}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60) } else { format!("{}:{:02}", t / 60, t % 60) }
 }
@@ -585,13 +591,13 @@ impl Renderer {
 
 /// Which transport glyph the music card shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TransportIcon {
+pub(super) enum TransportIcon {
     Play,
     Pause,
 }
 
 /// Player-button convention, like every player: two bars while playing, a triangle while paused.
-fn transport_icon(playing: bool) -> TransportIcon {
+pub(super) fn transport_icon(playing: bool) -> TransportIcon {
     if playing { TransportIcon::Pause } else { TransportIcon::Play }
 }
 

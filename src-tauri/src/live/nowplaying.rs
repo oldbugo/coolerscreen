@@ -245,7 +245,7 @@ fn filetime_now() -> i64 {
     (((f.dwHighDateTime as u64) << 32) | f.dwLowDateTime as u64) as i64
 }
 
-/// Decode the session's thumbnail (any size) to RGBA, scaled so its longer side is at most 320 px.
+/// Decode the session's thumbnail (any size) to RGBA, scaled so its longer side is at most 640 px.
 fn decode_cover(s: &Session) -> Option<Arc<Cover>> {
     use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapDecoder, BitmapPixelFormat, BitmapTransform, ColorManagementMode, ExifOrientationMode};
     let props = s.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
@@ -256,7 +256,7 @@ fn decode_cover(s: &Session) -> Option<Arc<Cover>> {
     if w < 1.0 || h < 1.0 {
         return None;
     }
-    let k = (320.0 / w.max(h)).min(1.0);
+    let k = (640.0 / w.max(h)).min(1.0);
     let (tw, th) = (((w * k).round() as u32).max(1), ((h * k).round() as u32).max(1));
     let tr = BitmapTransform::new().ok()?;
     tr.SetScaledWidth(tw).ok()?;
