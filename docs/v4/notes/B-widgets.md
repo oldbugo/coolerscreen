@@ -204,3 +204,20 @@ Branch `claude/recursing-matsumoto-31e4c5`, main merged (ef025a6 / 4.9.2). Contr
    photo-of-the-day. Reuses the picture clip/corner code.
 5. **To-do / notes list**: lines typed in the editor with tick marks the user changes in the editor (no touch on the screen); good for "today".
 Later, bigger: Home Assistant / smart-home value (REST + token), stock or crypto price (needs a data provider key), per-app volume.
+
+## W1 (2026-10-19): progress bars, sun and moon, to-do list (no network)
+
+Branch `claude/recursing-matsumoto-31e4c5` (main 4.13.0 merged). User: "for the widgets, let's do all of it". Contract: "4.0 W1 widgets".
+Structure: I added hook-only skeletons (TYPES list, `clean` arms, `draw_more` arms, a registry in `public/js/morewidgets.js`), then three Sonnet
+workers each filled their own files in their own worktree (no shared-file edits except one windows-sys feature `Win32_Globalization` and a
+`pub(crate)` on `agenda::utc_to_local`), and I merged and checked them. Next widgets need only a new `live/<x>.rs`, `render/<x>.rs`, `public/js/w-<x>.js` and
+three registry lines.
+- **Progress** (Time group): day/week/month/year, label + big percent + sideways bar; week start follows Windows (locale call, cached).
+- **Sun and moon** (Info): NOAA-style sunrise/sunset (tested against Sydney, London, Tromso polar day/night within 3 min), synodic moon phase drawn
+  with a correct terminator; "Set your city in Settings" when no city. Preview uses a fixed Sydney sample.
+- **To-do** (Decoration): title, 1-8 rows with tick boxes; editor rows (tick, text, move, remove) save as you type; "Hide done items".
+Choices: sun times in the PC's zone; to-do ticks only from the editor; the palette icon for the three is the generic stub glyph until D's icon set gets entries.
+Verification: `cargo test --release --lib -- --test-threads=4`: 305 passed, 0 failed, 19 ignored. Quiet DEBUG instance (port 9744): added all three, to-do add/tick/type saved
+into theme.json, Progress and Sun-and-moon panels shown with the corner-radius row above the Delete bar, a real live frame with real values
+(`B-pictures/w1-live-frame.png`: day 85 %, sunrise 06:09 / sunset 19:12 for Sydney today, moon first quarter 57 % lit).
+Not verified: Windows week-start on a non-Monday locale; polar cards drawn; sun times when the PC zone differs from the city; real screen.

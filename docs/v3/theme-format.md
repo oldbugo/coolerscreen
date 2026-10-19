@@ -358,3 +358,18 @@ More types and metrics, all additive (code: `live/extsensors.rs`, `live/ping.rs`
   start line (no line at the panel edge under the band), the gap lines start one gap after it, and a new item or a "Use the Standard
   layout" item is moved (or shrunk) so it is not under the band. Only a left/right/top/bottom band counts (not the circle notch).
   Nothing in theme.json changes for this.
+
+### 4.0 W1 widgets (added 2026-10-19; contract version assigned by the PM)
+
+Three more types, all local (no network); code in `live/progress.rs`, `live/sunmoon.rs`, `live/todo.rs`, `render/*.rs`, `public/js/w-*.js`.
+
+- `progress`: bars for how far the day / week / month / year has gone. `items` any of "day","week","month","year" (default all four, order
+  kept, never empty), `labels` bool (true), `decimals` 0-2 (0), `color` ("#5ac8ff"), `weekStart` "windows"|"monday"|"sunday"
+  ("windows" = the first day of the week set in Windows' region settings). Percent rounds down (no "100 %" before the period ends).
+- `sunmoon`: sunrise, sunset, day length and a moon-phase picture, computed locally from the Weather city's coordinates (settings
+  `weather.place`). `show` any of "sun","moon" (both), `format` "24h"|"12h", `color` ("#ffd27a"). Times are shown in the PC's time zone (the app
+  has no time-zone database); polar day/night show a sentence; with no city the sun part says "Set your city in Settings" and the moon
+  still draws (mirrored for a southern city).
+- `todo`: a list with tick boxes. `title` string|null, `items` `[{ "text": "...", "done": false }]` (0-8, text up to 60 chars; a missing list = empty),
+  `hideDone` bool (false; done rows are otherwise dimmed and struck through), `color` ("#ffffff"), `accent` ("#5ac8ff"). The ticks are
+  toggled in the editor's Properties (the screen has no touch).
