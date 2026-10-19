@@ -150,3 +150,57 @@ At about 12:30 I started my RELEASE test build with `COOLERSCREEN_MULTI=1` while
 works in debug builds, so the single-instance plugin forwarded my launch to the user's app (it may have raised its window once). My copy
 exited at once, nothing was sent to the screen. Afterwards I used a debug build (`cargo build`, pid checked by path) for every test instance.
 `tools/README.md` says "(debug builds)" for MULTI; a release test build needs the installed app to be closed first.
+
+## E2 (2026-10-19): per-item corner radius, notch-aware gap, and widget proposals
+
+Branch `claude/recursing-matsumoto-31e4c5`, main merged (ef025a6 / 4.9.2). Contract: `docs/v3/theme-format.md`, section "4.0 E2".
+
+### 1. Per-item corner radius (every kind of item)
+- Theme item field `radius` (px on 2400x1080), **absent by default**. Absent = follows the theme's corner radius (the theme's `corners`,
+  else the global default) when that is above 0; when the theme has no rounded corners the card keeps its built-in 40 px, so nothing
+  changes for existing themes (decision: following a theme radius of 0 would have made every card square). Set = own radius, 0 = square.
+- Engine: one helper `card_radius` (render.rs) used by every card (clock, music, stats, sensor, date/weather/info/visualizer cards, the
+  whole 4.0 family); capped at half the short side. `image` and `slideshow` have no card: they are clipped to the rounded rectangle
+  **only when the item has its own radius** (so existing pictures stay square; decision). It is part of the base signature for `onBase`
+  items, so changing it marks Embedded stale only then; otherwise live-only.
+- Editor: `cornerRow()` in `public/js/morewidgets.js` ("Corner radius": number + reset arrow, "Theme default" caption while unset, shows
+  the effective value), one hook line in `themes.js` (`paintWidgetProps`) plus one export in `widgets.js`. **For stream D / E1: the hook is
+  the line `u.props.append(Wd.cornerRow(w, { el, field, numInput, edited, themeRadius: radius }))` in `paintWidgetProps`; move it wherever
+  the rebuilt Properties wants "Corner radius", it needs nothing else.**
+
+### 2. Gap and snapping from the visible area
+- New `public/js/safearea.js`: `insets(app)` = how far in the notch band reaches on the design canvas (band width after the 16 px
+  rounding, minus what the screen fit hides, scaled into the visible rectangle); `safeRect`; `placeInside`.
+- `layers.js snapLines(..., insets)`: lines at the canvas edge are replaced by the band's edge, the gap lines start one gap after it, the
+  centre line is the centre of the visible area; the opposite sides keep their usual lines. `themes.js` passes the insets (one line).
+- New items (palette click or drop) and the Standard layout are moved out from under the band (preset also shrunk if needed). The
+  Standard preset already clears a 96 px band, so it did not move in my test; a wider band would shift it.
+- Not changed: dragging with snap off (Alt) can still put an item under the band (the user's explicit choice); the circle notch is not
+  treated as a band.
+
+### Verification (E2)
+- `cargo test --release --lib -- --test-threads=4`: 275 passed, 0 failed, 18 ignored. New test `item_radius_rounds_cards_and_clips_pictures`
+  (big radius leaves the card corner undarkened, radius 0 keeps it, no radius = the old look, centre pixel unchanged, picture clipped only
+  with its own radius). `node tools/layers.test.mjs`: new asserts for insets with and without fit, safe rectangle, placing and shrinking, snap
+  lines with and without a band.
+- Quiet DEBUG instance (port 9611): editor with a left band of 96 px; added items; "Corner radius" shows the effective value (40), typing 90
+  saves `radius: 90` into theme.json and the reset arrow enables; a real live frame shows the Meters card with the large radius next to the
+  clock's normal card and the black notch band at the left (`B-pictures/e2-live-radius.png`, `e2-editor-radius.png`).
+- Incident to note: another session's debug instance listened on the same debug port (9333, then 9345) and my first script talked to it;
+  I told stream D. Use an unusual port per session.
+
+### Not verified
+- The snap lines were not dragged by hand in the app (unit-tested only); the theme corner radius following (theme `corners` > 0 changes the
+  card radius) is covered by the engine path but I did not look at a theme with rounded corners on screen.
+- Real screen: nothing sent.
+
+### 3. Proposed next widgets (notes only; the user chooses)
+1. **Progress bars: day / week / month / year** ("Year 79 %"). Tiny, no data source, a common desk-screen item. Bars grow sideways.
+2. **Sun and moon**: sunrise, sunset, day length, moon phase picture. Needs only the city already chosen for Weather (computed locally, no
+   network). Decoration-friendly.
+3. **Headlines (RSS/Atom)**: the latest 3-5 titles of a feed link the user pastes (opt-in, fetched every 15 minutes like Agenda). Shows
+   news, blog or release feeds; no account.
+4. **Web picture**: one picture from a link, refreshed every N minutes (opt-in): weather radar, webcam, a dashboard snapshot, a
+   photo-of-the-day. Reuses the picture clip/corner code.
+5. **To-do / notes list**: lines typed in the editor with tick marks the user changes in the editor (no touch on the screen); good for "today".
+Later, bigger: Home Assistant / smart-home value (REST + token), stock or crypto price (needs a data provider key), per-app volume.
