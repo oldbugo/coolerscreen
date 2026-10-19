@@ -27,3 +27,48 @@ in my target dir; `cargo clean -p coolerscreen` fixed it. Builds rewrite `src-ta
 
 For D2: the CDP screenshot driver (scratchpad `cdp.mjs` / `s.sh` / `run.ps1`) should become a small tool in `tools/` so
 each revision step re-shoots the same set.
+
+## D2: UI revision of public/ (2026-10-19)
+
+Branch `claude/zealous-swanson-66219d`, on top of `main` 4.4.0 (merged in `dbfd1f6`, one import-line conflict in
+`js/themes.js` resolved). Streams A's and B's files (`js/effects.js`, `js/morewidgets.js`) are untouched; their controls
+pick up the new look through shared CSS.
+
+What changed (one commit per step or group of steps; plan in `docs/v4/ui-audit.md`):
+1. `css/tokens.css`: every colour, size, radius, height, motion and layer value; `style.css` has no literals left.
+   Control outlines 3:1 (`--border-control`), faint text 4.8:1, no UI text under 12 px.
+2. Duplicated and dead CSS removed; one segmented-control look.
+3. One switch for every on/off setting (top-bar Live, Live layer, Snap, Guides, Properties, Settings). Snap and Guides
+   were plain checkboxes; same ids and handlers.
+4. One button set (`.btn` alone = secondary), link-style in-sentence actions, one icon-button look.
+5. `js/icons.js`: one SVG icon set (palette, layers, layer tools, add tile, Browse, play/pause, more, reset, warnings);
+   leftover glyph buttons (also in stream modules) are upgraded at runtime, labels unchanged.
+6. The activity strip shows only while it has something to say; the My themes selection bar sits on the bottom edge.
+7. Top bar: icons-only nav below 1100 px, nothing overlaps the window buttons at 900 px; focus ring follows the pill.
+8. Editor (`css/editor.css`): preview as large as the window allows (1300x585 at 1920x1080); **the layer list moved
+   under the preview** (it was at the bottom of the left column, below the fold); palette two per row, names never cut;
+   Properties stays on the right at every size. Thin dark scrollbars.
+9. Properties: one field pattern (full-width controls, pairs in a grid, value + reset rows).
+10. Settings: section index under the title (`js/settingsnav.js`); same sections, order and controls.
+11. Picture page (`css/picture.css`): one way back (breadcrumb hides while the context header shows), quiet header,
+    cards and selection like the rest, footer aligned with the action bar.
+12. Labels: curly quotes around names, editor subtitle in sentence case, first-run On screen text, Browse offers
+    "Turn on sources…" once; backdrops also dim the title strip (still draggable).
+
+Verification (quiet test instances only: fake screen, scratch home, `COOLERSCREEN_TEST_QUIET=1`, own target dir):
+- `tools/ui-shots/all.ps1` takes the 24-shot set; I re-shot after every step and compared. Final set (after the merge
+  with 4.4.0) is in `docs/v4/ui-audit/after/` (before = `docs/v4/ui-audit/`).
+- `tools/ui-shots/all.ps1 -Flows` runs `flows.mjs`: 29 checks of the main flows (select / Use this theme, Live switch
+  off and on, add / delete an item by click, Saved without a Save button, Snap, Guides, Theme settings + Background
+  section, Settings index and a Settings switch applying at once, Picture page open and back, rename and delete dialogs
+  cancel with the safe default, no overlap at 900 px). Result after the merge: all passed, no page errors.
+
+Not done / not verified:
+- Not done: M11 (the green "Live" chip on the theme in use when Live is off) needs a wording decision from the user;
+  slider value readouts on the Picture page (Left–right, Up–down) need a JS change in the 2.0 tune code; Settings
+  sections keep their native selects.
+- Not verified: drag-and-drop from the palette onto the preview and layer drag reordering (CDP clicks only; the code
+  paths are unchanged, only their containers moved); a real Browse source; the real screen; screen readers; text scaling.
+- For the PM: the layer list moving under the preview is a layout change, not a flow change; easy to revert in
+  `js/themes.js` (one element) + `css/editor.css` if the user prefers it on the left.
+- For stream B: new palette kinds get an icon once added to `js/icons.js` (D owns it); until then their glyph shows.

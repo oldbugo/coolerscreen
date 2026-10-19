@@ -1,0 +1,56 @@
+/* On screen: the theme editor layout (docs/v4/ui-audit.md H1, M7). Left: Add. Centre: the preview as large as the window
+   allows, the layer list under it in the free height. Right: Properties. */
+.ed { flex: 1; min-height: 0; display: grid; grid-template-columns: clamp(256px, 20vw, 288px) minmax(0, 1fr) clamp(264px, 21vw, 304px); }
+.ed-left, .ed-right { background: var(--surface-1); min-height: 0; padding: var(--s4); }
+.ed-right { border-left: 1px solid var(--border); overflow-y: auto; scrollbar-gutter: stable; }
+.ed-left { border-right: 1px solid var(--border); overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
+.ed-center {
+  min-width: 0; min-height: 0; overflow: hidden; padding: var(--s4) var(--s5) var(--s4);
+  display: flex; flex-direction: column; gap: var(--s3); container-type: size;
+}
+/* the preview: full width, unless that would leave the layer list less than about 150 px */
+.stage-wrap { flex: none; width: min(100%, calc((100cqh - 300px) * 20 / 9)); min-width: 320px; margin: 0 auto; }
+/* the layer list under the preview */
+.ed-layers {
+  flex: 1 1 0; min-height: 96px; display: flex; flex-direction: column; margin-top: var(--s2);
+  border-top: 1px solid var(--border); padding-top: var(--s3);
+}
+.ed-layers .layers { flex: 1 1 auto; min-height: 0; overflow-y: auto; align-content: start; scrollbar-gutter: stable; }
+
+/* the palette: two to a row, icon then name; long names wrap to a second line instead of being cut */
+.palette { display: block; }
+.pal-head { margin: var(--s3) 0 var(--s1); font-size: var(--fs-tiny); line-height: var(--lh-tiny); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-faint); }
+.palette > .pal-head:first-child { margin-top: 0; }
+.pal-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s1); }
+.pal-grid li { min-width: 0; }
+.pal-grid .pal-wide { grid-column: 1 / -1; }
+.pal {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-height: 36px; height: 100%;
+  padding: var(--s1) 6px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); cursor: grab; text-align: left; font-size: var(--fs-small); line-height: 15px;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.pal:hover:not(:disabled) { background: var(--surface-3); border-color: var(--accent); }
+.pal:disabled { opacity: .5; cursor: not-allowed; }
+.pal .pi { width: 16px; height: 16px; display: grid; place-items: center; color: var(--accent); flex: none; font-weight: 600; }
+.pal .pn { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: normal; overflow: hidden; }
+.pal .soon { font-size: var(--fs-tiny); color: var(--text-faint); white-space: nowrap; }
+
+/* narrow windows: the same three columns, narrower */
+@media (max-width: 1100px) {
+  .ed { grid-template-columns: 196px minmax(0, 1fr) 248px; }
+  .ed-center { padding: var(--s3) var(--s4) var(--s4); }
+}
+
+/* Properties (and Theme settings): one field pattern. Label above, control full width; two short numbers side by side
+   in .props-grid; a value with its reset in .inline-ctl; sections divided by hr.sep + h3 (ui-style-guide.md 4). */
+.ed-right h3 { margin-bottom: var(--s3); }
+.ed-right .field input[type="number"], .ed-right .field input[type="text"], .ed-right .field select, .ed-right .field textarea { width: 100%; }
+.ed-right .inline-ctl input[type="number"], .ed-right .inline-ctl input[type="text"] { flex: 1; width: auto; min-width: 0; }
+.ed-right .row.between { margin: 0 0 var(--s2); }
+.ed-right .row.between h3 { margin: 0; }
+.ed-right .off-row { grid-template-columns: minmax(0, 1fr) 96px; }
+.ed-right .sw-row label { color: var(--text); }
+.ed-right .sep { margin: var(--s4) 0; }
+.ed-right .seg { margin-bottom: var(--s3); }
+.ed-right .hint { margin: calc(-1 * var(--s2)) 0 var(--s3); }

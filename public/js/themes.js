@@ -9,6 +9,7 @@ import { openDialog } from './dialog.js';
 import * as Ly from './layers.js';
 import * as Wd from './widgets.js';
 import { backgroundSection, effectSpeed } from './effects.js';
+import { icon, widgetIcon } from './icons.js';
 
 const MIN_BOX = 0.02;
 const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
@@ -61,6 +62,8 @@ export function createThemes(ctx) {
     snap: true, guides: lsGet('cs.guides') !== '0', dragIds: [],
   };
   const currentId = () => S.currentTheme || null;
+  /** An icon from js/icons.js, or the entry's own glyph when the set has none for it. */
+  const iconSpan = (cls, svg, glyph) => { const s = el('span', { class: cls, 'aria-hidden': 'true' }); if (svg) s.innerHTML = svg; else s.textContent = glyph; return s; };
   const widgets = () => E.theme.widgets;
   const byId = id => widgets().find(w => w.id === id);
   const groupById = id => (E.theme.groups || []).find(g => g.id === id);
@@ -135,7 +138,7 @@ export function createThemes(ctx) {
     root.textContent = '';
     root.append(el('div', { class: 'ed-empty' },
       el('h1', { id: 'screenTitle', text: 'No live theme' }),
-      el('p', { class: 'muted', text: `${text} Pick one in My themes; this page then edits what is drawn on top of it.` }),
+      el('p', { class: 'muted', text: S.originals.length ? `${text} Pick one in My themes; this page then edits what is drawn on top of it.` : 'Add a theme in My themes or get one in Browse. This page then edits what is drawn on top of it.' }),
       el('div', { class: 'row' },
         el('button', { class: 'btn primary big', text: 'Go to My themes', onclick: () => ctx.goHome('mine') }),
         el('button', { class: 'btn secondary big', text: 'Browse', onclick: () => ctx.goHome('browse') }))));
@@ -153,7 +156,7 @@ export function createThemes(ctx) {
         const k = Wd.ENTRIES[key];
         const b = el('button', { type: 'button', class: 'pal', draggable: true, title: k.pick ? 'Click to choose what it shows, or drag it onto the preview' : `Add ${k.name.toLowerCase()}: click, or drag it onto the preview`,
           'data-type': key, onclick: () => (k.pick ? togglePicker() : addWidget(key)) },
-          el('span', { class: 'pi', 'aria-hidden': 'true', text: k.icon }), el('span', { class: 'pn', text: k.name }));
+          iconSpan('pi', widgetIcon(key) || widgetIcon(k.type), k.icon), el('span', { class: 'pn', text: k.name }));
         b.addEventListener('dragstart', ev => { ev.dataTransfer.setData('text/x-cs-widget', key); ev.dataTransfer.effectAllowed = 'copy'; });
         list.append(el('li', {}, b));
         if (k.pick) list.append(el('li', { class: 'pal-wide' }, u.picker));
@@ -163,11 +166,15 @@ export function createThemes(ctx) {
     buildPicker();
     u.layers = el('div', { class: 'layers', role: 'listbox', 'aria-multiselectable': 'true', 'aria-label': 'Layers, top of the picture first' });
     u.layersNone = el('p', { class: 'muted small', text: 'Nothing yet.' });
-    u.btnGroup = el('button', { class: 'iconbtn', title: 'Group the selected layers (Ctrl+G)', 'aria-label': 'Group the selected layers', text: '▣', onclick: () => doGroup() });
-    u.btnUngroup = el('button', { class: 'iconbtn', title: 'Ungroup (Ctrl+Shift+G)', 'aria-label': 'Ungroup', text: '▢', onclick: () => doUngroup() });
-    u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', text: '✕', onclick: () => doDelete() });
-    const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' },
-      el('h3', { text: 'Add' }), u.palette,
+    u.btnGroup = el('button', { class: 'iconbtn', title: 'Group the selected layers (Ctrl+G)', 'aria-label': 'Group the selected layers', onclick: () => doGroup() });
+    u.btnGroup.innerHTML = icon('group');
+    u.btnUngroup = el('button', { class: 'iconbtn', title: 'Ungroup (Ctrl+Shift+G)', 'aria-label': 'Ungroup', onclick: () => doUngroup() });
+    u.btnUngroup.innerHTML = icon('ungroup');
+    u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', onclick: () => doDelete() });
+    u.btnDelete.innerHTML = icon('trash');
+    const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' }, el('h3', { text: 'Add' }), u.palette);
+    // the layer list sits under the preview, where the free height is
+    const layersBox = el('section', { class: 'ed-layers', 'aria-label': 'Layers' },
       el('div', { class: 'layers-head' }, el('h3', { text: 'Layers' }), el('span', { class: 'grow' }), u.btnGroup, u.btnUngroup, u.btnDelete),
       u.layers, u.layersNone);
     // centre
@@ -177,13 +184,13 @@ export function createThemes(ctx) {
     u.banner = el('div');
     // the one "Live layer" switch, snapping and guides
     u.layerSw = el('input', { type: 'checkbox', id: 'liveLayerSw', role: 'switch', onchange: e => { E.theme.liveLayer = e.target.checked; E.baseSig = null; paintBar(); paintStage(); edited(); } });
-    u.snapSw = el('input', { type: 'checkbox', id: 'snapSw', onchange: e => { E.snap = e.target.checked; } });
-    u.guidesSw = el('input', { type: 'checkbox', id: 'guidesSw', onchange: e => { E.guides = e.target.checked; lsSet('cs.guides', E.guides ? '1' : '0'); paintStage(); } });
+    u.snapSw = el('input', { type: 'checkbox', id: 'snapSw', role: 'switch', onchange: e => { E.snap = e.target.checked; } });
+    u.guidesSw = el('input', { type: 'checkbox', id: 'guidesSw', role: 'switch', onchange: e => { E.guides = e.target.checked; lsSet('cs.guides', E.guides ? '1' : '0'); paintStage(); } });
     u.bar = el('div', { class: 'ed-bar' },
-      el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the items are drawn on the screen. Off: only the picture.' }, u.layerSw, el('span', { class: 'switch-track', 'aria-hidden': 'true' }, el('span', { class: 'switch-knob' })), el('span', { text: 'Live layer' })),
+      el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the items are drawn on the screen. Off: only the picture.' }, u.layerSw, el('span', { text: 'Live layer' })),
       u.layerHint = el('span', { class: 'muted small', hidden: true, text: 'No live items yet. Add one from the left.' }),
-      el('label', { class: 'check', title: 'Items snap to each other, the middle and the guides. Alt = free.' }, u.snapSw, 'Snap'),
-      el('label', { class: 'check', title: 'Where the screen curves or is hard to see (Settings > Screen guides)' }, u.guidesSw, 'Guides'));
+      el('label', { class: 'sw-inline', title: 'Items snap to each other, the middle and the guides. Alt = free.' }, u.snapSw, 'Snap'),
+      el('label', { class: 'sw-inline', title: 'Where the screen curves or is hard to see (Settings > Screen guides)' }, u.guidesSw, 'Guides'));
     u.stage = el('div', { class: 'stage', role: 'application', 'aria-label': 'Preview of the screen. Drag items to move them; use the handles to resize.' });
     u.imgBase = el('img', { class: 'layer', alt: '', draggable: false });
     u.imgLive = el('img', { class: 'layer', alt: '', draggable: false });
@@ -209,7 +216,7 @@ export function createThemes(ctx) {
     u.baseBtn = el('button', { class: 'btn ghost', text: 'Picture…', title: 'Choose its picture: any clip, its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) });
     const center = el('section', { class: 'ed-center', 'aria-labelledby': 'screenTitle' },
       el('div', { class: 'ed-title' }, u.title, u.sub, el('span', { class: 'grow' }), u.saveState, u.baseBtn),
-      u.banner, u.bar, u.stageWrap);
+      u.banner, u.bar, u.stageWrap, layersBox);
     u.props = el('aside', { class: 'ed-right', 'aria-label': 'Properties' });
     root.append(el('div', { class: 'ed' }, left, center, u.props));
   }
@@ -221,7 +228,7 @@ export function createThemes(ctx) {
   function paintTitle() {
     const u = E.ui;
     u.title.textContent = E.info.name;
-    u.sub.textContent = S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? 'live layer is off' : widgets().some(w => !hiddenNow(w) && !w.onBase) ? 'live' : 'no live items') : 'Live is off · the screen shows Embedded';
+    u.sub.textContent = S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? 'Live layer is off' : widgets().some(w => !hiddenNow(w) && !w.onBase) ? 'Live' : 'No live items') : 'Live is off · the screen shows Embedded';
   }
   function paintSave() {
     const u = E.ui;
@@ -617,7 +624,7 @@ export function createThemes(ctx) {
         const fold = el('span', { class: 'licon' }); fold.innerHTML = SVG_FOLDER;
         row.append(caret, eye, fold, el('span', { class: 'lname', text: name, title: name }), el('span', { class: 'lcount small muted', text: String(r.members.length) }));
       } else {
-        row.append(...[el('span', { class: 'lindent' }), eye, el('span', { class: 'licon', 'aria-hidden': 'true', text: Wd.typeIcon(r.w.type) }), el('span', { class: 'lname', text: name, title: name }),
+        row.append(...[el('span', { class: 'lindent' }), eye, iconSpan('licon', widgetIcon(r.w.type), Wd.typeIcon(r.w.type)), el('span', { class: 'lname', text: name, title: name }),
           hit && E.guides ? el('span', { class: 'lwarn', title: `Overlaps ${hit}`, text: '⚠' }) : null].filter(Boolean));
       }
       eye.onclick = e => {

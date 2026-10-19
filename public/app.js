@@ -2,6 +2,8 @@
 import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, styleCorners } from './js/frame.js';
 import { openDialog } from './js/dialog.js';
 import './js/titlebar.js';
+import { icon, upgradeGlyphs } from './js/icons.js';
+import { initSettingsNav } from './js/settingsnav.js';
 import { backend } from './js/backend.js';
 import { createBandSlider } from './js/bandslider.js';
 import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
@@ -145,7 +147,7 @@ function renderBanners() {
   }
   const os = S.app && S.app.onScreen;
   if (os && os.incomplete && !S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'))) {
-    add('danger', `Embedded ("${os.originalName} · ${os.label}") didn't finish storing; the screen may show a broken picture.`,
+    add('danger', `Embedded (“${os.originalName} · ${os.label}”) didn't finish storing; the screen may show a broken picture.`,
       os.exists ? el('button', { class: 'btn primary', text: 'Store again', onclick: () => startSend(os.versionId) }) : null);
   }
   if (S.longMissing.length && !S.missingDismissed) {
@@ -312,7 +314,7 @@ async function importFiles(files) {
     try {
       lastId = (await backend.importFile(it.file)).id;
     } catch (e) {
-      openDialog({ title: 'Couldn\'t add this file', body: /can't read/i.test(e.message) ? e.message : `CoolerScreen can't read "${it.name}". It may be damaged or in a format that isn't supported.`, actions: [{ label: 'OK', value: true, kind: 'primary' }] });
+      openDialog({ title: 'Couldn\'t add this file', body: /can't read/i.test(e.message) ? e.message : `CoolerScreen can't read “${it.name}”. It may be damaged or in a format that isn't supported.`, actions: [{ label: 'OK', value: true, kind: 'primary' }] });
     }
     S.adding.splice(S.adding.indexOf(it), 1);
   }
@@ -468,7 +470,7 @@ async function addFromSource(src, item, { record = false } = {}) {
     const input = el('select', { id: 'recSecs', autofocus: true },
       el('option', { value: 'auto', text: 'Automatic (recommended)' }),
       ...[30, 60, 120, 180].map(s => el('option', { value: String(s), text: s < 60 ? `${s} seconds` : `${s / 60} minute${s > 60 ? 's' : ''}` })));
-    const ok = await openDialog({ title: `Record "${item.title}"`, body: el('div', {},
+    const ok = await openDialog({ title: `Record “${item.title}”`, body: el('div', {},
       el('p', { text: 'This wallpaper is drawn live, so CoolerScreen records it: it opens in a separate Wallpaper Engine window for the length of the recording, then closes that window. Your desktop wallpaper is not changed.' }),
       el('div', { class: 'field' }, el('label', { for: 'recSecs', text: 'Record for' }), input),
       el('p', { class: 'muted small', text: 'Automatic stops as soon as the recording holds a seamless loop (at least 30 seconds). Wallpapers with random effects like rain or fireflies never repeat exactly, so those record the full 2 minutes and get a cross-fade. The loops are found right after, in the background.' })),
@@ -484,7 +486,7 @@ async function addFromSource(src, item, { record = false } = {}) {
     const { jobId } = await call('source_add', { sourceId: src.id, itemId: item.id, record, seconds, title: item.title });
     const r = await pollJob(jobId, j => { st.progress = j.progress || 0; st.status = j.status === 'waiting' ? plainWait(j.message) : j.message || 'Working'; updateSourceCard(key); });
     B.jobs.delete(key);
-    toast(`"${item.title}" was added to My themes as its own copy.`);
+    toast(`“${item.title}” was added to My themes as its own copy.`);
     await loadOriginals();
   } catch (e) { st.error = e.message; }
   renderGallery();
@@ -502,7 +504,7 @@ async function addFromLink() {
     const { jobId } = await call('link_add', { url: input.value.trim() });
     toast('Downloading…');
     const r = await pollJob(jobId, () => {});
-    toast(`Added "${r.name}" to My themes.`);
+    toast(`Added “${r.name}” to My themes.`);
     await loadOriginals();
   } catch (e) { openDialog({ title: 'Couldn\'t add that link', body: e.message, actions: [{ label: 'OK', value: true, kind: 'primary' }] }); }
 }
@@ -663,7 +665,7 @@ function renderMine() {
       'Or ', el('button', { class: 'btn ghost inline-btn', text: 'browse your sources', onclick: () => goHome('browse') }), '.'));
     const entries = [];
     if (!q) entries.push({ key: 'add-tile', sig: 'x', make: () => el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
-      el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
+      (t => { t.innerHTML = icon('plus', 32); return t; })(el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true' })),
       el('div', { class: 'g-name', text: 'Add a file' }), el('div', { class: 'small muted', text: 'or drop files anywhere' })) });
     for (const a of S.adding) {
       if (!addingIds.has(a)) addingIds.set(a, ++addingSeq);
@@ -675,7 +677,7 @@ function renderMine() {
     g.title.hidden = true;
     g.note.hidden = !(q && !list.length);
     g.note.textContent = '';
-    if (q && !list.length) g.note.append(`No themes match "${M.q.trim()}". `, el('button', { class: 'btn ghost inline-btn', text: 'Clear filter', onclick: () => { u.q.value = ''; M.q = ''; renderGallery(); u.q.focus(); } }));
+    if (q && !list.length) g.note.append(`No themes match “${M.q.trim()}”. `, el('button', { class: 'btn ghost inline-btn', text: 'Clear filter', onclick: () => { u.q.value = ''; M.q = ''; renderGallery(); u.q.focus(); } }));
     reconcile(g, entries, new Set(all.map(o => 'o:' + o.id)));
     u.body.append(g.wrap);
     renderSelBar();
@@ -795,7 +797,7 @@ function renderBrowse() {
         el('input', { type: 'checkbox', checked: on, 'data-src': s.id, onchange: e => setTicked(s.id, e.target.checked) }), s.name,
         d && d.total != null ? el('span', { class: 'muted num', text: ` ${d.total}` }) : null));
     }
-    u.chips.append(el('button', { class: 'btn ghost small-btn', text: srcs.length ? 'Sources…' : 'Choose sources…', title: 'Settings > Sources', onclick: () => openDrawer('setSources') }));
+    if (srcs.length) u.chips.append(el('button', { class: 'btn ghost small-btn', text: 'Sources…', title: 'Settings > Sources', onclick: () => openDrawer('setSources') })); // with none, the note below offers it
     if (focused) { const f = u.chips.querySelector(`input[data-src="${CSS.escape(focused)}"]`); if (f) f.focus(); }
 
     u.body.textContent = '';
@@ -1250,10 +1252,10 @@ async function confirmDeleteOriginal() {
   const onScreen = d.versions.some(v => v.onScreen);
   const lines = [];
   if (d.missing || !d.file) lines.push(`Its ${n} version${n === 1 ? '' : 's'} will be deleted.`);
-  else lines.push(`The file "${d.fileName}" goes to the Recycle Bin and ${n ? `its ${n} version${n === 1 ? '' : 's'} ${n === 1 ? 'is' : 'are'}` : 'nothing else is'} deleted.`);
+  else lines.push(`The file “${d.fileName}” goes to the Recycle Bin and ${n ? `its ${n} version${n === 1 ? '' : 's'} ${n === 1 ? 'is' : 'are'}` : 'nothing else is'} deleted.`);
   if (onScreen) lines.push('The screen keeps playing it until you store another Embedded.');
   const ok = await openDialog({
-    title: `${d.missing ? 'Remove' : 'Delete'} "${d.name}"?`, body: el('div', {}, lines.map(t => el('p', { text: t }))),
+    title: `${d.missing ? 'Remove' : 'Delete'} “${d.name}”?`, body: el('div', {}, lines.map(t => el('p', { text: t }))),
     actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: d.missing ? 'Remove' : 'Delete', value: true, kind: 'danger' }],
   });
   if (!ok) return;
@@ -2126,7 +2128,7 @@ async function renameVersion(v) {
 }
 async function deleteVersion(v) {
   const name = v.label || `v${v.n}`;
-  const body = el('div', {}, el('p', { text: `"${S.detail.name} · ${name}" will be deleted. The original clip is kept.` }),
+  const body = el('div', {}, el('p', { text: `“${S.detail.name} · ${name}” will be deleted. The original clip is kept.` }),
     v.onScreen ? el('p', { text: 'This version is Embedded. Deleting it here does not remove it from the screen.' }) : null);
   const ok = await openDialog({ title: `Delete ${name}?`, body, actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Delete', value: true, kind: 'danger' }] });
   if (!ok) return;
@@ -2234,27 +2236,27 @@ function renderActivity() {
     if (outcome.status === 'error') {
       box.classList.add('danger');
       const act = sendErrorAction(outcome);
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Couldn't send "${outcome.label}". ${plainSendError(outcome)}` }),
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Couldn't send “${outcome.label}”. ${plainSendError(outcome)}` }),
         act, el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
     } else if (outcome.result && outcome.result.restartFailed) {
       box.classList.add('warn');
       const rf = outcome.result.restartFailed;
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `"${outcome.label}" was written, but the screen didn't answer after restarting. ${rf.failedUsb ? 'Windows lost its USB connection.' : ''}` }),
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `“${outcome.label}” was written, but the screen didn't answer after restarting. ${rf.failedUsb ? 'Windows lost its USB connection.' : ''}` }),
         rf.failedUsb ? el('button', { class: 'btn primary', text: 'Reconnect', onclick: runReconnect }) : el('button', { class: 'btn primary', text: 'Check again', onclick: checkScreen }),
         el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
     } else if (outcome.result && outcome.result.serialWarning) {
       box.classList.add('warn');
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Embedded: "${outcome.label}". The screen is not set up yet, so it switches off about 30 seconds after this app closes.` }),
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt wrap', text: `Embedded: “${outcome.label}”. The screen is not set up yet, so it switches off about 30 seconds after this app closes.` }),
         el('button', { class: 'btn primary', text: 'Set up screen', onclick: runSetup }),
         el('button', { class: 'btn ghost', text: 'Dismiss', onclick: () => { S.dismissed.add(outcome.id); renderActivity(); } })));
     } else if (now - outcome.finishedAt < 8000) {
       box.classList.add('ok');
-      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt', text: `Embedded: "${outcome.label}".` +
+      rows.push(el('div', { class: 'act-row' }, el('span', { class: 'txt', text: `Embedded: “${outcome.label}”.` +
         (outcome.result && outcome.result.restarted ? ' (The screen wasn\'t answering, so it was restarted first.)' : '') })));
       setTimeout(renderActivity, 8000 - (now - outcome.finishedAt) + 50);
     }
   }
-  box.hidden = false;
+  box.hidden = !rows.length; // shown only while it has something to say (no empty strip at the bottom)
   box.append(...rows);
   for (const t of box.querySelectorAll('.txt')) t.title = t.textContent;
 }
@@ -2264,18 +2266,18 @@ function activityRow(j) {
   if (j.status === 'waiting') text = `${j.label}: ${plainWait(j.message)}`;
   else if (j.kind === 'send') {
     const m = j.message || '';
-    if (/Connecting/.test(m)) text = `Storing "${j.label}": connecting`;
-    else if (/intro/.test(m)) text = `Storing "${j.label}": start-up logo · ${pct}%`;
-    else if (/Starting playback/.test(m)) text = `Storing "${j.label}": starting playback`;
-    else if (/Restarting the screen to show/.test(m)) text = `"${j.label}": restarting the screen`;
-    else if (/Waiting for screen/.test(m)) text = `Storing "${j.label}": waiting for the screen`;
+    if (/Connecting/.test(m)) text = `Storing “${j.label}”: connecting`;
+    else if (/intro/.test(m)) text = `Storing “${j.label}”: start-up logo · ${pct}%`;
+    else if (/Starting playback/.test(m)) text = `Storing “${j.label}”: starting playback`;
+    else if (/Restarting the screen to show/.test(m)) text = `“${j.label}”: restarting the screen`;
+    else if (/Waiting for screen/.test(m)) text = `Storing “${j.label}”: waiting for the screen`;
     else {
-      text = `Storing "${j.label}" as Embedded · ${pct}%`;
+      text = `Storing “${j.label}” as Embedded · ${pct}%`;
       const elapsed = (Date.now() - (j.runningSince || j.startedAt)) / 1000;
       if (elapsed > 10 && j.progress > 0.02) text += ` · ${fmtLeft(elapsed / j.progress - elapsed)}`;
       else if (j.bytesTotal) text += ` · ${fmtLeft(j.bytesTotal * (1 - j.progress) / (S.app.uploadRate || 50000))}`;
     }
-  } else if (j.kind === 'version') text = `Preparing "${j.label}" · ${pct}%`;
+  } else if (j.kind === 'version') text = `Preparing “${j.label}” · ${pct}%`;
   else text = `${j.label}${j.message ? ': ' + j.message : ''}`;
   return el('div', { class: 'act-row' }, j.status === 'running' ? el('span', { class: 'spinner', 'aria-hidden': 'true' }) : null,
     el('span', { class: 'txt', text }),
@@ -2813,6 +2815,8 @@ const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOrigin
 initApply({ call, backend, plainWait });
 
 // ---------- start ----------
+upgradeGlyphs();
+initSettingsNav();
 (async function init() {
   // Opens on the view chosen last time (On screen by default); with nothing on the screen yet, on My themes (or Browse).
   const stored = lsGet(HOME_KEY);
