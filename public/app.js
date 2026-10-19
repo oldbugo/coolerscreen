@@ -2473,6 +2473,12 @@ function renderScreenSettings() {
 }
 $('scrCheck').onclick = checkScreen;
 $('scrRestart').onclick = () => runRestart();
+// Settings > Restart CoolerScreen: the app quits like the tray's Quit (live hands back to Embedded) and opens again by itself.
+$('appRestart').onclick = async () => {
+  const b = $('appRestart'), m = $('appRestartMsg');
+  b.disabled = true; m.textContent = 'Restarting…';
+  try { await call('app_restart'); } catch (e) { b.disabled = false; m.textContent = e.message; }
+};
 $('scrSetup').onclick = runSetup;
 $('scrSetupAgain').onclick = runSetup;
 $('aRestore').onclick = runRestore;

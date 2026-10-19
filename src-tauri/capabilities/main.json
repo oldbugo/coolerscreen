@@ -15,6 +15,7 @@
     "allow-win-close",
     "allow-win-force-close",
     "allow-live-set",
+    "allow-app-restart",
     "allow-app-state",
     "allow-settings-update",
     "allow-activity",
