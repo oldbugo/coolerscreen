@@ -72,3 +72,26 @@ Not done / not verified:
 - For the PM: the layer list moving under the preview is a layout change, not a flow change; easy to revert in
   `js/themes.js` (one element) + `css/editor.css` if the user prefers it on the left.
 - For stream B: new palette kinds get an icon once added to `js/icons.js` (D owns it); until then their glyph shows.
+
+## D3: polish pass over the combined app (2026-10-19)
+
+Branch `claude/zealous-swanson-66219d` on top of `main` 4.7.0 (fast-forward merge, no conflicts).
+- 4.x item panels (`js/morewidgets.js`, small edits; `css/editor.css`): Meters rows and World clocks cities are cards
+  with their tools top right (`.meter-row` had no CSS at all); CPU cores / Ping / Volume style and Timer mode are
+  segmented controls instead of selects (same values, same resize-and-save path); Timer "Start" is the primary button;
+  notes under switches and fields sit with them. ↑ ↓ ✕ ↺ glyph buttons were already upgraded to SVG by `icons.js`.
+- `js/effects.js` needed no change: it already uses `.seg`, `field`/`range`, colour swatches and a ghost Reset; the
+  five A3 effects render with the same Background section (screenshots 31-effect-warp, 31-effect-pulse).
+- `js/icons.js`: icons for volume, ping, agenda and live text. Every palette entry and layer kind now has an SVG
+  (checked by calling `widgetIcon` for all 30 keys: none missing).
+- Leftover literals: the hex values left in the two modules are widget/effect defaults stored in themes (data drawn
+  on the screen), not UI colours; no inline UI styles.
+
+Verification (quiet debug test instances, fake screen, scratch home):
+- `tools/ui-shots/all.ps1 -Flows`: now 31 checks (added: CPU cores Style "Heat map" via the segmented control, then
+  delete). Run twice after the final build: all passed, no page errors.
+- Screenshots: the full set plus `30-panel-<kind>` for all ten 4.x item kinds and `31-effect-warp` / `31-effect-pulse`,
+  in `docs/v4/ui-audit/after/`.
+
+Not verified: real sensor data in the new panels (fake device; values are sample readings), the Agenda source and
+Ping against a real host, the visualizer/pulse with real audio, drag-and-drop (unchanged code), the real screen.

@@ -108,6 +108,12 @@ export function paintProps(w, host, api, ctx) {
     if (resettable) reset = el('button', { type: 'button', class: 'icon-btn', title: 'Automatic', 'aria-label': 'Automatic colour', disabled: !p[key], text: '↺', onclick: () => { api.set(key, null); input.value = dflt; reset.disabled = true; } });
     return field(text, resettable ? el('div', { class: 'inline-ctl' }, input, reset) : input, 'pCol-' + key);
   };
+  /** Two or three mutually exclusive choices: a segmented control (ui-style-guide.md 3), same values as the select it replaces. */
+  const segField = (text, id, value, opts, onchange) => {
+    const g = el('div', { class: 'seg', role: 'group', 'aria-label': text, id },
+      ...opts.map(([v, t]) => el('button', { type: 'button', text: t, 'aria-pressed': String(v === value), onclick: () => { if (v !== value) onchange(v); } })));
+    return el('div', { class: 'field' }, el('span', { class: 'field-label', text }), g);
+  };
   const rateField = () => field('Rate', select2('pRate', String(p.rate || 1), [['1', '1 / s'], ['2', '2 / s'], ['4', '4 / s']], v => api.set('rate', Number(v))), 'pRate');
   /** A change that alters the item's best size (rows, cities, styles): resize unless the user sized it by hand. */
   const restructure = fn => {
@@ -127,7 +133,7 @@ export function paintProps(w, host, api, ctx) {
     case 'meters': return metersPanel();
     case 'cores':
       host.append(
-        field('Style', select2('pStyle', p.style || 'bars', [['bars', 'Bars'], ['heat', 'Heat map']], v => restructure(() => { p.style = v; })), 'pStyle'),
+        segField('Style', 'pStyle', p.style || 'bars', [['bars', 'Bars'], ['heat', 'Heat map']], v => restructure(() => { p.style = v; })),
         swRow('Average', p.average !== false, v => api.set('average', v)),
         colour('color', 'Colour', '#5ac8ff', true), rateField());
       return true;
@@ -172,13 +178,13 @@ export function paintProps(w, host, api, ctx) {
       hostIn.value = p.host || '1.1.1.1';
       host.append(field('Host', hostIn, 'pHost'),
         el('p', { class: 'muted small', text: 'Sends one small ping a second to this address while the item is shown.' }),
-        field('Style', select2('pStyle', p.style || 'number', [['number', 'Number'], ['graph', 'Graph']], v => restructure(() => { p.style = v; })), 'pStyle'));
+        segField('Style', 'pStyle', p.style || 'number', [['number', 'Number'], ['graph', 'Graph']], v => restructure(() => { p.style = v; })));
       if (p.style === 'graph') host.append(field('History (s)', range('pHist', clamp(p.history || 60, 10, 600), 10, 600, 10, v => api.set('history', Math.round(v)), v => String(v)), 'pHist'));
       return true;
     }
     case 'volume':
       host.append(
-        field('Style', select2('pStyle', p.style || 'bar', [['bar', 'Bar'], ['ring', 'Ring']], v => restructure(() => { p.style = v; })), 'pStyle'),
+        segField('Style', 'pStyle', p.style || 'bar', [['bar', 'Bar'], ['ring', 'Ring']], v => restructure(() => { p.style = v; })),
         colour('color', 'Colour', '#5ac8ff'));
       return true;
     default: return false;
@@ -284,7 +290,7 @@ export function paintProps(w, host, api, ctx) {
   function timerPanel() {
     const mode = p.mode || 'stopwatch';
     const running = !!p.running;
-    const startStop = el('button', { type: 'button', class: 'btn', text: running ? 'Pause' : (p.elapsedMs > 0 ? 'Resume' : 'Start'), onclick: () => {
+    const startStop = el('button', { type: 'button', class: 'btn primary', text: running ? 'Pause' : (p.elapsedMs > 0 ? 'Resume' : 'Start'), onclick: () => {
       if (p.running) { p.elapsedMs = (p.elapsedMs || 0) + Math.max(0, Date.now() - (p.startedAt || Date.now())); p.running = false; }
       else { p.running = true; p.startedAt = Date.now(); }
       api.edited(); api.repaint();
@@ -293,7 +299,7 @@ export function paintProps(w, host, api, ctx) {
     const lab = el('input', { type: 'text', id: 'pLab', maxLength: 30, spellcheck: false, placeholder: ({ stopwatch: 'Stopwatch', timer: 'Timer', pomodoro: 'Pomodoro' })[mode], oninput: e => api.set('label', e.target.value.trim() ? e.target.value : null) });
     lab.value = p.label || '';
     host.append(
-      field('Mode', select2('pMode', mode, [['stopwatch', 'Stopwatch'], ['timer', 'Timer'], ['pomodoro', 'Pomodoro']], v => { p.mode = v; p.running = false; p.elapsedMs = 0; p.startedAt = 0; api.edited(); api.relabel(); api.repaint(); }), 'pMode'),
+      segField('Mode', 'pMode', mode, [['stopwatch', 'Stopwatch'], ['timer', 'Timer'], ['pomodoro', 'Pomodoro']], v => { p.mode = v; p.running = false; p.elapsedMs = 0; p.startedAt = 0; api.edited(); api.relabel(); api.repaint(); }),
       el('div', { class: 'row' }, startStop, reset));
     if (mode === 'timer') {
       host.append(el('div', { class: 'props-grid' },

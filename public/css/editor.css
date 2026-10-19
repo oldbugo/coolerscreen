@@ -54,3 +54,23 @@
 .ed-right .sep { margin: var(--s4) 0; }
 .ed-right .seg { margin-bottom: var(--s3); }
 .ed-right .hint { margin: calc(-1 * var(--s2)) 0 var(--s3); }
+
+/* a label for a group of buttons (segmented control) inside a field */
+.field-label { display: block; font-size: var(--fs-small); color: var(--text-muted); margin-bottom: var(--s1); }
+.ed-right .field .seg { margin-bottom: 0; display: flex; }
+.ed-right .field .seg button { flex: 1; }
+
+/* editable lists inside Properties (Meters rows, World clocks cities): one card per row, its tools top right */
+.meter-rows { display: grid; gap: var(--s2); margin-bottom: var(--s2); }
+.meter-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center;
+  padding: var(--s2); border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2);
+}
+.meter-row > :not(.inline-ctl) { grid-column: 1 / -1; width: 100%; min-width: 0; }
+.meter-row > :first-child { grid-column: 1; }
+.meter-row > .inline-ctl { grid-column: 2; grid-row: 1; gap: 0; }
+.meter-row .iconbtn { width: var(--h-sm); height: var(--h-sm); }
+.meter-row select, .meter-row input[type="text"], .meter-row input[type="number"] { background: var(--surface-1); }
+/* a short note under a switch or a field belongs to it: small gap above, normal gap below */
+.ed-right .sw-row + p.muted, .ed-right .field + p.muted { margin: calc(-1 * var(--s1)) 0 var(--s3); }
+.ed-right .field:has(+ p.muted) { margin-bottom: var(--s2); }

@@ -53,6 +53,14 @@ await check('The new item is selected and its Properties show', `/Text/.test(doc
 await check('Saved without a Save button', `/Sav/.test(document.querySelector('.save-state').textContent)`, 1200);
 await click('.ed-layers .layers-head .iconbtn[aria-label="Delete the selected layers"]'); await wait(1000);
 await check('Delete removes it again', `document.querySelectorAll('.ed-layers .lrow').length === ${n0}`);
+// a 4.x item: its Style choice is a segmented control and still changes the item
+if (await js(`!!document.querySelector('.pal[data-type="cores"]')`)) {
+  await click('.pal[data-type="cores"]'); await wait(1200);
+  await click('#pStyle button', 'Heat map'); await wait(1000);
+  await check('CPU cores: Style "Heat map" is chosen and stays chosen', `document.querySelector('#pStyle button[aria-pressed="true"]')?.textContent === 'Heat map'`);
+  await click('.ed-layers .layers-head .iconbtn[aria-label="Delete the selected layers"]'); await wait(800);
+  await check('…and the item is deleted again', `document.querySelectorAll('.ed-layers .lrow').length === ${n0}`);
+}
 // Snap and Guides are switches and still toggle
 await click('#snapSw'); await check('Snap toggles', `!document.getElementById('snapSw').checked`, 200); await click('#snapSw');
 await click('#guidesSw'); await check('Guides toggles (guide bands hide)', `!document.getElementById('guidesSw').checked`, 300); await click('#guidesSw');
