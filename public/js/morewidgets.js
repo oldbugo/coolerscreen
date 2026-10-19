@@ -14,7 +14,7 @@ const meterRows = () => ['cpu.load', 'ram.used', 'gpu.load', 'gpu.temp'].map(met
 export const ENTRIES = {
   meters: { type: 'meters', name: 'Meters', icon: '☷', props: () => ({ rows: meterRows(), unit: 'C', bars: true, rate: 1 }) },
   cores: { type: 'cores', name: 'CPU cores', icon: '▦', props: () => ({ style: 'bars', average: true, color: null, rate: 2 }) },
-  network: { type: 'network', name: 'Down + up', icon: '⇵', props: () => ({ graph: true, history: 60, downColor: '#5ad2a0', upColor: '#aa8cff', rate: 2 }) },
+  network: { type: 'network', name: 'Down + up', icon: '⇵', props: () => ({ graph: true, totals: false, history: 60, downColor: '#5ad2a0', upColor: '#aa8cff', rate: 2 }) },
   disks: { type: 'disks', name: 'All disks', icon: '▤', props: () => ({ drives: [], show: 'used', maxRows: 4 }) },
   worldclock: { type: 'worldclock', name: 'World clocks', icon: '◷', props: () => ({
     zones: [{ name: 'New York', tz: 'Eastern Standard Time' }, { name: 'London', tz: 'GMT Standard Time' }, { name: 'Tokyo', tz: 'Tokyo Standard Time' }], format: '24h', color: '#ffffff' }) },
@@ -117,7 +117,7 @@ export function paintProps(w, host, api, ctx) {
         colour('color', 'Colour', '#5ac8ff', true), rateField());
       return true;
     case 'network': {
-      host.append(swRow('Graph', p.graph !== false, v => restructure(() => { p.graph = v; })));
+      host.append(swRow('Graph', p.graph !== false, v => restructure(() => { p.graph = v; })), swRow('Totals', !!p.totals, v => api.set('totals', v), 'Data moved since start-up.'));
       if (p.graph !== false) host.append(field('History (s)', range('pHist', clamp(p.history || 60, 10, 600), 10, 600, 10, v => api.set('history', Math.round(v)), v => String(v)), 'pHist'));
       host.append(colour('downColor', 'Download', '#5ad2a0'), colour('upColor', 'Upload', '#aa8cff'), rateField());
       return true;

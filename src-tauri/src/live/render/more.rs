@@ -14,6 +14,10 @@ const RED: [u8; 3] = [240, 90, 80];
 const CYAN: [u8; 3] = [90, 200, 255];
 const GREEN: [u8; 3] = [90, 210, 130];
 
+fn bytes_text(b: f32) -> String {
+    if b >= 1e12 { format!("{:.2} TB", b / 1e12) } else if b >= 1e9 { format!("{:.1} GB", b / 1e9) } else { format!("{:.0} MB", b / 1e6) }
+}
+
 fn size_text(gb: f32) -> String {
     if gb >= 1000.0 { format!("{:.1} TB", gb / 1024.0) } else if gb >= 100.0 { format!("{gb:.0} GB") } else { format!("{gb:.1} GB") }
 }
@@ -199,7 +203,10 @@ impl Renderer {
     // ------------------------------------------------------------ network
 
     fn draw_network(&mut self, b: Rect, p: &NetworkProps) {
-        let inner = self.mcard(b);
+        let mut inner = self.mcard(b);
+        if p.totals {
+            inner = self.network_footer(inner, p);
+        }
         let hz = p.rate.clamp(1, 4);
         let secs = p.history.clamp(10.0, 600.0);
         let kd = metrics::key("net.down", 0, "", p.adapter.as_deref());
@@ -261,6 +268,26 @@ impl Renderer {
             let ms = (ph * 0.14).clamp(8.0, 18.0).round() as u32;
             self.text(&format!("{n} {u}"), px + 3.0, py + ms as f32 * 1.05, ms, Weight::Regular, LAB, 0.8);
         }
+    }
+
+    /// The "since start-up" line at the bottom of the network widget; returns the area left for the rest.
+    fn network_footer(&mut self, inner: Rect, p: &NetworkProps) -> Rect {
+        let foot = (inner.h * 0.13).clamp(10.0, 34.0);
+        let (rx, tx) = if self.sample {
+            (Some(48.2e9), Some(3.1e9))
+        } else {
+            let h = metrics::hub();
+            let a = p.adapter.as_deref().unwrap_or("*");
+            (h.read(&format!("net.rx.total:{a}"), 1).0, h.read(&format!("net.tx.total:{a}"), 1).0)
+        };
+        let txt = match (rx, tx) {
+            (Some(r), Some(t)) => format!("Since start-up   down {}   up {}", bytes_text(r), bytes_text(t)),
+            _ => "Since start-up   \u{2013}".to_string(),
+        };
+        let sz = (foot * 0.9).round().max(8.0) as u32;
+        let txt = self.fit(&txt, sz, Weight::Regular, inner.w);
+        self.text(&txt, inner.x, inner.y + inner.h - foot * 0.2, sz, Weight::Regular, LAB, 0.95);
+        Rect { h: (inner.h - foot * 1.3).max(8.0), ..inner }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -549,5 +576,24 @@ mod tests {
         // the cores really were read: every logical core slot exists in the sampler
         let (v, _) = crate::live::metrics::hub().read("cpu.core:0", 2);
         let _ = v;
+    }
+
+    #[test]
+    fn every_metric_is_a_meter_row_and_the_new_readings_are_polled() {
+        let rows: Vec<serde_json::Value> = crate::live::theme::SENSOR_METRICS.iter().map(|m| json!({ "metric": m })).collect();
+        // the meters widget holds 8 rows: draw them in chunks
+        for chunk in rows.chunks(8) {
+            let t = theme(&[("meters", 0.0, 0.0, 0.5, 1.0, json!({ "rows": chunk })), ("network", 0.5, 0.0, 0.5, 0.5, json!({ "totals": true }))]);
+            crate::live::render_preview(&t, 640, 288, true).unwrap();
+        }
+        let h = crate::live::metrics::hub();
+        for k in ["disk.read", "disk.write", "net.rx.total:*", "net.tx.total:*"] {
+            h.read(k, 4);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1600));
+        let (rx, _) = h.read("net.rx.total:*", 4);
+        assert!(rx.is_some_and(|v| v > 0.0), "adapter counters are read");
+        let (r, _) = h.read("disk.read", 4);
+        eprintln!("disk read now: {r:?}");
     }
 }

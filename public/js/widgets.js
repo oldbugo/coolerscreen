@@ -16,7 +16,7 @@ export const METRICS = [
   ['gpu.power', 'GPU', 'GPU power'], ['gpu.fan', 'GPU', 'GPU fan'],
   ['board.temp', 'Board', 'Board temperature'], ['ram.used', 'Memory', 'RAM'],
   ['net.down', 'Network', 'Download'], ['net.up', 'Network', 'Upload'],
-  ['disk.used', 'Disk', 'Disk used'], ['disk.activity', 'Disk', 'Disk activity'],
+  ['disk.used', 'Disk', 'Disk used'], ['disk.activity', 'Disk', 'Disk activity'], ['disk.read', 'Disk', 'Disk read speed'], ['disk.write', 'Disk', 'Disk write speed'],
 ];
 export const metricName = id => (METRICS.find(m => m[0] === id) || [])[2] || 'Sensor';
 const isTemp = m => m === 'cpu.temp' || m === 'gpu.temp' || m === 'board.temp';

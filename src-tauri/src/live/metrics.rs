@@ -211,11 +211,14 @@ unsafe impl Send for Pdh {}
 struct Sources {
     nvml: Option<super::sensors::GpuSource>,
     pdh: Option<Option<Pdh>>,
+    /// Disk read / write bytes per second (PDH), opened the first time a widget asks.
+    pdh_read: Option<Option<Pdh>>,
+    pdh_write: Option<Option<Pdh>>,
 }
 
 impl Sources {
     fn new() -> Sources {
-        Sources { nvml: None, pdh: None }
+        Sources { nvml: None, pdh: None, pdh_read: None, pdh_write: None }
     }
 
     fn gpu(&mut self) -> Option<super::sensors::Gpu> {
@@ -304,6 +307,19 @@ impl Sources {
                     s.value = Some(used as f32 / 1073741824.0);
                     s.total = Some(total as f32 / 1073741824.0);
                 }
+            }
+            "disk.read" | "disk.write" => {
+                let (slot, path) = if metric == "disk.read" { (&mut self.pdh_read, r"\PhysicalDisk(_Total)\Disk Read Bytes/sec") } else { (&mut self.pdh_write, r"\PhysicalDisk(_Total)\Disk Write Bytes/sec") };
+                if slot.is_none() {
+                    *slot = Some(Pdh::open_path(path));
+                }
+                s.value = slot.as_mut().and_then(|p| p.as_mut()).and_then(|p| p.read_raw());
+            }
+            // octet counters of the up adapters since the adapter came up (network widget "since start-up" totals)
+            "net.rx.total" | "net.tx.total" => {
+                let rx = metric == "net.rx.total";
+                let sum: u64 = net_rows().iter().filter(|r| arg == "*" || arg.is_empty() || r.alias.eq_ignore_ascii_case(arg)).map(|r| if rx { r.rx } else { r.tx }).sum();
+                s.value = Some(sum as f32);
             }
             "disk.activity" => {
                 if self.pdh.is_none() {
@@ -456,6 +472,10 @@ struct Pdh {
 
 impl Pdh {
     fn open() -> Option<Pdh> {
+        Pdh::open_path(r"\PhysicalDisk(_Total)\% Disk Time")
+    }
+
+    fn open_path(path: &str) -> Option<Pdh> {
         use windows_sys::Win32::System::Performance::{PdhAddEnglishCounterW, PdhCollectQueryData, PdhOpenQueryW};
         let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
         unsafe {
@@ -464,7 +484,7 @@ impl Pdh {
                 return None;
             }
             let mut c: *mut c_void = std::ptr::null_mut();
-            if PdhAddEnglishCounterW(q, wide("\\PhysicalDisk(_Total)\\% Disk Time").as_ptr(), 0, &mut c) != 0 {
+            if PdhAddEnglishCounterW(q, wide(path).as_ptr(), 0, &mut c) != 0 {
                 return None;
             }
             PdhCollectQueryData(q);
@@ -473,6 +493,10 @@ impl Pdh {
     }
 
     fn read(&mut self) -> Option<f32> {
+        self.read_raw().map(|v| v.clamp(0.0, 100.0))
+    }
+
+    fn read_raw(&mut self) -> Option<f32> {
         use windows_sys::Win32::System::Performance::{PdhCollectQueryData, PdhGetFormattedCounterValue, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE};
         unsafe {
             if PdhCollectQueryData(self.query) != 0 {
@@ -482,7 +506,7 @@ impl Pdh {
             if PdhGetFormattedCounterValue(self.counter, PDH_FMT_DOUBLE, std::ptr::null_mut(), &mut v) != 0 || v.CStatus != 0 {
                 return None;
             }
-            Some((v.Anonymous.doubleValue as f32).clamp(0.0, 100.0))
+            Some((v.Anonymous.doubleValue as f32).max(0.0))
         }
     }
 }

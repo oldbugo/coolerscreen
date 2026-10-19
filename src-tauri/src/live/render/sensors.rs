@@ -109,6 +109,8 @@ pub(super) fn info(metric: &str) -> Info {
     match metric {
         "cpu.core" => Info { label: "CPU core", kind: Kind::Percent, max: Some(100.0), thr: thr_load, base: GREEN },
         "cpu.temp" => Info { label: "CPU temp", kind: Kind::Temp, max: Some(100.0), thr: &[(70.0, AMBER), (85.0, RED)], base: GREEN },
+        "disk.read" => Info { label: "Disk read", kind: Kind::Rate, max: None, thr: &[], base: [90, 200, 255] },
+        "disk.write" => Info { label: "Disk write", kind: Kind::Rate, max: None, thr: &[], base: [255, 170, 90] },
         "cpu.power" => Info { label: "CPU power", kind: Kind::Watts, max: None, thr: &[], base: CYAN },
         "cpu.fan" => Info { label: "CPU fan", kind: Kind::Rpm, max: Some(3000.0), thr: &[], base: CYAN },
         "board.temp" => Info { label: "Board temp", kind: Kind::Temp, max: Some(100.0), thr: &[(60.0, AMBER), (75.0, RED)], base: GREEN },
@@ -177,6 +179,8 @@ fn sample_value(metric: &str, core: u32) -> (Option<f32>, Option<f32>) {
         "cpu.core" => (Some(20.0 + (core * 17 % 60) as f32), None),
         "cpu.temp" => (Some(58.0), None),
         "cpu.power" => (Some(71.0), None),
+        "disk.read" => (Some(86.0e6), None),
+        "disk.write" => (Some(22.0e6), None),
         "cpu.fan" => (Some(1180.0), None),
         "board.temp" => (Some(36.0), None),
         "cpu.clock" => (Some(4650.0), None),

@@ -73,6 +73,8 @@ impl Default for CoresProps {
 #[serde(default, rename_all = "camelCase")]
 pub struct NetworkProps {
     pub graph: bool,
+    /// A footer with the data moved since the adapters came up (about: since the PC started).
+    pub totals: bool,
     /// Seconds of history in the graph (10..600).
     pub history: f32,
     /// null = the busiest adapter.
@@ -83,7 +85,7 @@ pub struct NetworkProps {
 }
 impl Default for NetworkProps {
     fn default() -> Self {
-        NetworkProps { graph: true, history: 60.0, adapter: None, down_color: "#5ad2a0".into(), up_color: "#aa8cff".into(), rate: 2 }
+        NetworkProps { graph: true, totals: false, history: 60.0, adapter: None, down_color: "#5ad2a0".into(), up_color: "#aa8cff".into(), rate: 2 }
     }
 }
 
@@ -273,6 +275,7 @@ pub fn clean(kind: &str, props: &mut Value) {
         }
         "network" => {
             boolean(o, "graph", true);
+            boolean(o, "totals", false);
             number(o, "history", 60.0, 10.0, 600.0);
             short(o, "adapter", 60, true);
             if o.get("adapter").and_then(Value::as_str) == Some("") {
