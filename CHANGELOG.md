@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.11.0 - 2026-10-19 (stream B: corner radius per item, notch-aware gaps)
+
+- **Corner radius on every widget:** Properties has a Corner radius row. By default an item follows the theme's corner
+  radius; set your own value per item, and the reset arrow returns it to the theme value.
+- **Gaps start at the notch:** the gap, snap lines, default positions and the Standard layout are measured from the
+  visible area (after the notch band and the screen fit), so nothing is placed under the black band.
+- Theme contract v1.13.
+
 ## 4.10.0 - 2026-10-19 (stream D: editor layout)
 
 - **Resizable panels:** drag the inner edge of the left or right panel; the width follows, then settles on the nearest

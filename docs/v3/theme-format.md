@@ -344,7 +344,7 @@ More types and metrics, all additive (code: `live/extsensors.rs`, `live/ping.rs`
   DAILY / WEEKLY(BYDAY) / MONTHLY / YEARLY with INTERVAL, COUNT, UNTIL, EXDATE. The link is stored in theme.json (it may be a secret
   address: a future theme-sharing export should drop `agenda.source`).
 
-### 4.0 E2: per-item corner radius, notch-aware gap (added 2026-10-19; contract version assigned by the PM)
+## v1.13 (4.11.0, stream B E2): per-item corner radius, notch-aware gap
 
 - **Item field `radius`** (widget level, next to `x`, `y`, `w`, `h`; number, px on the 2400x1080 canvas, 0-400). **Absent by default** = the
   item follows the theme's corner radius: the theme's `corners` (or the global default) when that is above 0, otherwise the card's
