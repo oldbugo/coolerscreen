@@ -62,3 +62,11 @@ from the user's full-screen application. Also set `COOLERSCREEN_HOME`, `COOLERSC
 `CoolerScreen.exe --background` starts without showing or activating anything: Live on (Settings) = tray only; Live off =
 the window is built minimised without activation (taskbar button, easy to quit). A second launch from the Start menu still
 brings the window up as usual, except a second `--background` launch, which does nothing.
+
+## Quit the running app cleanly: `--quit`
+
+`CoolerScreen.exe --quit` asks the running CoolerScreen (the one using the same app folder) to quit exactly like the tray's Quit:
+live stops with the normal hand-back to Embedded, bounded waits, the exit watchdog. It never shows a window and never starts an
+app. Exit codes: **0** the running app quit; **1** asked, but still running after 20 s; **2** refused because a job is running
+(upload, conversion, store, recording), nothing was done; **3** no running instance. A plain `taskkill /PID` (no /F) only closes
+the window; the app stays in the tray, so scripts use `--quit` instead.

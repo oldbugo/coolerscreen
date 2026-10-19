@@ -5,6 +5,7 @@
 
 mod live_app;
 mod live_measure;
+mod quit_cmd;
 mod window;
 
 use cs_core::core::commands::{self as cc, Core, EventRelay, TauriEvents};
@@ -18,6 +19,10 @@ use tauri::{Manager, RunEvent};
 struct Media(#[allow(dead_code)] Mutex<Option<MediaServer>>);
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--quit`: ask the running app (same app folder) to quit like the tray's Quit; never shows a window or starts an app.
+    if args.iter().any(|a| a == "--quit") {
+        std::process::exit(quit_cmd::run_quit());
+    }
     let measure = live_measure::parse(&args);
     // `--tray` (the Windows start-up entry): no window, live on, icon in the tray.
     let tray_only = args.iter().any(|a| a == cs_core::core::autostart::TRAY_FLAG);
@@ -123,6 +128,11 @@ fn main() {
                 }
             } else if !tray_only {
                 live_app::create_window(app.handle(), true)?;
+            }
+            // `CoolerScreen.exe --quit` from an installer or script reaches this app through a named event
+            {
+                let (h1, h2) = (app.handle().clone(), app.handle().clone());
+                quit_cmd::listen(move || h1.state::<Core>().0.busy_for_quit(), move || live_app::quit_app(&h2));
             }
             let c = app.state::<Core>().0.clone();
             let resolver_app = c.clone();
