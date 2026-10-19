@@ -11,6 +11,8 @@ import * as Safe from './safearea.js';
 import * as Wd from './widgets.js';
 import { backgroundSection, effectSpeed } from './effects.js';
 import { icon, widgetIcon } from './icons.js';
+import { initEditorShell, makeAccordion, installDeselect } from './edshell.js';
+import { itemControls } from './edhooks.js';
 
 const MIN_BOX = 0.02;
 const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
@@ -162,7 +164,9 @@ export function createThemes(ctx) {
         list.append(el('li', {}, b));
         if (k.pick) list.append(el('li', { class: 'pal-wide' }, u.picker));
       }
-      u.palette.append(el('h4', { class: 'pal-head', text: group }), list);
+      const head = el('h4', { class: 'pal-head' });
+      makeAccordion(head, list, group);
+      u.palette.append(head, list);
     }
     buildPicker();
     u.layers = el('div', { class: 'layers', role: 'listbox', 'aria-multiselectable': 'true', 'aria-label': 'Layers, top of the picture first' });
@@ -173,11 +177,13 @@ export function createThemes(ctx) {
     u.btnUngroup.innerHTML = icon('ungroup');
     u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', onclick: () => doDelete() });
     u.btnDelete.innerHTML = icon('trash');
-    const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' }, el('h3', { text: 'Add' }), u.palette);
-    // the layer list sits under the preview, where the free height is
+    // left panel: Add (scrolls) above Layers, with a divider between them that can be dragged
     const layersBox = el('section', { class: 'ed-layers', 'aria-label': 'Layers' },
       el('div', { class: 'layers-head' }, el('h3', { text: 'Layers' }), el('span', { class: 'grow' }), u.btnGroup, u.btnUngroup, u.btnDelete),
       u.layers, u.layersNone);
+    const split = el('div', { class: 'ed-split' });
+    const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' },
+      el('div', { class: 'ed-add' }, el('h3', { text: 'Add' }), u.palette), split, layersBox);
     // centre
     u.title = el('h1', { id: 'screenTitle' });
     u.sub = el('span', { class: 'muted small' });
@@ -217,9 +223,14 @@ export function createThemes(ctx) {
     u.baseBtn = el('button', { class: 'btn ghost', text: 'Picture…', title: 'Choose its picture: any clip, its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) });
     const center = el('section', { class: 'ed-center', 'aria-labelledby': 'screenTitle' },
       el('div', { class: 'ed-title' }, u.title, u.sub, el('span', { class: 'grow' }), u.saveState, u.baseBtn),
-      u.banner, u.bar, u.stageWrap, layersBox);
-    u.props = el('aside', { class: 'ed-right', 'aria-label': 'Properties' });
-    root.append(el('div', { class: 'ed' }, left, center, u.props));
+      u.banner, u.bar, u.stageWrap);
+    // the right panel holds its resize handle; Properties are painted into u.props inside it
+    u.props = el('div', { class: 'ed-props' });
+    const right = el('aside', { class: 'ed-right', 'aria-label': 'Properties' }, u.props);
+    const grid = el('div', { class: 'ed' }, left, center, right);
+    root.append(grid);
+    initEditorShell({ ed: grid, left, right, split, layersBox });
+    if (!E.deselectOn) { E.deselectOn = true; installDeselect({ root, hasSelection: () => !!E.ui && (E.selIds.length > 0 || !!E.selGroup), deselect: () => setSel([]) }); }
   }
 
   function paintAll() {
@@ -812,24 +823,10 @@ export function createThemes(ctx) {
     const hit = Ly.bandHit(w, guidesNow());
     u.props.append(Wd.cornerRow(w, { el, field, numInput, edited, themeRadius: radius })); // per-item corner radius (morewidgets.js)
     if (hit && E.guides) u.props.append(el('p', { class: 'warn-text small', text: `⚠ Overlaps ${hit}` }));
-    u.props.append(el('hr', { class: 'sep' }), el('h3', { text: 'Position and size' }));
-    const grid = el('div', { class: 'props-grid' });
-    posFields = {};
-    for (const [key, text] of [['x', 'Left (%)'], ['y', 'Top (%)'], ['w', 'Width (%)'], ['h', 'Height (%)']]) {
-      const inp = el('input', { type: 'number', id: 'pos-' + key, min: 0, max: 100, step: 0.5, onchange: e => {
-        const v = clamp(Number(e.target.value) / 100, 0, 1);
-        if (key === 'x') w.x = clamp(v, 0, 1 - w.w); else if (key === 'y') w.y = clamp(v, 0, 1 - w.h);
-        else if (key === 'w') w.w = clamp(v, MIN_BOX, 1 - w.x); else w.h = clamp(v, MIN_BOX, 1 - w.y);
-        for (const kk of ['x', 'y', 'w', 'h']) w[kk] = r4(w[kk]);
-        const b = boxEl(w.id);
-        if (b) placeBox(b, w);
-        syncPosFields(w); refreshWarnings(); edited();
-      } });
-      inp.value = (w[key] * 100).toFixed(1);
-      posFields[key] = inp;
-      grid.append(field(text, inp, 'pos-' + key));
-    }
-    u.props.append(grid, el('div', { class: 'row' }, el('button', { class: 'btn danger', text: 'Delete this item', onclick: doDelete })));
+    // rows for every item kind (E2 adds "Corner radius" through js/edhooks.js)
+    for (const fn of itemControls) { try { fn(w, u.props, { el, h: { field, select2, range, numInput, swRow }, set, edited, repaint: () => paintProps(), S, theme: E.theme }); } catch (e) { console.error(e); } }
+    // placement is done on the preview (with snapping); Delete stays pinned at the bottom right of the panel
+    u.props.append(el('div', { class: 'props-foot' }, el('button', { class: 'btn danger', text: 'Delete this item', onclick: doDelete })));
   }
 
   // The theme's own settings: name, layout preset, corners, guides, hand-over, base.

@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.10.0 - 2026-10-19 (stream D: editor layout)
+
+- **Resizable panels:** drag the inner edge of the left or right panel; the width follows, then settles on the nearest
+  preset (left 220/300/380 px, right 280/360/480 px) with a small spring at the limits. Sizes are remembered.
+- **Layers on the left:** Layers moved from the bottom into the left panel under the palette, with a divider to share the
+  height; the preview gets the space back.
+- **Palette accordions:** each group folds open and closed (remembered); items line up the same in every group.
+- **Deselect by clicking away:** a click outside the selected item and its Properties deselects it (moving the window
+  keeps it; Esc deselects).
+- **Properties:** "Position and size" is gone (place items on the preview; arrow keys still nudge); "Delete this item"
+  is always at the bottom right.
+
 ## 4.9.2 - 2026-10-19 (stream C: Embedded size alignment)
 
 - **One size limit everywhere:** the Picture page, "Preparing the picture" and the final check before sending now use
