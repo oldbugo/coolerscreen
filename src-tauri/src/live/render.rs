@@ -1327,14 +1327,15 @@ mod tests {
 
     /// Moving an item (the editor sends the theme again at every step) must leave nothing of it at the earlier places: the frame after a
     /// series of moves equals the frame of a fresh renderer given only the final theme. Checked for translucent cards and bars
-    /// (meters, cores, stats, network, clock), alone and next to a fixed neighbour (their rectangles merge and split while one is
+    /// (meters, cores, stats, network, disks), alone and next to a fixed neighbour (their rectangles merge and split while one is
     /// dragged past the other), with and without a screen fit. (With a fit, stale layer pixels beside an item's rectangle were read by
     /// the resample and showed as ghost edges and copies on the real screen.)
     #[test]
     fn a_moved_item_leaves_no_ghosts() {
         use crate::live::theme::Widget;
         for fit in [crate::core::fit::Fit::default(), crate::core::fit::Fit::new(4, 0, 0, 9)] {
-            for kind in ["meters", "cores", "stats", "network", "clock"] {
+            // (no clocks: their colon blinks with the time of day, so two draws a moment apart differ by design)
+            for kind in ["meters", "cores", "stats", "network", "disks"] {
                 for neighbour in [false, true] {
                     let theme_at = |x: f32, y: f32| {
                         let mut t = Theme::default();

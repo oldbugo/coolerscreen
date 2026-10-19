@@ -317,7 +317,7 @@ fit the cluster rectangle is the composited one, so it never showed.
 **Fix (render.rs):** a changed layout (`update_bbox` on every theme change, and `update_fit_rects` also for a fit change) starts from an
 empty widget layer and an empty fitted layer; every cluster is redrawn right after (`set_theme` resets the layer key). Cost: a 5 MB
 memset per theme change (a few per second while dragging), nothing per frame.
-**Test:** `a_moved_item_leaves_no_ghosts`: an item (meters, cores, stats, network, clock: translucent cards and bars) is dragged across the
+**Test:** `a_moved_item_leaves_no_ghosts`: an item (meters, cores, stats, network, disks: translucent cards and bars; clocks are left out, their colon blinks with the time) is dragged across the
 picture in 9 big steps, alone and next to a fixed neighbour (rectangles merge and split), with and without a fit; the frame after the
 moves must equal the frame of a fresh renderer with only the final theme (0 differing pixels). Checked that it fails without the fix
 (1,069 differing pixels for meters with the fit) and passes with it. Without a fit it passed before too.
