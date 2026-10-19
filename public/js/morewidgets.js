@@ -5,7 +5,7 @@
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 /** The new item types. */
-export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer'];
+export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume'];
 export const isMore = t => MORE_TYPES.includes(t);
 
 const meterRows = () => ['cpu.load', 'ram.used', 'gpu.load', 'gpu.temp'].map(metric => ({ metric }));
@@ -18,13 +18,15 @@ export const ENTRIES = {
   disks: { type: 'disks', name: 'All disks', icon: '▤', props: () => ({ drives: [], show: 'used', maxRows: 4 }) },
   worldclock: { type: 'worldclock', name: 'World clocks', icon: '◷', props: () => ({
     zones: [{ name: 'New York', tz: 'Eastern Standard Time' }, { name: 'London', tz: 'GMT Standard Time' }, { name: 'Tokyo', tz: 'Tokyo Standard Time' }], format: '24h', color: '#ffffff' }) },
+  livetext: { type: 'livetext', name: 'Live text', icon: 'T', props: () => ({ text: '{time}  CPU {cpu}  GPU {gpu}', size: 0.08, color: '#ffffff', opacity: 1, align: 'left', weight: 'regular' }) },
+  volume: { type: 'volume', name: 'Volume', icon: '♪', props: () => ({ style: 'bar', color: '#5ac8ff' }) },
   timer: { type: 'timer', name: 'Timer', icon: '⏲', props: () => ({ mode: 'stopwatch', running: false, startedAt: 0, elapsedMs: 0, duration: 300, workMin: 25, breakMin: 5, color: '#ffffff' }) },
 };
 
 /** [group name, entry keys] pairs added to the palette (widgets.js puts them into the existing groups). */
-export const PALETTE_ADD = { Time: ['worldclock', 'timer'], Sensors: ['meters', 'cores', 'network', 'disks'] };
+export const PALETTE_ADD = { Time: ['worldclock', 'timer'], Sensors: ['meters', 'cores', 'network', 'disks'], Media: ['volume'], Decoration: ['livetext'] };
 
-export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer' };
+export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer', livetext: 'Live text', volume: 'Volume' };
 
 /** Default box [w, h] as fractions of the 2400x1080 canvas. */
 export function defaultSize(type, p = {}) {
@@ -35,6 +37,8 @@ export function defaultSize(type, p = {}) {
     case 'disks': return [0.28, clamp(0.1 * (p.maxRows || 4) + 0.04, 0.22, 0.7)];
     case 'worldclock': return [0.26, clamp(0.12 * Math.max(1, (p.zones || []).length || 3) + 0.04, 0.2, 0.7)];
     case 'timer': return [0.28, 0.28];
+    case 'livetext': return [0.5, 0.12];
+    case 'volume': return p.style === 'ring' ? [0.14, 0.32] : [0.26, 0.16];
     default: return null;
   }
 }
@@ -42,10 +46,17 @@ export function defaultSize(type, p = {}) {
 export function nameOf(w) {
   const p = w.props || {};
   if (w.type === 'timer') return p.label || ({ stopwatch: 'Stopwatch', timer: 'Timer', pomodoro: 'Pomodoro' })[p.mode] || 'Timer';
+  if (w.type === 'livetext') { const t = (p.text || '').replace(/\s+/g, ' ').trim(); return t ? `Live text: “${t.slice(0, 20)}${t.length > 20 ? '…' : ''}”` : 'Live text'; }
   if (w.type === 'meters') return `Meters (${(p.rows || []).length})`;
   if (w.type === 'worldclock') return `World clocks (${(p.zones || []).length})`;
   return TYPE_NAME[w.type] || w.type;
 }
+
+/** Words a live text understands, (word, what it shows); the same list as live/morewidgets.rs WORDS. */
+export const WORDS = [['time', 'Time (24-hour)'], ['time12', 'Time (12-hour)'], ['seconds', 'Time with seconds'], ['date', 'Date'], ['weekday', 'Weekday'],
+  ['cpu', 'CPU load'], ['cputemp', 'CPU temperature'], ['cpupower', 'CPU power'], ['cpufan', 'CPU fan'], ['gpu', 'GPU load'], ['gputemp', 'GPU temperature'],
+  ['vram', 'GPU memory'], ['ram', 'RAM used'], ['down', 'Download speed'], ['up', 'Upload speed'], ['diskread', 'Disk read speed'], ['diskwrite', 'Disk write speed'],
+  ['uptime', 'Uptime'], ['volume', 'Volume']];
 
 /** Windows time-zone ids with the usual city (id, city). */
 export const ZONES = [
@@ -137,6 +148,12 @@ export function paintProps(w, host, api, ctx) {
     }
     case 'worldclock': return worldPanel();
     case 'timer': return timerPanel();
+    case 'livetext': return liveTextPanel();
+    case 'volume':
+      host.append(
+        field('Style', select2('pStyle', p.style || 'bar', [['bar', 'Bar'], ['ring', 'Ring']], v => restructure(() => { p.style = v; })), 'pStyle'),
+        colour('color', 'Colour', '#5ac8ff'));
+      return true;
     default: return false;
   }
 
@@ -181,6 +198,29 @@ export function paintProps(w, host, api, ctx) {
       host.append(field('Unit', select2('pUnit', p.unit || ctx.tempUnit(), [['C', '°C'], ['F', '°F']], v => api.set('unit', v)), 'pUnit'));
     }
     host.append(rateField());
+    return true;
+  }
+
+  function liveTextPanel() {
+    const t = el('input', { type: 'text', id: 'pText', maxLength: 200, spellcheck: false, oninput: e => { p.text = e.target.value; api.edited(); api.relabel(); } });
+    t.value = typeof p.text === 'string' ? p.text : '';
+    // insert a word where the cursor is
+    const words = el('select', { id: 'pWord', 'aria-label': 'Insert a word', onchange: e => {
+      const word = e.target.value; e.target.value = '';
+      if (!word) return;
+      const a = t.selectionStart ?? t.value.length, b = t.selectionEnd ?? a;
+      t.value = t.value.slice(0, a) + '{' + word + '}' + t.value.slice(b);
+      t.focus(); t.selectionStart = t.selectionEnd = a + word.length + 2;
+      p.text = t.value; api.edited(); api.relabel();
+    } }, [el('option', { value: '', text: 'Insert a word…' }), ...WORDS.map(([id, text]) => el('option', { value: id, text }))]);
+    words.value = '';
+    host.append(
+      field('Text', t, 'pText'), field('Words', words, 'pWord'),
+      field('Size', range('pSize', Math.round(clamp(p.size ?? 0.08, 0.02, 0.3) * 100), 2, 30, 1, v => api.set('size', Math.round(v) / 100), v => v + ' %'), 'pSize'),
+      field('Weight', select2('pWeight', p.weight || 'regular', [['light', 'Light'], ['regular', 'Regular'], ['bold', 'Bold']], v => api.set('weight', v)), 'pWeight'),
+      field('Align', select2('pAlign', p.align || 'left', [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']], v => api.set('align', v)), 'pAlign'),
+      colour('color', 'Colour', '#ffffff'),
+      field('Opacity', range('pOp', Math.round(clamp(p.opacity ?? 1, 0, 1) * 100), 0, 100, 5, v => api.set('opacity', v / 100), v => v + ' %'), 'pOp'));
     return true;
   }
 
