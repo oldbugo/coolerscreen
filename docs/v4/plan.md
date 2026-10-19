@@ -1,4 +1,4 @@
-﻿# CoolerScreen 4.0 plan (shared by every 4.0 session)
+# CoolerScreen 4.0 plan (shared by every 4.0 session)
 
 Written 2026-10-18 by the 4.0 PM session. Approved by the user the same day ("Go ahead with the plan as written,
 including the landing-order version numbers"). Every worker session reads this file, the repo `CLAUDE.md` standing list
