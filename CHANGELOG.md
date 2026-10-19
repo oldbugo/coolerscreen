@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.4.0 - 2026-10-19 (stream A: live effects, Embedded face)
+
+- **Effect themes can be stored as Embedded:** "Store as Embedded", "Update Embedded" and "Use and store as Embedded"
+  now record one seamless loop of the effect and store it on the screen as a normal clip (MJPEG, with the screen fit,
+  corners and notch). If the loop is too big for the screen it is recorded played faster until it fits.
+- **Embedded goes out of date** when an effect setting changes, like a corner or fit change; widget changes do not.
+- **Hand-over:** when live stops and the stored loop matches, the screen fades into the loop's first frame.
+- **The editor preview animates** for effect themes.
+- Theme contract v1.11.
+
 ## 4.3.0 - 2026-10-19 (stream C: small improvements, second batch)
 
 - **Screen changed outside the app:** after a check, if the screen's free space is clearly different from when
