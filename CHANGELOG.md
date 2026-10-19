@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.16.0 - 2026-10-19 (stream E: music looks)
+
+- **Four new music looks** besides the current card, which stays the default: **Cover** (large cover with text),
+  **Line** (one line that slides sideways and fades), **Disc** (a record that turns while playing; can be switched off)
+  and **Blur** (the cover blurred behind the text). Pick one in Properties > Music.
+- Theme contract v1.16.
+
 ## 4.15.2 - 2026-10-19 (stream C: ghost copies fixed)
 
 - **No more ghost copies when moving items:** with a screen fit set, moving or resizing a widget left faint copies of it in

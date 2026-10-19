@@ -390,7 +390,7 @@ dropped by the app. Redirects: at most 3, never https to http. Code: `live/headl
   6000 px / 36 megapixel limits, shown at most 1680 px wide. Uses the per-item `radius` (clipped only when the item has its own radius).
   A failed refresh keeps the old picture with an "(old picture)" note.
 
-## v1.x (stream E M3; the PM numbers it): music looks
+## v1.16 (4.16.0, stream E M3): music looks
 
 Additive; old themes load and look exactly as before (a `music` item without `style` is today's card, pixel-identical). Code:
 `live/render/music.rs`, `public/js/w-music.js`.
