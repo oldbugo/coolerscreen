@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.9.0 - 2026-10-19 (stream A: faster Embedded stores)
+
+- **No second send of the same clip:** if the exact clip is already on the screen (same content, and a fresh check of
+  the screen agrees), storing finishes at once with "Already on the screen. Nothing was sent." When anything is
+  uncertain it sends as before.
+- **Why a store takes about 3.5 minutes:** 96% of the time is the screen writing its flash at about 50 KB/s (a 10.6 MB
+  clip takes about 210 s). Converting takes a few seconds. Live cannot keep showing during the send: the screen takes
+  one stream at a time and the file write occupies it. Details in `docs/v4/notes/A-store-speed.md`.
+
 ## 4.8.0 - 2026-10-19 (stream C: preview on the screen)
 
 - **Preview by selecting:** clicking a theme in My themes shows it on the real screen at once, with its live layer;
