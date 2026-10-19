@@ -260,3 +260,29 @@ clip or version) mark the base as needing to be stored again, using the full not
   stale: "Embedded is out of date (screen fit/corners/notch/text/pictures changed) · Update Embedded". With Live off the title
   says "Live is off · the screen shows Embedded".
 - The "App responsibilities" Apply description above (3 steps) is superseded by this section.
+
+## v4 effects (stream A, milestone A1; the PM assigns the contract version at merge)
+
+A theme's background can be a **live effect** the engine draws itself instead of the theme's picture (like Wallpaper Engine's
+generated scenes, not a video). New optional theme field `background`; missing, `null` or any `kind` other than `"effect"` = the
+picture exactly as in 3.0, so old themes load and look the same and are written back without the field.
+
+```json
+"background": { "kind": "effect", "effect": "aurora", "speed": 1, "density": 0.5, "scale": 0.5, "brightness": 0.85,
+                "colors": ["#2cf5a0", "#3a7bff", "#b24bff"], "seed": 1 }
+```
+- `effect`: `"aurora"` (rays of light drifting sideways under stars), `"plasma"` (warped colour bands sliding past each other),
+  `"drift"` (soft particles that drift sideways and fade), `"clouds"` (slow fractal clouds in a colour ramp). Unknown = the
+  background is ignored (picture).
+- Every setting is optional; a missing one takes the effect's default (listed in `src-tauri/src/live/effects/mod.rs`, mirrored in
+  `public/js/effects.js`). `speed` 0.1 to 3 (1 = one loop in 10 s), `density` 0 to 1 (rays / bands / particles / cloud cover),
+  `scale` 0 to 1 (feature size), `brightness` 0.1 to 1.5, `colors` 2 to 4 `#rrggbb` (a ramp; fewer than 2 = defaults), `seed` integer.
+  Values outside the range are clamped on load.
+- **Periodic by design:** an effect is a function of the settings and the loop phase `phi = seconds * speed / 10`, with period 1 in
+  `phi`. A recording of `10 / speed` seconds loops seamlessly (used by the Embedded face, A2). Motion is sideways or a fade only (the
+  panel tears on vertical motion).
+- **Engine:** the effect fills the visible rectangle (screen fit) directly; no picture decoder runs. Widgets draw over it as over any
+  background; `onBase` items are drawn live (there is no base picture under them). With an effect the live layer always streams
+  (`nothing_to_stream` is false) and when live stops the hand-over is instant (until the effect is recorded as the Embedded loop).
+- The editor's Theme settings has a "Background" section (Picture | Live effect, effect, speed, amount, size, brightness, colours,
+  Reset). Edits save and apply at once. The stored picture is not touched; effect changes are live-only until A2.

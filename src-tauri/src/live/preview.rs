@@ -25,6 +25,9 @@ fn sample_sensors() -> Sensors {
     }
 }
 
+/// The loop phase the editor preview shows (a pleasing moment, the same on every refresh).
+pub const PREVIEW_PHASE: f64 = 0.3;
+
 type FrameKey = (PathBuf, bool, Option<SystemTime>);
 
 /// First frames already decoded (an ffmpeg run each), newest few kept.
@@ -70,7 +73,11 @@ pub fn render_preview(t: &ThemeLive, w: u32, h: u32, with_live: bool) -> Result<
     let mut r = Renderer::new(Arc::new(Mutex::new(sample_sensors())), None);
     r.set_sample_mode(true);
     r.set_theme(theme);
-    r.set_still_background(preview_background(t));
+    if t.theme.effect().is_some() {
+        r.set_effect_phase(Some(PREVIEW_PHASE)); // the effect draws itself: no first frame to decode
+    } else {
+        r.set_still_background(preview_background(t));
+    }
     let np = NowPlaying::demo("Midnight City", "M83", true, 83.0, 241.0);
     r.set_music_source(Some(Arc::new(Mutex::new(Some(np)))));
     let (rgba, _) = r.render();
