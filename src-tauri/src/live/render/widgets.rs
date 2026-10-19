@@ -483,6 +483,36 @@ impl Renderer {
     /// vertical band for the curve with its centre line and both edge lines, and short labels with px values.
     /// Static vertical lines only (the panel tears on vertical motion). Guide px are on the 2400x1080 canvas.
     /// Temporary: only while calibrating, never part of a normal frame.
+    /// The FPS counter: "59.8 / 60 fps" on a dark chip near the top left of the visible picture, drawn straight onto the
+    /// finished frame (a few hundred pixels, no layer redraw).
+    pub(super) fn draw_fps_overlay(&mut self) {
+        let Some((x10, target)) = self.fps_overlay else { return };
+        let text = format!("{}.{} / {} fps", x10 / 10, x10 % 10, target);
+        let (cw, ch) = (self.cw, self.ch);
+        let px = (cw as f32 / 1680.0 * 34.0).round().max(12.0) as u32;
+        let vis = self.visible();
+        let tw = self.fonts.width(&text, px, Weight::Bold);
+        let (x0, y0) = ((vis.0.max(0) as f32 + cw as f32 * 0.10).round() as i64, (vis.1.max(0) as f32 + ch as f32 * 0.06).round() as i64);
+        let (w, h) = (tw.ceil() as i64 + 24, px as i64 + 20);
+        let d = self.pm.data_mut();
+        for y in y0.max(0)..(y0 + h).min(ch as i64) {
+            for x in x0.max(0)..(x0 + w).min(cw as i64) {
+                let i = (y as usize * cw + x as usize) * 4;
+                for c in 0..3 {
+                    d[i + c] = (d[i + c] as u32 * 80 / 256) as u8;
+                }
+            }
+        }
+        let mut pen = (x0 + 12) as f32;
+        let base = (y0 + 10 + px as i64) as f32 - px as f32 * 0.2;
+        for c in text.chars() {
+            let Renderer { pm, fonts, .. } = self;
+            let Some(g) = fonts.glyph(c, px, Weight::Bold) else { continue };
+            blend_cov(pm.data_mut(), cw, ch, &g.cov, g.w, g.h, pen.round() as i32 + g.x, base.round() as i32 + g.y, [120, 255, 140], 1.0);
+            pen += g.adv;
+        }
+    }
+
     pub(super) fn draw_calibration(&mut self) {
         let Some(g) = self.calib.clone() else { return };
         let (cw, ch) = (self.cw, self.ch);

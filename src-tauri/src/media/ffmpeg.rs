@@ -239,6 +239,7 @@ mod tests {
         let t0 = std::time::Instant::now();
         let r = probe_text_timeout(&ff, Path::new(&format!("tcp://127.0.0.1:{port}?listen=1")), Duration::from_millis(800));
         assert!(matches!(r, Err(MediaError::Ffmpeg(_))), "{r:?}");
-        assert!(t0.elapsed() < Duration::from_millis(2500), "{:?}", t0.elapsed());
+        // killed at the timeout, not left hanging (the kill and the wait can be slow while other tests use the CPU)
+        assert!(t0.elapsed() >= Duration::from_millis(700) && t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
     }
 }

@@ -385,6 +385,7 @@ pub async fn live_set(app: AppHandle, core: tauri::State<'_, Core>, patch: Value
         if let Some(v) = b("inApp") { now.in_app = v; }
         if let Some(v) = b("destroyWindow") { now.destroy_window = v; }
         if let Some(v) = b("showSeconds") { now.show_seconds = v; }
+        if let Some(v) = b("fpsOverlay") { now.fps_overlay = v; }
         if let Some(v) = b("music") { now.music = v; }
         if let Some(v) = b("screenOffOnShutdown") { now.screen_off_on_shutdown = v; }
         if let Some(v) = s("background") { now.background = v.chars().take(80).collect(); }

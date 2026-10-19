@@ -2448,6 +2448,12 @@ $('scrSetupAgain').onclick = runSetup;
 $('aRestore').onclick = runRestore;
 
 // ---------- Settings > Live screen ----------
+// While the Live settings are on screen, the measured frame rate is refreshed every 2 s (cheap: one status read).
+setInterval(async () => {
+  const m = $('lvMsg');
+  if (!m || !m.offsetParent || document.hidden || !(S.app && S.app.live && S.app.live.settings && S.app.live.settings.inApp)) return;
+  try { S.app = await call('app_state'); renderLiveSettings(); } catch (e) { /* next tick */ }
+}, 2000);
 function renderLiveSettings() {
   const l = (S.app && S.app.live) || {};
   const c = l.settings || {};
@@ -2462,7 +2468,10 @@ function renderLiveSettings() {
   $('lvAuto').disabled = !c.inApp && !l.autostart;
   renderLiveSwitch();
   for (const id of ['lvFps', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut']) $(id).disabled = !c.inApp;
-  $('lvMsg').textContent = !c.inApp ? '' : st.deviceHold ? 'Paused: the screen is busy.' : st.systemHold ? 'Paused: the PC sleeps or is locked.' : st.paused ? 'Paused from the tray.' : st.connected ? 'Running.' : 'Connecting…';
+  $('lvFpsOv').checked = !!c.fpsOverlay;
+  $('lvFpsOv').disabled = !c.inApp;
+  const mf = Number(st.measuredFps) || 0;
+  $('lvMsg').textContent = !c.inApp ? '' : st.deviceHold ? 'Paused: the screen is busy.' : st.systemHold ? 'Paused: the PC sleeps or is locked.' : st.paused ? 'Paused from the tray.' : st.connected ? (mf > 0 ? `Running: ${mf.toFixed(1)} of ${st.fps >= 45 || !st.fps ? 60 : 30} frames per second sent.` : 'Running.') : 'Connecting…';
 }
 async function liveSet(patch) {
   try { S.app = await call('live_set', { patch }); }
@@ -2476,6 +2485,7 @@ const liveBind = (id, key, get) => { $(id).onchange = () => liveSet({ [key]: get
 liveBind('lvOn', 'inApp', e => e.checked);
 liveBind('lvFps', 'fps', e => Number(e.value));
 liveBind('lvDestroy', 'destroyWindow', e => e.checked);
+liveBind('lvFpsOv', 'fpsOverlay', e => e.checked);
 liveBind('lvSleep', 'onSleep', e => e.value);
 liveBind('lvLock', 'onLock', e => e.value);
 liveBind('lvShut', 'screenOffOnShutdown', e => e.checked);

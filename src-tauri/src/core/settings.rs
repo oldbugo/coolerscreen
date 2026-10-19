@@ -88,11 +88,13 @@ pub struct LiveSettings {
     /// "loop" (default: the screen plays its loop clip), "keep" (live keeps running) or "off" (screen off).
     pub on_sleep: String,
     pub on_lock: String,
+    /// Draw the live frames-per-second counter on the screen (off by default).
+    pub fps_overlay: bool,
 }
 
 impl Default for LiveSettings {
     fn default() -> Self {
-        LiveSettings { in_app: false, destroy_window: true, background: String::new(), show_seconds: false, music: true, screen_off_on_shutdown: false, on_sleep: "loop".into(), on_lock: "loop".into() }
+        LiveSettings { in_app: false, destroy_window: true, background: String::new(), show_seconds: false, music: true, screen_off_on_shutdown: false, on_sleep: "loop".into(), on_lock: "loop".into(), fps_overlay: false }
     }
 }
 
@@ -113,6 +115,7 @@ impl LiveSettings {
             screen_off_on_shutdown: b("screenOffOnShutdown", d.screen_off_on_shutdown),
             on_sleep: mode("onSleep", &d.on_sleep),
             on_lock: mode("onLock", &d.on_lock),
+            fps_overlay: b("fpsOverlay", d.fps_overlay),
         }
     }
     /// Only the keys that differ from the defaults.
@@ -127,11 +130,12 @@ impl LiveSettings {
         if self.screen_off_on_shutdown != d.screen_off_on_shutdown { m.insert("screenOffOnShutdown".into(), json!(self.screen_off_on_shutdown)); }
         if self.on_sleep != d.on_sleep { m.insert("onSleep".into(), json!(self.on_sleep)); }
         if self.on_lock != d.on_lock { m.insert("onLock".into(), json!(self.on_lock)); }
+        if self.fps_overlay != d.fps_overlay { m.insert("fpsOverlay".into(), json!(self.fps_overlay)); }
         Value::Object(m)
     }
     pub fn to_full_value(&self) -> Value {
         json!({ "inApp": self.in_app, "destroyWindow": self.destroy_window, "background": self.background, "showSeconds": self.show_seconds, "music": self.music,
-            "screenOffOnShutdown": self.screen_off_on_shutdown, "onSleep": self.on_sleep, "onLock": self.on_lock })
+            "screenOffOnShutdown": self.screen_off_on_shutdown, "onSleep": self.on_sleep, "onLock": self.on_lock, "fpsOverlay": self.fps_overlay })
     }
 }
 

@@ -209,7 +209,7 @@ impl Hub {
 unsafe impl Send for Pdh {}
 
 struct Sources {
-    nvml: Option<Option<super::sensors::Nvml>>,
+    nvml: Option<super::sensors::GpuSource>,
     pdh: Option<Option<Pdh>>,
 }
 
@@ -219,10 +219,7 @@ impl Sources {
     }
 
     fn gpu(&mut self) -> Option<super::sensors::Gpu> {
-        if self.nvml.is_none() {
-            self.nvml = Some(super::sensors::Nvml::load());
-        }
-        self.nvml.as_mut().and_then(|n| n.as_mut()).and_then(|n| n.read())
+        self.nvml.get_or_insert_with(super::sensors::GpuSource::new).read()
     }
 
     /// Poll one metric into its slot. Returns the GPU name when a GPU metric was read.
@@ -596,8 +593,16 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1200));
         let (ram, total) = h.read("ram.used", 4);
         assert!(ram.unwrap_or(0.0) > 0.1 && total.unwrap_or(0.0) >= ram.unwrap());
-        let (cpu, _) = h.read("cpu.load", 4);
-        assert!(cpu.is_some_and(|c| (0.0..=100.0).contains(&c)));
+        // the load needs a time delta between two polls; on a starved machine the first one can be empty, so wait for a value
+        let mut cpu = None;
+        for _ in 0..30 {
+            cpu = h.read("cpu.load", 4).0;
+            if cpu.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(cpu.is_some_and(|c| (0.0..=100.0).contains(&c)), "{cpu:?}");
         assert!(h.history("ram.used", 10.0).len() >= 2);
         // a metric that cannot be read stays None, never 0
         let (t, _) = h.read("cpu.temp", 1);

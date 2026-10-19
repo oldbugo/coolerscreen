@@ -655,10 +655,41 @@ pub(crate) fn parse_local_iso(s: &str) -> Option<i64> {
     Some(weather::days_from_civil(y, m, d) * 86400 + hh * 3600 + mm * 60 + ss)
 }
 
+/// Seconds since 1970 of a local wall-clock time, for differences that must follow the clock (see `countdown_left`).
+fn wall_secs(now: &LocalTime) -> i64 {
+    weather::days_from_civil(now.year as i32, now.month as u32, now.day as u32) * 86400 + now.hour as i64 * 3600 + now.minute as i64 * 60 + now.second as i64
+}
+
+/// The PC's UTC offset in seconds at a local wall-clock time (seconds since 1970 read as if local), from the Windows time-zone
+/// rules (daylight saving included). 0 when Windows does not answer.
+fn system_utc_offset(wall: i64) -> i64 {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::Time::TzSpecificLocalTimeToSystemTime;
+    let days = wall.div_euclid(86400);
+    let rem = wall.rem_euclid(86400);
+    let (y, m, d) = weather::civil_from_days(days);
+    let local = SYSTEMTIME { wYear: y as u16, wMonth: m as u16, wDayOfWeek: 0, wDay: d as u16, wHour: (rem / 3600) as u16, wMinute: ((rem / 60) % 60) as u16, wSecond: (rem % 60) as u16, wMilliseconds: 0 };
+    let mut utc: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    if unsafe { TzSpecificLocalTimeToSystemTime(std::ptr::null(), &local, &mut utc) } == 0 {
+        return 0;
+    }
+    let u = weather::days_from_civil(utc.wYear as i32, utc.wMonth as u32, utc.wDay as u32) * 86400 + utc.wHour as i64 * 3600 + utc.wMinute as i64 * 60 + utc.wSecond as i64;
+    wall - u
+}
+
+/// Real seconds from `now` to `target`, both local wall-clock times. A daylight-saving change in between makes the real
+/// distance an hour more or less than the wall-clock difference, so both are converted to UTC with `offset` first.
+fn countdown_left(target_wall: i64, now_wall: i64, offset: impl Fn(i64) -> i64) -> i64 {
+    (target_wall - offset(target_wall)) - (now_wall - offset(now_wall))
+}
+
 fn countdown_text(target: Option<&str>, now: &LocalTime) -> String {
+    countdown_text_with(target, now, system_utc_offset)
+}
+
+fn countdown_text_with(target: Option<&str>, now: &LocalTime, offset: impl Fn(i64) -> i64) -> String {
     let Some(t) = target.and_then(parse_local_iso) else { return "\u{2013}".into() };
-    let n = weather::days_from_civil(now.year as i32, now.month as u32, now.day as u32) * 86400 + now.hour as i64 * 3600 + now.minute as i64 * 60 + now.second as i64;
-    let left = t - n;
+    let left = countdown_left(t, wall_secs(now), offset);
     if left <= 0 {
         return "Now".into();
     }
@@ -673,14 +704,53 @@ mod tests {
     #[test]
     fn countdown_and_uptime_text() {
         let now = LocalTime { year: 2026, month: 10, weekday: 6, day: 18, hour: 12, minute: 0, second: 0, millis: 0 };
-        assert_eq!(countdown_text(Some("2026-10-20T14:30:15"), &now), "2d 02:30:15");
-        assert_eq!(countdown_text(Some("2026-10-18T13:00"), &now), "01:00:00");
-        assert_eq!(countdown_text(Some("2026-10-01T00:00"), &now), "Now");
-        assert_eq!(countdown_text(Some("rubbish"), &now), "\u{2013}");
-        assert_eq!(countdown_text(None, &now), "\u{2013}");
+        let flat = |_: i64| 0; // no daylight saving: wall-clock difference
+        assert_eq!(countdown_text_with(Some("2026-10-20T14:30:15"), &now, flat), "2d 02:30:15");
+        assert_eq!(countdown_text_with(Some("2026-10-18T13:00"), &now, flat), "01:00:00");
+        assert_eq!(countdown_text_with(Some("2026-10-01T00:00"), &now, flat), "Now");
+        assert_eq!(countdown_text_with(Some("rubbish"), &now, flat), "\u{2013}");
+        assert_eq!(countdown_text_with(None, &now, flat), "\u{2013}");
+        // the real zone of the PC answers too (whatever it is) and agrees with the flat answer within a daylight-saving hour
+        let sys = countdown_left(parse_local_iso("2026-10-20T14:30:15").unwrap(), wall_secs(&now), system_utc_offset);
+        assert!((sys - (2 * 86400 + 2 * 3600 + 30 * 60 + 15)).abs() <= 3600);
         assert_eq!(uptime_text(3 * 86400 + 4 * 3600 + 12 * 60), "3d 4h 12m");
         assert_eq!(uptime_text(3725), "1:02:05");
         assert_eq!(civil_days_in_month(2024, 2), 29);
         assert_eq!(civil_days_in_month(2026, 2), 28);
+    }
+
+    /// Australia/Sydney: daylight time (+11) from the first Sunday of October 02:00 standard time until the first Sunday of April
+    /// 03:00 daylight time (when clocks go back to 02:00, +10). Offsets are seconds east of UTC for a local wall-clock time.
+    fn sydney(wall: i64) -> i64 {
+        let day = wall.div_euclid(86400);
+        let (y, _, _) = weather::civil_from_days(day);
+        let first_sunday = |year: i32, month: u32| {
+            let d1 = weather::days_from_civil(year, month, 1);
+            d1 + (7 - (d1 + 4).rem_euclid(7)) % 7 // 1970-01-01 was a Thursday; (d + 4) % 7 == 0 is Sunday
+        };
+        let dst_start = first_sunday(y, 10) * 86400 + 2 * 3600; // wall time 02:00 standard
+        let dst_end = first_sunday(y, 4) * 86400 + 2 * 3600; // 03:00 daylight = 02:00 standard wall, first pass counts as daylight
+        if wall >= dst_start || wall < dst_end { 11 * 3600 } else { 10 * 3600 }
+    }
+
+    #[test]
+    fn countdown_follows_the_clock_across_daylight_saving_changes() {
+        let at = |y, mo, d, h| LocalTime { year: y, month: mo, weekday: 0, day: d, hour: h, minute: 0, second: 0, millis: 0 };
+        // Sydney springs forward on Sunday 2026-10-04: the night is an hour shorter than the wall clock says.
+        assert_eq!(first_sunday_for_test(2026, 10), 4);
+        assert_eq!(countdown_text_with(Some("2026-10-05T12:00"), &at(2026, 10, 3, 12), sydney), "1d 23:00:00");
+        // Clocks go back on Sunday 2027-04-04: an hour longer.
+        assert_eq!(first_sunday_for_test(2027, 4), 4);
+        assert_eq!(countdown_text_with(Some("2027-04-05T12:00"), &at(2027, 4, 3, 12), sydney), "2d 01:00:00");
+        // no change in between: plain difference
+        assert_eq!(countdown_text_with(Some("2026-12-25T00:00"), &at(2026, 12, 24, 12), sydney), "12:00:00");
+        // target after the change, now already after it: plain difference
+        assert_eq!(countdown_text_with(Some("2026-10-20T12:00"), &at(2026, 10, 18, 12), sydney), "2d 00:00:00");
+        // an hour before the spring-forward and its target an hour after, wall 01:00 -> wall 04:00 is two real hours
+        assert_eq!(countdown_left(parse_local_iso("2026-10-04T04:00").unwrap(), parse_local_iso("2026-10-04T01:00").unwrap(), sydney), 2 * 3600);
+    }
+
+    fn first_sunday_for_test(y: i32, m: u32) -> u32 {
+        (1..=7).find(|d| (weather::days_from_civil(y, m, *d) + 4).rem_euclid(7) == 0).unwrap()
     }
 }
