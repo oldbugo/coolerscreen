@@ -10,8 +10,9 @@ import sunmoon from './w-sunmoon.js';
 import todo from './w-todo.js';
 import headlines from './w-headlines.js';
 import webpicture from './w-webpicture.js';
+import gamefps from './w-gamefps.js';
 // Item kinds that live in their own file (each default-exports { type, key, name, icon, group, props(), size(p), title(w), panel(w, host, api, h) }).
-const WIDGETS = [progress, sunmoon, todo, headlines, webpicture];
+const WIDGETS = [progress, sunmoon, todo, headlines, webpicture, gamefps];
 const own = t => WIDGETS.find(m => m.type === t);
 export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume', 'ping', 'agenda', ...WIDGETS.map(m => m.type)];
 export const isMore = t => MORE_TYPES.includes(t);
