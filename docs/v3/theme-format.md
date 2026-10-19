@@ -389,3 +389,14 @@ dropped by the app. Redirects: at most 3, never https to http. Code: `live/headl
   Only real pictures are accepted (checked by their first bytes, not the server's word): PNG, JPEG, GIF (first frame), WebP, BMP; 8 MB and
   6000 px / 36 megapixel limits, shown at most 1680 px wide. Uses the per-item `radius` (clipped only when the item has its own radius).
   A failed refresh keeps the old picture with an "(old picture)" note.
+
+
+### 4.0 G2: Game FPS (added 2026-10-19; contract version assigned by the PM)
+
+- `gamefps`: the frame rate of the game in front (not CoolerScreen's own). Props: `low` bool (true: "1 % low"), `graph` bool (true: frame-time graph
+  growing sideways), `history` 10-120 s (30), `hideIdle` bool (false: draw nothing at all while no game is in front, otherwise a dim "No game in front"),
+  `color` ("#5ac8ff"). Sources, in order: (1) CoolerScreen's own ETW present counter (Windows graphics events, DX9-12; needs the user in
+  "Performance Log Users" once), (2) RivaTuner Statistics Server shared memory if RTSS runs, (3) HWiNFO frame-rate sensors if HWiNFO shares them.
+  Nothing is injected, installed or elevated by the app. Reason lines instead of a number: "Needs a one-time Windows setting", "Blocked while the
+  game runs: restart CoolerScreen before the game", "Frame rate unavailable", "No game in front". Editor command `game_fps_status` returns
+  `{ ok, state, message, command }` (state "ok"|"noGame"|"needsGroup"|"blocked"|"unavailable"|"ready"; `command` is the one-time PowerShell command).
