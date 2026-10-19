@@ -7,6 +7,11 @@ export const EFFECTS = {
   aurora: { name: 'Aurora', hint: 'Rays of light drifting sideways under a starry sky.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.85, colors: ['#2cf5a0', '#3a7bff', '#b24bff'], controls: { density: 'Rays', scale: 'Glow height' } },
   plasma: { name: 'Plasma', hint: 'Warm bands of colour sliding past each other.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.85, colors: ['#1b0f4a', '#c13a8f', '#ff9a3c', '#3a1d7a'], controls: { density: 'Bands', scale: 'Size' } },
   drift: { name: 'Drift', hint: 'Soft glowing specks that drift and fade.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.9, colors: ['#7fd4ff', '#ffffff', '#a58bff'], controls: { density: 'Amount', scale: 'Size' } },
+  warp: { name: 'Warp', hint: 'Stars streaming sideways past you.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.9, colors: ['#9fd0ff', '#ffffff', '#ffb36b'], controls: { density: 'Stars', scale: 'Streak length' }, names: ['Star', 'Star', 'Star'] },
+  waves: { name: 'Waves', hint: 'Layers of sea or hills rolling sideways at sunset.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.95, colors: ['#10163a', '#ff8a5c', '#2b4a8f', '#0b1d3d'], controls: { density: 'Wave height', scale: 'Wavelength' }, names: ['Sky', 'Horizon', 'Far water', 'Near water'] },
+  lava: { name: 'Lava', hint: 'Glowing blobs swaying sideways, merging and parting.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.95, colors: ['#1a0626', '#ff4d6d', '#ffb36b', '#fff1c9'], controls: { density: 'Blobs', scale: 'Size' }, names: ['Background', 'Rim', 'Body', 'Core'] },
+  retro: { name: 'Retro', hint: 'A neon sun over a grid whose lines slide sideways.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.9, colors: ['#14052e', '#ff2e93', '#ffd23f', '#2de2e6'], controls: { density: 'Grid lines', scale: 'Sun size' }, names: ['Sky top', 'Horizon', 'Sun', 'Grid'] },
+  pulse: { name: 'Pulse (sound)', hint: 'Columns of light that glow with the music playing on this PC. Listens only while it is the live background; the stored copy is a demo loop.', speed: 1, density: 0.5, scale: 0.5, brightness: 0.9, colors: ['#ff3d81', '#7a5cff', '#2de2e6'], controls: { density: 'Halo', scale: 'Glow height' }, names: ['Colour', 'Colour', 'Colour'] },
   clouds: { name: 'Clouds', hint: 'Slow clouds or smoke in a four-colour ramp.', speed: 0.5, density: 0.5, scale: 0.5, brightness: 0.9, colors: ['#0b1030', '#3b2f8f', '#d3689b', '#ffd9a8'], controls: { density: 'Cover', scale: 'Size' } },
 };
 
@@ -60,7 +65,8 @@ export function backgroundSection(api) {
   // colours: one swatch per ramp stop
   const colours = (Array.isArray(cur.colors) && cur.colors.length >= 2 ? cur.colors : def.colors).slice(0, 4);
   const sw = el('div', { class: 'inline-ctl', role: 'group', 'aria-label': 'Colours' }, colours.map((c, i) => {
-    const inp = el('input', { type: 'color', 'aria-label': 'Colour ' + (i + 1), id: 'bgCol' + i, oninput: e => { const next = colours.slice(); next[i] = e.target.value; colours[i] = e.target.value; cur.colors = next; api.edited(); } });
+    const nm = (def.names && def.names[i]) || 'Colour ' + (i + 1);
+    const inp = el('input', { type: 'color', 'aria-label': nm, title: nm, id: 'bgCol' + i, oninput: e => { const next = colours.slice(); next[i] = e.target.value; colours[i] = e.target.value; cur.colors = next; api.edited(); } });
     inp.value = c;
     return inp;
   }));

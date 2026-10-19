@@ -896,7 +896,13 @@ impl Renderer {
         }
         let rect = self.visible();
         let phase = self.effect_phase;
+        let sample = self.sample;
         if let Some(e) = self.effect.as_mut() {
+            if e.wants_audio() && phase.is_none() && !sample {
+                // the sound-reactive effect listens (this starts the audio capture; it ends by itself when nobody asks)
+                let levels = super::audio::audio().levels();
+                e.feed_audio(&levels);
+            }
             match phase {
                 Some(phi) => e.draw_phase(phi, self.pm.data_mut(), cw, ch, rect),
                 None => e.draw_at(t as f64, self.pm.data_mut(), cw, ch, rect),

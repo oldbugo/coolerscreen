@@ -147,7 +147,7 @@ impl Effect for Aurora {
 
 /// One row of the aurora: out = min(255, (sum of colour*strength >> 6 over four layers + dither) >> 2) on flat RGBA bytes.
 /// SSE2 by hand (see `util::Upscaler`): 16 bytes per step.
-fn mix_row(out: &mut [u8], c0: &[u8], c1: &[u8], c2: &[u8], c3: &[u8], nz: &[u16], p: [u16; 4]) {
+pub(super) fn mix_row(out: &mut [u8], c0: &[u8], c1: &[u8], c2: &[u8], c3: &[u8], nz: &[u16], p: [u16; 4]) {
     let n = out.len();
     let (c0, c1, c2, c3, nz) = (&c0[..n], &c1[..n], &c2[..n], &c3[..n], &nz[..n]);
     let mut i = 0;
