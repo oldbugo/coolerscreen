@@ -679,7 +679,7 @@ impl Pipeline {
     ///   instant    (and without a theme, or when no session is open) the plain stop: loop clip ending at once
     /// Waits for the threads.
     pub fn stop(&self) {
-        let end = self.shared.theme.lock().unwrap().as_ref().map(|t| if t.not_embedded && t.theme.handover.end == HandoverEnd::LoopStart { HandoverEnd::Instant } else { t.theme.handover.end });
+        let end = self.shared.theme.lock().unwrap().as_ref().map(|t| if t.instant_handover() && t.theme.handover.end == HandoverEnd::LoopStart { HandoverEnd::Instant } else { t.theme.handover.end });
         let mode = match end {
             Some(HandoverEnd::LoopStart) => 1,
             Some(HandoverEnd::ScreenOff) => 2,
@@ -710,7 +710,7 @@ impl Pipeline {
     /// hand-over is "instant", or no open session, pauses at once. Resume starts live again (with its fade-in).
     pub fn pause_with_handover(&self) {
         let sh = &self.shared;
-        let fade = sh.theme.lock().unwrap().as_ref().is_none_or(|t| t.theme.handover.end != HandoverEnd::Instant && !(t.not_embedded && t.theme.handover.end == HandoverEnd::LoopStart));
+        let fade = sh.theme.lock().unwrap().as_ref().is_none_or(|t| t.theme.handover.end != HandoverEnd::Instant && !(t.instant_handover() && t.theme.handover.end == HandoverEnd::LoopStart));
         if fade && sh.connected.load(Relaxed) && !sh.paused.load(Relaxed) && !sh.quit.load(Relaxed) && sh.stop_mode.load(Relaxed) == 0 {
             sh.hand_done.store(false, Relaxed);
             sh.stop_mode.store(1, Relaxed);
@@ -810,6 +810,9 @@ fn effective_theme(cfg: &Config, set: Option<ThemeLive>) -> ThemeLive {
 /// Where the live background comes from: the stored base (portrait, true), else the original clip (false), else nothing
 /// (the animated gradient).
 fn background_source(t: &ThemeLive) -> Option<(PathBuf, bool)> {
+    if t.theme.effect().is_some() {
+        return None; // drawn by the effect, no decoder
+    }
     if let Some(p) = t.base_video.as_ref().filter(|p| p.exists()) {
         return Some((p.clone(), true));
     }

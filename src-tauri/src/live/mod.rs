@@ -8,6 +8,7 @@
 //!   theme     3.0 theme model (theme.json): widgets, hand-over, ThemeLive
 //!   preview   one-frame renders without a device (editor preview, onBase overlay)
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
+pub mod effects;
 pub mod encode;
 pub mod audio;
 pub mod fitcal;

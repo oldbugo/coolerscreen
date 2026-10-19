@@ -34,11 +34,14 @@ pub struct Theme {
     /// Snap distance in px on 2400x1080 (editor): spacing from canvas edges, guide bands and between boxes.
     pub gap: f32,
     pub handover: Handover,
+    /// 4.0: a live-drawn background (`kind: "effect"`) instead of the theme's picture. None = the picture, as in 3.0.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient")]
+    pub background: Option<super::effects::Background>,
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), groups: Vec::new(), live_layer: true, guides_offset: GuidesOffset::default(), corners: None, gap: DEFAULT_GAP, handover: Handover::default() }
+        Theme { v: THEME_VERSION, base_version_id: None, widgets: Vec::new(), groups: Vec::new(), live_layer: true, guides_offset: GuidesOffset::default(), corners: None, gap: DEFAULT_GAP, handover: Handover::default(), background: None }
     }
 }
 
@@ -628,6 +631,9 @@ impl Theme {
         self.corners = self.corners.filter(|c| c.is_finite()).map(|c| c.clamp(0.0, 300.0));
         self.gap = if self.gap.is_finite() { self.gap.clamp(0.0, 200.0) } else { DEFAULT_GAP };
         self.guides_offset.clamp();
+        if let Some(b) = self.background.as_mut() {
+            b.clamp();
+        }
         self.handover.fade_in = if self.handover.fade_in.is_finite() { self.handover.fade_in.clamp(0.0, 3.0) } else { 0.8 };
         let mut gids = std::collections::HashSet::new();
         for (i, g) in self.groups.iter_mut().enumerate() {
@@ -721,6 +727,11 @@ impl Theme {
         self.live_layer && self.widgets.iter().any(|w| self.is_visible(w) && !(base_stored && w.on_base && w.can_be_on_base()))
     }
 
+    /// The live effect that replaces the picture as the background, if the theme has one.
+    pub fn effect(&self) -> Option<super::effects::Params> {
+        self.background.as_ref().and_then(|b| b.params())
+    }
+
     pub fn has_base_items(&self) -> bool {
         self.widgets.iter().any(|w| w.on_base && w.can_be_on_base() && self.is_visible(w))
     }
@@ -754,7 +765,13 @@ impl ThemeLive {
     /// Live has nothing to add to the screen's own loop: no live items, and the stored base is fitted the way the screen fit is
     /// now (otherwise streaming is what applies the fit). The engine then need not stream at all.
     pub fn nothing_to_stream(&self, fit: crate::core::fit::Fit) -> bool {
-        self.theme.live_layer && !self.not_embedded && self.base_video.is_some() && !self.theme.has_live_items(true) && self.base_fit.unwrap_or_default() == fit
+        self.theme.live_layer && !self.not_embedded && self.theme.effect().is_none() && self.base_video.is_some() && !self.theme.has_live_items(true) && self.base_fit.unwrap_or_default() == fit
+    }
+
+    /// Live stops with no fade onto the stored loop: the stored picture is not this theme's (another theme, or an effect that is
+    /// not recorded yet), so a cross-fade to its first frame would be wrong.
+    pub fn instant_handover(&self) -> bool {
+        self.not_embedded || self.theme.effect().is_some()
     }
 
     pub fn has_live_items(&self) -> bool {

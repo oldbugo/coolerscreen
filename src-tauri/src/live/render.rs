@@ -284,6 +284,12 @@ pub struct Renderer {
     layer_key: Option<()>,
     /// Groups of overlapping widgets, each redrawn on its own schedule.
     clusters: Vec<Cluster>,
+    /// 4.0: the live effect that replaces the picture as the background (see `effects`), its frame counter and an optional fixed
+    /// loop phase (previews and recordings), and a flag to blacken the strips outside the visible rectangle first.
+    effect: Option<super::effects::EffectBg>,
+    effect_frame: u64,
+    effect_phase: Option<f64>,
+    effect_clear: bool,
 }
 
 const CLOCK_CAP: f32 = 0.72;
@@ -339,6 +345,10 @@ impl Renderer {
             widget_us: HashMap::new(),
             layer_key: None,
             clusters: Vec::new(),
+            effect: None,
+            effect_frame: 0,
+            effect_phase: None,
+            effect_clear: true,
         };
         r.update_bbox();
         r
@@ -387,11 +397,27 @@ impl Renderer {
     pub fn set_theme(&mut self, t: ThemeLive) {
         self.theme = t;
         self.theme.theme.clamp();
+        self.sync_effect();
         // Pictures stay loaded across theme edits unless the file changed.
         self.images.retain(|p, e| std::fs::metadata(p).and_then(|m| m.modified()).ok() == e.mtime);
         self.update_bbox();
         self.last_key = None;
         self.layer_key = None;
+    }
+
+    /// Start, change or stop the background effect to match the theme (an unchanged effect keeps running).
+    fn sync_effect(&mut self) {
+        let want = self.theme.theme.effect();
+        if want != self.effect.as_ref().map(|e| e.params.clone()) {
+            self.effect = want.map(super::effects::EffectBg::new);
+            self.effect_clear = true;
+        }
+    }
+
+    /// Draw the effect at this loop phase every frame (previews, recordings); None = real time.
+    pub fn set_effect_phase(&mut self, phi: Option<f64>) {
+        self.effect_phase = phi;
+        self.last_key = None;
     }
 
     pub fn theme(&self) -> &ThemeLive {
@@ -456,7 +482,7 @@ impl Renderer {
 
     /// A real background picture is available (a decoded video frame or the preview still).
     pub fn has_background_frame(&self) -> bool {
-        self.still.is_some() || self.video.as_ref().is_some_and(|v| v.frame().is_some())
+        self.still.is_some() || self.effect.is_some() || self.video.as_ref().is_some_and(|v| v.frame().is_some())
     }
 
     pub fn video(&self) -> Option<&VideoBg> {
@@ -498,6 +524,7 @@ impl Renderer {
     pub fn set_fit(&mut self, f: crate::core::fit::Fit) {
         if self.fit != f {
             self.fit = f.clamped();
+            self.effect_clear = true;
             self.update_fit_rects();
             self.last_key = None;
             self.layer_key = None;
@@ -556,7 +583,12 @@ impl Renderer {
         self.tick = (t * 10.0) as u64;
         let now = local_time();
         let vframe = if self.still.is_some() { self.still.clone() } else { self.video.as_ref().and_then(|v| v.frame()) };
-        let vkey = vframe.as_ref().map(|a| Arc::as_ptr(a) as usize).unwrap_or(0);
+        let mut vkey = vframe.as_ref().map(|a| Arc::as_ptr(a) as usize).unwrap_or(0);
+        if self.effect.is_some() {
+            // an effect changes every frame (a fixed phase draws once)
+            self.effect_frame += 1;
+            vkey = if self.effect_phase.is_some() { 1 } else { self.effect_frame as usize };
+        }
         // Now playing: fade the card in and out (stepped per tick), and redraw when track, state, a progress step (3 per
         // second) or the fade changed.
         let wants_music = self.has_widget("music");
@@ -591,7 +623,7 @@ impl Renderer {
         let t0 = Instant::now();
         self.background(t, vframe);
         // The stored base is already fitted the way it was made; anything else (or a base made with another fit) is scaled here.
-        if self.bg_src_fit() != self.fit {
+        if self.effect.is_none() && self.bg_src_fit() != self.fit {
             self.fit_background();
         }
         self.apply_handover();
@@ -811,7 +843,29 @@ impl Renderer {
         &self.layer
     }
 
+    /// The effect fills the visible rectangle directly (no picture to scale afterwards); the strips outside stay black.
+    fn draw_effect(&mut self, t: f32) {
+        let (cw, ch) = (self.cw, self.ch);
+        if self.effect_clear {
+            self.effect_clear = false;
+            for p in self.pm.data_mut().chunks_exact_mut(4) {
+                p.copy_from_slice(&[0, 0, 0, 255]);
+            }
+        }
+        let rect = self.visible();
+        let phase = self.effect_phase;
+        if let Some(e) = self.effect.as_mut() {
+            match phase {
+                Some(phi) => e.draw_phase(phi, self.pm.data_mut(), cw, ch, rect),
+                None => e.draw_at(t as f64, self.pm.data_mut(), cw, ch, rect),
+            }
+        }
+    }
+
     fn background(&mut self, t: f32, frame: Option<Arc<Vec<u8>>>) {
+        if self.effect.is_some() {
+            return self.draw_effect(t);
+        }
         if let Some(f) = frame {
             if f.len() == self.pm.data().len() {
                 self.pm.data_mut().copy_from_slice(&f);
