@@ -2,6 +2,7 @@
 import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, styleCorners } from './js/frame.js';
 import { openDialog } from './js/dialog.js';
 import './js/titlebar.js';
+import { icon, upgradeGlyphs } from './js/icons.js';
 import { backend } from './js/backend.js';
 import { createBandSlider } from './js/bandslider.js';
 import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
@@ -657,7 +658,7 @@ function renderMine() {
       'Or ', el('button', { class: 'btn ghost inline-btn', text: 'browse your sources', onclick: () => goHome('browse') }), '.'));
     const entries = [];
     if (!q) entries.push({ key: 'add-tile', sig: 'x', make: () => el('button', { class: 'g-card g-add', onclick: () => $('fileInput').click() },
-      el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true', text: '+' }),
+      (t => { t.innerHTML = icon('plus', 32); return t; })(el('div', { class: 'g-thumb g-add-thumb', 'aria-hidden': 'true' })),
       el('div', { class: 'g-name', text: 'Add a file' }), el('div', { class: 'small muted', text: 'or drop files anywhere' })) });
     for (const a of S.adding) {
       if (!addingIds.has(a)) addingIds.set(a, ++addingSeq);
@@ -2807,6 +2808,7 @@ const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOrigin
 initApply({ call, backend, plainWait });
 
 // ---------- start ----------
+upgradeGlyphs();
 (async function init() {
   // Opens on the view chosen last time (On screen by default); with nothing on the screen yet, on My themes (or Browse).
   const stored = lsGet(HOME_KEY);

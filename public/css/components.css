@@ -60,3 +60,7 @@ input[type="checkbox"]:not([role="switch"]), input[type="radio"] { accent-color:
 .iconbtn:hover:not(:disabled), .icon-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .iconbtn:disabled, .icon-btn:disabled { opacity: .35; cursor: default; }
 .iconbtn svg, .icon-btn svg, .btn svg { flex: none; }
+
+/* ---------- icons (js/icons.js) ---------- */
+svg.ico { display: block; flex: none; }
+.wbox .wwarn svg, .stage svg.ico { filter: var(--icon-shadow-picture); }

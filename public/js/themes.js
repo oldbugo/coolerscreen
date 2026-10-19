@@ -9,6 +9,7 @@ import { openDialog } from './dialog.js';
 import * as Ly from './layers.js';
 import * as Wd from './widgets.js';
 import { backgroundSection } from './effects.js';
+import { icon, widgetIcon } from './icons.js';
 
 const MIN_BOX = 0.02;
 const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
@@ -61,6 +62,8 @@ export function createThemes(ctx) {
     snap: true, guides: lsGet('cs.guides') !== '0', dragIds: [],
   };
   const currentId = () => S.currentTheme || null;
+  /** An icon from js/icons.js, or the entry's own glyph when the set has none for it. */
+  const iconSpan = (cls, svg, glyph) => { const s = el('span', { class: cls, 'aria-hidden': 'true' }); if (svg) s.innerHTML = svg; else s.textContent = glyph; return s; };
   const widgets = () => E.theme.widgets;
   const byId = id => widgets().find(w => w.id === id);
   const groupById = id => (E.theme.groups || []).find(g => g.id === id);
@@ -153,7 +156,7 @@ export function createThemes(ctx) {
         const k = Wd.ENTRIES[key];
         const b = el('button', { type: 'button', class: 'pal', draggable: true, title: k.pick ? 'Click to choose what it shows, or drag it onto the preview' : `Add ${k.name.toLowerCase()}: click, or drag it onto the preview`,
           'data-type': key, onclick: () => (k.pick ? togglePicker() : addWidget(key)) },
-          el('span', { class: 'pi', 'aria-hidden': 'true', text: k.icon }), el('span', { class: 'pn', text: k.name }));
+          iconSpan('pi', widgetIcon(key) || widgetIcon(k.type), k.icon), el('span', { class: 'pn', text: k.name }));
         b.addEventListener('dragstart', ev => { ev.dataTransfer.setData('text/x-cs-widget', key); ev.dataTransfer.effectAllowed = 'copy'; });
         list.append(el('li', {}, b));
         if (k.pick) list.append(el('li', { class: 'pal-wide' }, u.picker));
@@ -163,9 +166,12 @@ export function createThemes(ctx) {
     buildPicker();
     u.layers = el('div', { class: 'layers', role: 'listbox', 'aria-multiselectable': 'true', 'aria-label': 'Layers, top of the picture first' });
     u.layersNone = el('p', { class: 'muted small', text: 'Nothing yet.' });
-    u.btnGroup = el('button', { class: 'iconbtn', title: 'Group the selected layers (Ctrl+G)', 'aria-label': 'Group the selected layers', text: '▣', onclick: () => doGroup() });
-    u.btnUngroup = el('button', { class: 'iconbtn', title: 'Ungroup (Ctrl+Shift+G)', 'aria-label': 'Ungroup', text: '▢', onclick: () => doUngroup() });
-    u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', text: '✕', onclick: () => doDelete() });
+    u.btnGroup = el('button', { class: 'iconbtn', title: 'Group the selected layers (Ctrl+G)', 'aria-label': 'Group the selected layers', onclick: () => doGroup() });
+    u.btnGroup.innerHTML = icon('group');
+    u.btnUngroup = el('button', { class: 'iconbtn', title: 'Ungroup (Ctrl+Shift+G)', 'aria-label': 'Ungroup', onclick: () => doUngroup() });
+    u.btnUngroup.innerHTML = icon('ungroup');
+    u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', onclick: () => doDelete() });
+    u.btnDelete.innerHTML = icon('trash');
     const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' },
       el('h3', { text: 'Add' }), u.palette,
       el('div', { class: 'layers-head' }, el('h3', { text: 'Layers' }), el('span', { class: 'grow' }), u.btnGroup, u.btnUngroup, u.btnDelete),
@@ -604,7 +610,7 @@ export function createThemes(ctx) {
         const fold = el('span', { class: 'licon' }); fold.innerHTML = SVG_FOLDER;
         row.append(caret, eye, fold, el('span', { class: 'lname', text: name, title: name }), el('span', { class: 'lcount small muted', text: String(r.members.length) }));
       } else {
-        row.append(...[el('span', { class: 'lindent' }), eye, el('span', { class: 'licon', 'aria-hidden': 'true', text: Wd.typeIcon(r.w.type) }), el('span', { class: 'lname', text: name, title: name }),
+        row.append(...[el('span', { class: 'lindent' }), eye, iconSpan('licon', widgetIcon(r.w.type), Wd.typeIcon(r.w.type)), el('span', { class: 'lname', text: name, title: name }),
           hit && E.guides ? el('span', { class: 'lwarn', title: `Overlaps ${hit}`, text: '⚠' }) : null].filter(Boolean));
       }
       eye.onclick = e => {
