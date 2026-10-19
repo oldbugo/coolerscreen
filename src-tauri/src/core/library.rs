@@ -532,6 +532,8 @@ impl Library {
         let vs = self.versions(oid);
         let dup = vs.iter().find(|v| {
             v["status"] != "error"
+                // a finished version that no longer fits the screen (its room shrank) is not a stand-in for a new one
+                && !(v["status"] == "ready" && v["result"]["size"].as_f64().is_some_and(|x| x > ctx.budget))
                 && ov_key(v) == want
                 && eff_key(v) == want_eff
                 && base_key(v["notchKey"].as_str()) == ctx.notch_key

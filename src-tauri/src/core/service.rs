@@ -106,7 +106,7 @@ impl App {
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
             "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(), "weather": s.weather_value(),
-            "screenChanged": self.screen_changed_value(),
+            "screenChanged": self.screen_changed_value(), "budgetRoomLimited": b.room_limited, "budgetRoomAt": b.room_at,
             "budget": num(b.loop_bytes), "total": num(b.total), "budgetMeasured": b.measured, "capacityAt": b.capacity_at,
             "uploadRate": s.upload_rate().map(num).unwrap_or(json!(50000)),
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
@@ -866,6 +866,26 @@ impl App {
         }
         let app = self.arc();
         self.run_task(TaskSpec::new("state", "Screen state", Resources::one(Res::Device)), move |_| Ok(app.device.state()))
+    }
+
+    /// Before a store: read the screen's real room (read-only info, never a restart). Unlike the page's own check this steps live
+    /// aside for a moment when live holds the screen (a store pauses it for minutes anyway), because with live on nothing else ever
+    /// reads the screen. The answer updates the budget everything below converts against and runs the outside-change check.
+    /// Failures are ignored (the last known budget stands). Skipped while another device task is running.
+    pub fn refresh_loop_room(&self) {
+        if self.sched.device_active() {
+            return;
+        }
+        let app = self.arc();
+        let r = self.run_task(TaskSpec::new("check", "Checking the screen", Resources::one(Res::Device)), move |_| app.device.read_info());
+        match r {
+            Ok(info) => {
+                *self.last_info.lock().unwrap() = Some(info.clone());
+                self.note_screen_info(&info);
+                self.events.app_changed();
+            }
+            Err(e) => crate::device::log(&format!("before storing: could not read the screen's room ({}); using the last known budget", e.message)),
+        }
     }
 
     /// One short check (opens the screen briefly); restarts once on "no reply"; measures the capacity.

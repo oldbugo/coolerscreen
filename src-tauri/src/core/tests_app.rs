@@ -1459,3 +1459,66 @@ fn an_identical_clip_is_not_sent_again_but_anything_doubtful_is() {
     app.settings.update(|s| { s.as_object_mut().unwrap().remove("screenBaseline"); }).unwrap();
     assert!(app.already_on_screen(&vid, slot["size"].as_u64().unwrap(), h).is_none(), "no baseline: send");
 }
+
+/// C5: one loop budget. The screen's own free space (read at a check or before a store) lowers it, so a version is never made
+/// bigger than the screen can take now, and the number the pages show is the number the device guard uses.
+#[test]
+fn the_loop_budget_follows_the_screens_real_room() {
+    use crate::device::ops::loop_room;
+    let (_d, app, _rec, _g) = setup();
+    let budget = |a: &App| a.app_state()["budget"].as_f64().unwrap();
+    let plain = budget(&app); // nothing measured yet: the configured total less the splash
+    // the screen has a lot of room: the capacity estimate stays the limit
+    app.device.fake_set_free(23_000);
+    app.device_check().unwrap();
+    assert_eq!(budget(&app), plain, "plenty of room: unchanged");
+    assert_eq!(app.app_state()["budgetRoomLimited"], json!(false));
+    // the screen reports much less free space than expected (it changed behind our back)
+    app.device.fake_set_free(15_000);
+    app.device_check().unwrap();
+    let info = app.device.read_info().unwrap();
+    let want = loop_room(&info, None, 0).unwrap() as f64;
+    assert!(want < plain, "{want} < {plain}");
+    assert_eq!(budget(&app), want, "the budget is exactly what the device guard will allow");
+    assert_eq!(app.app_state()["budgetRoomLimited"], json!(true));
+    // and the outside change is flagged by the same check
+    assert!(!app.app_state()["screenChanged"].is_null());
+    // the page's other numbers follow: a version bigger than the room is marked too big
+    // (the store pre-check says so in words too)
+    let st = app.settings.load();
+    assert_eq!(crate::core::settings::budgets(&st, None).loop_bytes, want);
+    // refreshed before a store: the screen got space back (the user freed it), the budget goes back up
+    app.device.fake_set_free(21_000);
+    app.refresh_loop_room();
+    assert_eq!(budget(&app), plain.min(loop_room(&app.device.read_info().unwrap(), None, 0).unwrap() as f64));
+    // a store without a final answer drops the record, the capacity estimate stands
+    app.rebase_screen(None);
+    assert_eq!(budget(&app), plain);
+}
+
+/// C5: storing converts against what the screen can take NOW; a version made earlier that no longer fits is re-made instead of
+/// failing at the send step.
+#[test]
+fn storing_makes_the_picture_fit_the_screens_real_room() {
+    use crate::device::ops::loop_room;
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Tight.mp4");
+    app.device.fake_set_free(23_000); // plenty first
+    app.device_check().unwrap();
+    let store = |app: &App| {
+        let r = app.theme_apply(&oid).unwrap();
+        let j = wait_job(app, r["jobId"].as_str().unwrap());
+        assert_eq!(j["state"], "done", "{j}");
+        app.theme_view(&oid).unwrap()["baseVersionId"].as_str().unwrap().to_string()
+    };
+    let size_of = |app: &App, vid: &str| app.lib.find_version(vid).unwrap().1["result"]["size"].as_f64().unwrap();
+    let v1 = store(&app);
+    let s1 = size_of(&app, &v1);
+    // the screen now has much less room (something else is on it): the next store, with no check in between, reads the room first
+    app.device.fake_set_free(100);
+    let room = loop_room(&app.device.read_info().unwrap(), app.settings.load().slot("standby").and_then(|s| s["size"].as_u64()), 0).unwrap() as f64;
+    let v2 = store(&app);
+    assert_ne!(v1, v2, "the earlier picture no longer fits, so it was made again");
+    assert!(size_of(&app, &v2) <= room, "{} <= {room}", size_of(&app, &v2));
+    assert!(size_of(&app, &v2) < s1);
+}

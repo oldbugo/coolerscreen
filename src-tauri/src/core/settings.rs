@@ -51,6 +51,11 @@ impl Settings {
         let c = self.0.get("capacity")?;
         Some((c["bytes"].as_f64()?, c["at"].as_str().unwrap_or("").to_string()))
     }
+    /// The loop room the screen itself reported at its last info answer (bytes a new loop file may take, see `ops::loop_room`).
+    pub fn loop_room(&self) -> Option<(f64, String)> {
+        let r = self.0.get("loopRoom")?;
+        Some((r["bytes"].as_f64()?, r["at"].as_str().unwrap_or("").to_string()))
+    }
     pub fn slot(&self, name: &str) -> Option<&Value> {
         self.0["slots"].get(name).filter(|v| !v.is_null())
     }
@@ -350,6 +355,10 @@ pub fn sanitize(s: &Value) -> Settings {
     if !live.as_object().is_none_or(|o| o.is_empty()) {
         out["live"] = live;
     }
+    // C5: the loop room the screen reported at its last info answer; written only when known.
+    if let Some(b) = s.get("loopRoom").and_then(|r| r.get("bytes")).and_then(Value::as_f64).filter(|b| b.is_finite() && *b >= 0.0) {
+        out["loopRoom"] = json!({ "bytes": num(b.round()), "at": str80(s["loopRoom"].get("at"), 40).unwrap_or_default() });
+    }
     // 4.0 (C2): what the screen's free space was after our last store, and an open difference; written only when set.
     if let Some(f) = s.get("screenBaseline").and_then(|b| b.get("free")).and_then(Value::as_f64).filter(|f| f.is_finite() && *f >= 0.0) {
         out["screenBaseline"] = json!({ "free": num(f), "at": str80(s["screenBaseline"].get("at"), 40).unwrap_or_default() });
@@ -496,6 +505,14 @@ impl SettingsStore {
 
 /// Assumed size of a slot we have never written.
 pub const UNKNOWN_OTHER: f64 = 1.8e6;
+/// THE LOOP BUDGET (one number for the Picture page, every conversion, the "too big" marks, the Store pre-check and the device
+/// guard) is the smaller of two estimates; each has its own margin and they cover different things:
+///  * capacity budget: measured flash capacity (free + what our two clips occupy, at most MAX_CAPACITY) minus the splash minus
+///    SAFETY. SAFETY (160 KB) is slack on that *derived* number (the recorded clip sizes may be off a little).
+///  * real room: what the screen itself reported at its last info answer (`ops::loop_room`: free blocks + the loop file that will
+///    be replaced, minus ops::LOOP_MARGIN of 256 KB, the screen's own bookkeeping). It follows anything that changed the flash
+///    behind our back, and is refreshed at every check and before every store.
+/// The true ceiling (measured 2026-10-17: 10,908,539) is never raised by this; it only lowers the budget.
 /// Margin kept free when the capacity was measured.
 pub const SAFETY: f64 = 160_000.0;
 /// Splash size before it has been made once (measured: about 0.54 MB).
@@ -513,6 +530,9 @@ pub struct Budgets {
     /// Space for the user's clip (the intro holds the boot splash).
     pub loop_bytes: f64,
     pub intro: f64,
+    /// The screen's own loop room (the last info answer) is what limits `loop_bytes` right now.
+    pub room_limited: bool,
+    pub room_at: Option<String>,
 }
 
 /// `slots.budgets`; `splash_size` = size of the cached splash file (None: not made yet).
@@ -521,13 +541,11 @@ pub fn budgets(s: &Settings, splash_size: Option<u64>) -> Budgets {
     let measured = cap.is_some();
     let total = cap.as_ref().map(|c| c.0.min(MAX_CAPACITY)).unwrap_or(s.total_budget_mb() * 1e6);
     let intro = splash_size.map(|x| x as f64).unwrap_or(SPLASH_EST);
-    Budgets {
-        total,
-        measured,
-        capacity_at: cap.map(|c| c.1),
-        loop_bytes: (total - intro - if measured { SAFETY } else { 0.0 }).floor(),
-        intro,
-    }
+    let by_capacity = (total - intro - if measured { SAFETY } else { 0.0 }).floor();
+    let room = s.loop_room();
+    let room_limited = room.as_ref().is_some_and(|r| r.0.floor() < by_capacity);
+    let loop_bytes = room.as_ref().map(|r| by_capacity.min(r.0.floor())).unwrap_or(by_capacity);
+    Budgets { total, measured: measured || room.is_some(), capacity_at: cap.map(|c| c.1), loop_bytes, intro, room_limited, room_at: room.map(|r| r.1) }
 }
 
 /// `slots.capacityFrom`: free blocks + the sizes we recorded for both slots (None if unknown).

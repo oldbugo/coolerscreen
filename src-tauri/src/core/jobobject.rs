@@ -73,9 +73,16 @@ mod tests {
             .unwrap();
         let s = String::from_utf8_lossy(&out.stdout);
         let pid: u32 = s.lines().find_map(|l| l.strip_prefix("CHILD_PID ")).expect("helper printed the child pid").trim().parse().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let list = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
-        assert!(!String::from_utf8_lossy(&list.stdout).contains(&pid.to_string()), "child {pid} outlived its parent");
+        // the system ends the child when the job handle closes; on a busy machine that can take a moment, so wait (up to 10 s)
+        let t0 = std::time::Instant::now();
+        let alive = || {
+            let list = std::process::Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
+            String::from_utf8_lossy(&list.stdout).contains(&pid.to_string())
+        };
+        while alive() && t0.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!alive(), "child {pid} outlived its parent");
     }
 
     #[test]
