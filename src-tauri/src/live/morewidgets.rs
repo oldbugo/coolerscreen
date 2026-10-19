@@ -720,6 +720,25 @@ mod tests {
 
 
     #[test]
+    fn b2_props_are_cleaned() {
+        let mut p = json!({ "host": "bad host!", "style": "pie", "history": 1 });
+        clean("ping", &mut p);
+        assert_eq!((p["host"].clone(), p["style"].clone(), p["history"].clone()), (json!("1.1.1.1"), json!("number"), json!(10.0)));
+        let mut p = json!({ "host": " example.com " });
+        clean("ping", &mut p);
+        assert_eq!(p["host"], "example.com");
+        for (src, kept) in [("http://x.example/a.ics", false), ("https://x.example/a.ics", true), ("webcal://x.example/a", true), ("C:/a/b.ics", true), ("C:/a/b.txt", false), ("file:///c:/x.ics", false), ("", true)] {
+            let mut p = json!({ "source": src, "count": 99 });
+            clean("agenda", &mut p);
+            assert_eq!(p["source"] == src, kept && !src.is_empty() || src.is_empty(), "{src}");
+            assert_eq!(p["count"], 6);
+        }
+        let mut p = json!({ "style": "square", "color": "nope" });
+        clean("volume", &mut p);
+        assert_eq!((p["style"].clone(), p["color"].clone()), (json!("bar"), json!("#5ac8ff")));
+    }
+
+    #[test]
     fn timer_modes() {
         let mut p = TimerProps { mode: "stopwatch".into(), running: true, started_at: 1000.0, elapsed_ms: 5000.0, ..TimerProps::default() };
         let v = timer_view(&p, 4000.0);

@@ -303,10 +303,7 @@ pub fn status() -> Status {
         _ => Status {
             source: "none",
             ok: false,
-            message: format!(
-                "CPU temperature needs a tool you already run: start HWiNFO with Shared Memory Support on, or LibreHardwareMonitor with its Remote Web Server on (port 8085). CoolerScreen never installs or starts them. ({}; {}.)",
-                s.hw_err, s.lhm_err
-            ),
+            message: "No CPU temperature source. Start HWiNFO with Shared Memory Support on, or LibreHardwareMonitor with its Remote Web Server on (port 8085). CoolerScreen never installs or starts them.".to_string(),
         },
     }
 }

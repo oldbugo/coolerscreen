@@ -93,3 +93,60 @@ Code map: `src-tauri/src/live/morewidgets.rs` (props, cleaning, timer maths, tim
 - World-clock zone rules use the registry's current-year rules; a zone whose government changed DST after this Windows build is as
   right as Windows is.
 - Heavy pile-ups of overlapping widgets are drawn in order as for every other widget; nothing special for overlap.
+
+## B2 (built 2026-10-19): CPU temperature and six more
+
+Branch `claude/recursing-matsumoto-31e4c5`, on top of main 28bd568 (4.2.0). Contract: `docs/v3/theme-format.md`, section "4.0 widgets,
+stream B2". New: external sensors, disk read/write, network totals, **Live text, Volume, Ping, Agenda**.
+
+- **CPU temperature (and CPU power, CPU fan, board temperature)**: read from a tool the user already runs: HWiNFO shared memory first
+  (`Global\HWiNFO_SENS_SM2`, read-only mapping, about every 2 s), else LibreHardwareMonitor's web server (`127.0.0.1:8085/data.json`, every
+  15 s when it is not answering). We never install, start or elevate either. Nothing is looked at unless a widget shows one of these four
+  metrics (the sampler is demand driven). They work in `sensor` (all styles) and `meters`. With neither tool running the value stays the
+  grey dash (as in 3.0) and the editor shows a line under the metric: "No CPU temperature source. Start HWiNFO with Shared Memory Support
+  on, or LibreHardwareMonitor with its Remote Web Server on (port 8085). CoolerScreen never installs or starts them." (new command
+  `ext_sensor_status`, capability `allow-ext-sensor-status`). With a source it says "Reading from HWiNFO." and if the tool has no CPU
+  sensor, that. No Settings switch: it is passive and only active while such a widget exists (a Settings off-switch can come with the UI
+  revision if wanted).
+- **Disk read / write speed**: new metrics `disk.read`, `disk.write` (PDH "Disk Read/Write Bytes/sec", all disks), in `sensor` and `meters`.
+- **Network totals**: `network` has a Totals switch (off): data moved since start-up (adapter counters).
+- **Live text**: the Text widget with `{words}` (time, date, weekday, cpu, cputemp, cpupower, cpufan, gpu, gputemp, vram, ram, down, up,
+  diskread, diskwrite, uptime, volume); an "Insert a word" dropdown in the panel.
+- **Volume**: master volume of the default playback device, bar or ring, "Muted" greyed when muted (read only).
+- **Ping**: one ICMP echo a second to a host the user types (default 1.1.1.1), number or graph; says so in the panel. At most 3 hosts at
+  once. It only runs while a Ping item is shown.
+- **Agenda**: next 2-6 events from an https/webcal calendar link or an `.ics` file path; day names ("Today", "Tomorrow", "Thu"), times,
+  all-day, "Now" for the current one. Own ICS parser with recurrence (daily / weekly + BYDAY / monthly / yearly, INTERVAL, COUNT, UNTIL,
+  EXDATE), cancelled events dropped, UTC converted with the PC's zone.
+
+Choices (user asleep; change freely): ping default host 1.1.1.1 because adding the widget is the user's own action and the panel says what
+it sends; the calendar link is typed/pasted, not picked from a dialog (a picker would need a new app command; a non-programmer can paste a
+Google "secret address in iCal format" or a path); Ping/Agenda/Volume/Live text are in the palette next to their neighbours (Sensors, Time,
+Media, Decoration). Not built: a writable volume control, calendar accounts/sign-in, per-app volume, CalDAV.
+
+### Verification (B2)
+- `cargo test --release --lib -- --test-threads=4`: 256 passed, 0 failed, 16 ignored.
+- New tests: HWiNFO layout parsed from a synthetic shared memory (and truncated / foreign data refused), LibreHardwareMonitor tree incl.
+  decimal commas, nonsense temperatures dropped, status message; live words expansion; ping host rules + a real echo to 127.0.0.1;
+  agenda: recurrence, EXDATE, cancelled, monthly skipping 31sts, durations, UTC, a real file read through the loader, source
+  classification; volume read from the real device (it reported "level 0.22, muted"); real PDH disk read (30 MB/s) and adapter
+  counters; every sensor metric as a meter row; all new widgets drawn in every option and in tiny boxes.
+- Pictures (`docs/v4/notes/B-pictures/`): `b2-preview.png` (sample data, every new widget), `b2-live-frame.png` (a real live frame from a
+  quiet debug instance: agenda from a real .ics file, a real 30 ms ping, real volume "Muted", live text with real load, meters with
+  a dash for CPU temp because no tool runs here), `b2-editor-meters-note.png` (the editor showing the reason line).
+- Editor driven over the debug port: palette entries for the new items, Live text panel, Agenda source field (set to a file path and the
+  events appeared live), Meters row switched to CPU temperature shows the reason line.
+
+### Not verified
+- **CPU temperature against a real HWiNFO or LibreHardwareMonitor**: neither runs on this PC. The parsers are tested on synthetic data built
+  from the documented layouts (HWiNFO `HWiNFO_SENS_SM2` header and reading element, LHM `data.json` tree); the real thing may differ in
+  details (e.g. label names). Please check once with the user's HWiNFO (Settings > Shared Memory Support) before telling them it works.
+- Agenda with a real calendar link (https) and with time zones other than the PC's (TZID events are treated as local times).
+- Not on the real screen. Not run: the Ping graph and the Agenda panel edit flow beyond the source field.
+- Stale-looking facts: the ping/agenda threads end 5 s / 30 s after the last widget draw; not measured for CPU separately (they sleep 1 s / 5 s).
+
+### Incident (told the PM)
+At about 12:30 I started my RELEASE test build with `COOLERSCREEN_MULTI=1` while the user's installed CoolerScreen was running. MULTI only
+works in debug builds, so the single-instance plugin forwarded my launch to the user's app (it may have raised its window once). My copy
+exited at once, nothing was sent to the screen. Afterwards I used a debug build (`cargo build`, pid checked by path) for every test instance.
+`tools/README.md` says "(debug builds)" for MULTI; a release test build needs the installed app to be closed first.
