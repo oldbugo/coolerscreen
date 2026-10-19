@@ -66,11 +66,13 @@ pub struct Config {
     pub notch: String,
     /// Background clip decoding: "auto" tries hardware (D3D11) and falls back to software, "software" never uses the GPU.
     pub video_decode: String,
+    /// Draw the measured frames per second on the screen picture (a debugging aid; off by default).
+    pub fps_overlay: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { fps: 60, background: None, show_seconds: false, max_kb: 200, music: MusicConfig::default(), notch: "app".into(), video_decode: "auto".into() }
+        Config { fps: 60, background: None, show_seconds: false, max_kb: 200, music: MusicConfig::default(), notch: "app".into(), video_decode: "auto".into(), fps_overlay: false }
     }
 }
 

@@ -261,6 +261,9 @@ pub struct Renderer {
     /// Calibration overlay (screen guides) drawn over every frame while Some; `cal_gen` changes with it.
     calib: Option<Guides>,
     cal_gen: u64,
+    /// FPS counter drawn in a corner while Some((measured fps x10, target fps)); `fps_gen` changes with the text.
+    fps_overlay: Option<(u32, u32)>,
+    fps_gen: u64,
     /// Animation ticks since the last frame (for eased values), eased sensor fractions, visualizer history, slideshow state.
     steps_now: i32,
     sens_smooth: HashMap<String, f32>,
@@ -325,6 +328,8 @@ impl Renderer {
             sample: false,
             calib: None,
             cal_gen: 0,
+            fps_overlay: None,
+            fps_gen: 0,
             steps_now: 0,
             sens_smooth: HashMap::new(),
             viz_hist: HashMap::new(),
@@ -349,6 +354,14 @@ impl Renderer {
         self.sample = on;
         if on {
             self.music_alpha = 1.0;
+        }
+    }
+
+    /// Show the live frame rate on the picture: Some((measured fps x10, target fps)) or None (off).
+    pub fn set_fps_overlay(&mut self, v: Option<(u32, u32)>) {
+        if self.fps_overlay != v {
+            self.fps_overlay = v;
+            self.fps_gen += 1;
         }
     }
 
@@ -579,7 +592,7 @@ impl Renderer {
         };
         // Fade state (live-layer opacity and hand-over blend in 1/64 steps) is part of the key so fades redraw every frame.
         let hand_key = self.hand.map(|(k, p)| ((p * 64.0) as u64 + 1) | ((k == HandTarget::Black) as u64) << 8).unwrap_or(0);
-        let fade_key = (((self.live_alpha * 64.0) as u64) << 12 | hand_key) ^ (self.cal_gen << 40);
+        let fade_key = (((self.live_alpha * 64.0) as u64) << 12 | hand_key) ^ (self.cal_gen << 40) ^ (self.fps_gen << 52);
         // With a video the widgets follow the video frames (no separate 10 Hz redraw on top of them).
         let key = (if vkey != 0 { 0 } else { self.tick }, vkey, now.second, music_key, fade_key);
         if self.last_key == Some(key) {
@@ -625,6 +638,7 @@ impl Renderer {
             self.mask.apply_fit(self.pm.data_mut(), &fit);
         }
         self.draw_calibration();
+        self.draw_fps_overlay();
         let t3 = Instant::now();
         self.timing_us[0] += (t1 - t0).as_micros() as u64;
         self.timing_us[1] += (t2 - t1).as_micros() as u64;
@@ -1175,6 +1189,28 @@ mod tests {
         r.set_calibration(None);
         let back = r.render().0.to_vec();
         assert_eq!(back.len(), plain.len());
+        assert!(back.chunks_exact(4).zip(plain.chunks_exact(4)).all(|(a, b)| a[..3].iter().zip(&b[..3]).all(|(x, y)| x.abs_diff(*y) < 8)), "normal frame again");
+    }
+
+    #[test]
+    fn the_fps_overlay_draws_a_chip_only_while_set_and_leaves_the_rest_alone() {
+        let mut r = Renderer::new(Arc::new(Mutex::new(Sensors::default())), None);
+        r.set_theme(ThemeLive::new(Theme::default(), PathBuf::new()));
+        let plain = r.render().0.to_vec();
+        r.set_fps_overlay(Some((598, 60)));
+        let (f, changed) = r.render();
+        assert!(changed, "turning it on redraws at once");
+        let diff: Vec<usize> = (0..plain.len() / 4).filter(|i| f[i * 4..i * 4 + 3] != plain[i * 4..i * 4 + 3]).collect();
+        assert!(diff.len() > 500, "a visible chip: {}", diff.len());
+        // only the top-left chip changes (inside 600x120 px from 10% / 6% of the canvas), the rest of the picture is untouched
+        assert!(diff.iter().all(|i| (i % LW) >= LW / 10 && (i % LW) < LW / 10 + 600 && (i / LW) < LH * 6 / 100 + 120), "chip stays small");
+        // a new number redraws; the same number does not
+        r.set_fps_overlay(Some((600, 60)));
+        assert!(r.render().1);
+        r.set_fps_overlay(Some((600, 60)));
+        assert!(!r.render().1, "unchanged: no redraw");
+        r.set_fps_overlay(None);
+        let back = r.render().0.to_vec();
         assert!(back.chunks_exact(4).zip(plain.chunks_exact(4)).all(|(a, b)| a[..3].iter().zip(&b[..3]).all(|(x, y)| x.abs_diff(*y) < 8)), "normal frame again");
     }
 

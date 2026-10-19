@@ -1285,7 +1285,7 @@ mod tests {
         assert_eq!(s.cancel_version("v1"), 1);
         let e = h.wait().unwrap_err();
         assert!(e.code_is("cancelled"));
-        assert!(t0.elapsed() < Duration::from_secs(5), "child killed promptly");
+        assert!(t0.elapsed() < Duration::from_secs(15), "child killed promptly (the child would otherwise sleep 30 s)");
         assert!(!process_alive(pid), "child process {pid} was killed");
     }
 

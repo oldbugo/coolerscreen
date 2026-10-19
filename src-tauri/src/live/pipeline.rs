@@ -85,6 +85,8 @@ pub struct Stats {
     pub send_errors: AtomicU64,
     pub reconnects: AtomicU64,
     pub quality: AtomicU32,
+    /// Frames actually sent per second over the last second or so, times 10 (0 until the first measurement).
+    pub sent_fps_x10: AtomicU32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -245,6 +247,8 @@ impl Pipeline {
                 let profile = std::env::var_os("CS_PROFILE").is_some();
                 let mut last_prof = Instant::now();
                 let mut bg_wait: Option<Instant> = None;
+                // Measured send rate: one division per second, read from the send counter.
+                let mut fps_mark = (Instant::now(), 0u64);
                 let mut hand_start: Option<Instant> = None;
                 while !sh.quit.load(Relaxed) {
                     // Runtime changes (reload_config / set_background / set_fps / set_theme).
@@ -259,6 +263,14 @@ impl Pipeline {
                         r.set_theme(eff);
                         force_apply = true;
                     }
+                    if fps_mark.0.elapsed() >= Duration::from_secs(1) {
+                        let sent = sh.stats.sent.load(Relaxed);
+                        let v = (sent.saturating_sub(fps_mark.1) as f64 * 10.0 / fps_mark.0.elapsed().as_secs_f64()).round() as u32;
+                        // while no session is open nothing is sent: show 0 rather than the last value
+                        sh.stats.sent_fps_x10.store(if sh.session_active.load(Relaxed) { v } else { 0 }, Relaxed);
+                        fps_mark = (Instant::now(), sent);
+                    }
+                    r.set_fps_overlay(if cfg.fps_overlay && sh.session_active.load(Relaxed) { Some((sh.stats.sent_fps_x10.load(Relaxed), sh.fps.load(Relaxed))) } else { None });
                     let cg = sh.calibration_gen.load(Relaxed);
                     if cg != seen_cal_gen {
                         seen_cal_gen = cg;
@@ -993,12 +1005,16 @@ mod handover_tests {
         let p = Pipeline::start(&quiet(), Sink::Null);
         let mut t = ThemeLive::new(Theme::standard_preset(), PathBuf::new());
         t.fallback_video = Some(bad);
+        let t0 = Instant::now();
         p.set_theme(t);
-        std::thread::sleep(Duration::from_millis(1800));
-        assert_eq!(p.shared.stats.snap().sent, 0, "held while waiting for a real frame");
-        std::thread::sleep(Duration::from_millis(2500));
+        // nothing is sent while the wait lasts; measured from the theme change (not a fixed sleep: a starved machine overshoots those)
+        while p.shared.stats.snap().sent == 0 && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let first = t0.elapsed();
         let s = p.shared.stats.snap();
-        assert!(s.sent > 0 && s.gradient_frames > 0, "gradient allowed after the timeout");
+        assert!(first >= Duration::from_millis(1500), "held while waiting for a real frame: first send after {first:?}");
+        assert!(s.sent > 0 && s.gradient_frames > 0, "gradient allowed after the timeout (waited {first:?})");
         p.stop_fast(Ending::LoopClip);
     }
 }

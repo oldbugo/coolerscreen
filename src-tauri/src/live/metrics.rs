@@ -593,8 +593,16 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1200));
         let (ram, total) = h.read("ram.used", 4);
         assert!(ram.unwrap_or(0.0) > 0.1 && total.unwrap_or(0.0) >= ram.unwrap());
-        let (cpu, _) = h.read("cpu.load", 4);
-        assert!(cpu.is_some_and(|c| (0.0..=100.0).contains(&c)));
+        // the load needs a time delta between two polls; on a starved machine the first one can be empty, so wait for a value
+        let mut cpu = None;
+        for _ in 0..30 {
+            cpu = h.read("cpu.load", 4).0;
+            if cpu.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(cpu.is_some_and(|c| (0.0..=100.0).contains(&c)), "{cpu:?}");
         assert!(h.history("ram.used", 10.0).len() >= 2);
         // a metric that cannot be read stays None, never 0
         let (t, _) = h.read("cpu.temp", 1);

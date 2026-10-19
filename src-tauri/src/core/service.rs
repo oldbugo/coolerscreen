@@ -1136,6 +1136,7 @@ impl App {
         let l = self.settings.load().live();
         let mut c = crate::live::Config::load();
         c.show_seconds = l.show_seconds;
+        c.fps_overlay = l.fps_overlay;
         c.background = None;
         c.music.enabled = true;
         c

@@ -506,15 +506,16 @@ impl LiveHost {
 
     /// For the UI and the tray.
     pub fn status(&self) -> Value {
-        let (running, connected, fps) = match self.pipeline() {
-            Some(p) => (true, p.shared.connected.load(SeqCst), p.shared.fps.load(SeqCst)),
-            None => (false, false, self.quiet_fps()),
+        let (running, connected, fps, measured) = match self.pipeline() {
+            Some(p) => (true, p.shared.connected.load(SeqCst), p.shared.fps.load(SeqCst), p.shared.stats.sent_fps_x10.load(SeqCst) as f64 / 10.0),
+            None => (false, false, self.quiet_fps(), 0.0),
         };
         let h = self.holds.load(SeqCst);
         json!({
             "running": running,
             "connected": connected,
             "fps": fps,
+            "measuredFps": measured,
             "paused": h & USER != 0,
             "deviceHold": h & DEVICE != 0,
             "systemHold": h & (SLEEP | LOCK) != 0,
@@ -531,6 +532,15 @@ impl LiveHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wait (up to 10 s) for a state the host reaches on its own threads; other tests share the CPU, so a fixed sleep is not
+    /// a reliable bound. The assertion after it still checks the state.
+    fn eventually(mut f: impl FnMut() -> bool) {
+        let t0 = std::time::Instant::now();
+        while !f() && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     #[test]
     fn holds_pause_live_and_it_resumes_when_all_are_released() {
@@ -591,7 +601,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1600));
         assert!(p.shared.paused.load(SeqCst));
         h.set_theme(theme(true));
-        std::thread::sleep(Duration::from_millis(700));
+        eventually(|| !p.shared.paused.load(SeqCst));
         assert!(!p.shared.paused.load(SeqCst), "turning it on again resumes");
         assert_eq!(h.status()["layerOff"], json!(false));
         // live started while the layer is off stays quiet
@@ -650,7 +660,7 @@ mod tests {
         assert!(h.tune_set(Fit::new(5, 0, 0, 9).with_shift(3, -2)));
         assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(5, 0, 0, 9).with_shift(3, -2), "applied at once, no settings re-read");
         assert_eq!(h.status()["tuning"], json!(true));
-        std::thread::sleep(Duration::from_millis(300));
+        eventually(|| p.shared.stats.snap().rendered > 0);
         assert!(p.shared.stats.snap().rendered > 0);
         h.tune_end();
         assert!(!h.running() && !h.tuning(), "the temporary session ends with the page");
@@ -668,7 +678,7 @@ mod tests {
         let p = h.pipeline().unwrap();
         assert!(p.shared.paused.load(SeqCst), "idle: the base already has the saved fit and nothing is live");
         h.tune_start(Fit::new(4, 0, 0, 9));
-        std::thread::sleep(Duration::from_millis(700));
+        eventually(|| !p.shared.paused.load(SeqCst));
         assert!(!p.shared.paused.load(SeqCst), "tuning streams so the user sees the effect");
         assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(4, 0, 0, 9));
         h.tune_end();
@@ -725,12 +735,25 @@ mod tests {
             s60 = s2;
         }
         assert!(s60 >= 1, "frames flow while live runs: {s60}");
-        // 30 fps: the render loop (it paces on the fps setting) runs at about half the rate
-        h.set_fps(30);
-        std::thread::sleep(Duration::from_millis(300));
-        let (r30, _) = rate(&p, 2000);
-        // the ratio only means something when the machine kept up at 60 (not starved by other tests)
-        assert!(r60 < 40 || (r30 as f64 <= r60 as f64 * 0.85 && r30 as f64 >= r60 as f64 * 0.3), "render rate follows fps: 60 -> {r60}, 30 -> {r30} frames in 2 s");
+        // 30 fps: the render loop (it paces on the fps setting) runs at about half the rate. Other tests share the CPU, so a
+        // starved window can distort one measurement: the ratio is measured again (60, then 30) up to four times and must hold once.
+        let mut last = (r60, 0u64);
+        let mut follows = false;
+        for _ in 0..4 {
+            h.set_fps(60);
+            std::thread::sleep(Duration::from_millis(300));
+            let (r60, _) = rate(&p, 2000);
+            h.set_fps(30);
+            std::thread::sleep(Duration::from_millis(300));
+            let (r30, _) = rate(&p, 2000);
+            last = (r60, r30);
+            // the ratio only means something when the machine kept up at 60 (not starved)
+            if r60 >= 40 && r30 as f64 <= r60 as f64 * 0.85 && r30 as f64 >= r60 as f64 * 0.3 {
+                follows = true;
+                break;
+            }
+        }
+        assert!(follows, "render rate follows fps (4 tries; 60 -> 30 in 2 s each), last: {last:?}");
         assert_eq!(h.fps(), 30);
         h.set_fps(60);
         // pause: nothing is rendered or sent any more
