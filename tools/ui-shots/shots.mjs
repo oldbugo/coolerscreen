@@ -47,6 +47,25 @@ await js('(() => { const b = document.getElementById("bgEffect"); b && b.scrollI
 await shot('09-editor-effect-background');
 await js('document.getElementById("bg-picture")?.click(); 1', 1200);
 
+// every 4.x item kind's Properties (added by click, shot, deleted again)
+for (const key of ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'agenda', 'ping', 'volume', 'livetext']) {
+  if (only && !'3'.startsWith(only[0])) break;
+  if (!(await js(`!!document.querySelector('.pal[data-type="${key}"]')`))) { console.log('no palette entry', key); continue; }
+  await js(`document.querySelector('.pal[data-type="${key}"]').click(); 1`, 1200);
+  await shot(`30-panel-${key}`);
+  await js(`document.querySelector('.ed-layers .iconbtn[aria-label="Delete the selected layers"]').click(); 1`, 800);
+}
+// a few effects in the Background section
+for (const fx of ['warp', 'pulse']) {
+  if (only && !'3'.startsWith(only[0])) break;
+  await js('(() => { const s = document.querySelector(".stage"); s.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); return 1; })()', 500);
+  await js('document.getElementById("bg-effect")?.click(); 1', 1000);
+  await js(`(() => { const b = document.getElementById("bgEffect"); if (!b) return 0; b.value = "${fx}"; b.dispatchEvent(new Event("change")); return 1; })()`, 1200);
+  await js('(() => { const b = document.getElementById("bgEffect"); b && b.scrollIntoView(); return 1; })()', 400);
+  await shot(`31-effect-${fx}`);
+}
+await js('document.getElementById("bg-picture")?.click(); 1', 1000);
+
 // Settings drawer, section by section
 await click('#gear'); await wait(400);
 await shot('10-settings-top');

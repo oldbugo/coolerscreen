@@ -143,6 +143,12 @@ host.append(el('div', { class: 'props-grid' },              // two short numbers
 - `select2(...)`: choices; option labels in sentence case.
 - `colour(key, label, default, resettable)` inside `widgets.js`: colours (resettable = "Automatic").
 - Picture choices for styles: copy the `.styles` / `.sty` pattern (`widgets.js:211-217`), with a small SVG per choice.
+- Two or three short choices without pictures (a style, a mode): a segmented control, `segField(label, id, value,
+  [[value, text], …], onchange)` in `morewidgets.js` (buttons with `aria-pressed` inside `.seg`). Four or more: `select2`.
+- A list the user edits (rows, cities): `.meter-rows` holding one `.meter-row` per entry; the first control (usually
+  a select) sits top left, the row's icon buttons (↑ ↓ ✕, in an `.inline-ctl`) top right, further fields full width
+  below; an "Add a …" secondary button under the list.
+- A new item kind needs an icon: ask stream D to add it to `js/icons.js` (key = the palette key or item type).
 - Changes call `api.set()` / `api.edited()` immediately. **No Save or Apply buttons**, no "OK" step.
 
 ### 4.3 Rules for the controls
