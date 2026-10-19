@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.9.2 - 2026-10-19 (stream C: Embedded size alignment)
+
+- **One size limit everywhere:** the Picture page, "Preparing the picture" and the final check before sending now use
+  the same number: the smaller of the measured capacity and the free space the screen itself reports. A picture that
+  "fits" can no longer be refused at the last step. Each Store as Embedded reads the screen's free space first.
+- A ready picture that no longer fits is made again at "best that fits" instead of being reused.
+- The Picture page says when the screen's own free space is the limit.
+- The "screen changed outside the app" check now gets a reading at every store (before, with Live on, it never did).
+- `--quit` answers through system events only (no result file).
+
 ## 4.9.1 - 2026-10-19 (stream C: clean quit for updates)
 
 - **`CoolerScreen.exe --quit`:** quits the running app exactly like tray Quit (live hands back to Embedded). It refuses
