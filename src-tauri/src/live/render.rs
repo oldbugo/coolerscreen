@@ -23,6 +23,7 @@ mod progress;
 mod sunmoon;
 mod todo;
 mod headlines;
+mod lyrics;
 mod webpicture;
 mod sensors;
 mod widgets;
@@ -215,6 +216,8 @@ struct Cluster {
     fit: Option<(usize, usize, usize, usize)>,
     widgets: Vec<usize>,
     hz: u32,
+    /// Holds a lyrics item: it redraws at 30 Hz while a line fills or fades (the lyrics cache says so).
+    lyrics: bool,
     key: Option<(u64, u16, u64)>,
     last_tick: u64,
 }
@@ -253,6 +256,8 @@ pub struct Renderer {
     cover: Option<(u64, usize, Vec<u8>)>,
     /// Caches and clock of the four extra music looks (render/music.rs).
     mus: music::MusicCache,
+    /// Loader, clock and cached pictures of the lyrics items (render/lyrics.rs).
+    lyr: lyrics::LyricsCache,
     theme: ThemeLive,
     images: HashMap<PathBuf, ImgEntry>,
     /// Union of the widget boxes (the only part of the layer that is cleared and composited).
@@ -335,6 +340,7 @@ impl Renderer {
             music_alpha: 0.0,
             music_tick: 0,
             mus: Default::default(),
+            lyr: Default::default(),
             cover: None,
             theme: ThemeLive::new(Theme::standard_preset(), PathBuf::new()),
             images: HashMap::new(),
@@ -552,12 +558,15 @@ impl Renderer {
         }
         self.rects = merge_rects(rects);
         // one cluster per merged rectangle: the widgets inside it and the fastest refresh any of them needs
-        let mut clusters: Vec<Cluster> = self.rects.iter().map(|&rect| Cluster { rect, fit: None, widgets: Vec::new(), hz: 10, key: None, last_tick: 0 }).collect();
+        let mut clusters: Vec<Cluster> = self.rects.iter().map(|&rect| Cluster { rect, fit: None, widgets: Vec::new(), hz: 10, lyrics: false, key: None, last_tick: 0 }).collect();
         for (i, w) in self.theme.theme.widgets.iter().enumerate() {
             let r = widget_rect(w, self.cw, self.ch);
             let (cx, cy) = ((r.x + r.w / 2.0) as usize, (r.y + r.h / 2.0) as usize);
             if let Some(c) = clusters.iter_mut().find(|c| cx >= c.rect.0 && cx < c.rect.2 && cy >= c.rect.1 && cy < c.rect.3) {
                 c.widgets.push(i);
+                if w.kind == "lyrics" && self.theme.theme.is_visible(w) {
+                    c.lyrics = true;
+                }
                 if self.theme.theme.is_visible(w) {
                     c.hz = c.hz.max(match w.kind.as_str() {
                         "visualizer" => 20,
@@ -637,6 +646,7 @@ impl Renderer {
         let t = self.t0.elapsed().as_secs_f32();
         self.tick = (t * 10.0) as u64;
         self.mus.set_clock(t, self.sample);
+        self.lyr.set_clock(t, self.sample);
         let now = local_time();
         let vframe = if self.still.is_some() { self.still.clone() } else { self.video.as_ref().and_then(|v| v.frame()) };
         let mut vkey = vframe.as_ref().map(|a| Arc::as_ptr(a) as usize).unwrap_or(0);
@@ -647,7 +657,7 @@ impl Renderer {
         }
         // Now playing: fade the card in and out (stepped per tick), and redraw when track, state, a progress step (3 per
         // second) or the fade changed.
-        let wants_music = self.has_widget("music");
+        let wants_music = self.has_widget("music") || self.has_widget("lyrics");
         let keep_idle = self.theme.theme.handover.music_idle == MusicIdle::Keep;
         let np = if wants_music { self.music.as_ref().and_then(|m| m.lock().unwrap().clone()) } else { None };
         let want = np.as_ref().is_some_and(|n| n.visible()) || keep_idle;
@@ -662,7 +672,7 @@ impl Renderer {
         let np = if np.as_ref().is_some_and(|n| n.visible()) { np } else { None };
         let show_music = self.music_alpha > 0.01;
         let music_key = match &np {
-            Some(n) => (n.track_id << 24) ^ ((n.playing as u64) << 20) ^ (((n.position() * 3.0) as u64) << 4) ^ (self.music_alpha * 5.0) as u64 ^ self.mus.motion_key(n.playing),
+            Some(n) => (n.track_id << 24) ^ ((n.playing as u64) << 20) ^ (((n.position() * 3.0) as u64) << 4) ^ (self.music_alpha * 5.0) as u64 ^ self.mus.motion_key(n.playing) ^ self.lyr.motion_key(),
             None => (self.music_alpha * 5.0) as u64,
         };
         // Fade state (live-layer opacity and hand-over blend in 1/64 steps) is part of the key so fades redraw every frame.
@@ -695,7 +705,8 @@ impl Renderer {
             }
             let np_ref = if show_music { np.as_ref() } else { None };
             for ci in 0..self.clusters.len() {
-                let lk = ((t * self.clusters[ci].hz as f32) as u64, now.second, music_key);
+                let hz = if self.clusters[ci].lyrics && self.lyr.animating { self.clusters[ci].hz.max(30) } else { self.clusters[ci].hz };
+                let lk = ((t * hz as f32) as u64, now.second, music_key);
                 if self.clusters[ci].key != Some(lk) {
                     self.draw_cluster(ci, &now, &s, np_ref);
                     self.clusters[ci].key = Some(lk);
@@ -848,6 +859,7 @@ impl Renderer {
         match w.kind.as_str() {
             "clock" => self.draw_clock(r, &w.clock(), now),
             "music" => self.draw_music(r, &w.music(), np),
+            "lyrics" => self.draw_lyrics(r, w, np),
             "stats" => self.draw_stats(r, &w.stats(), s),
             "text" => self.draw_text(r, &w.text()),
             "image" => self.draw_image(r, w),

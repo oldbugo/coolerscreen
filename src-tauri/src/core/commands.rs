@@ -399,7 +399,7 @@ pub const COMMANDS: &[&str] = &[
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
-    "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place", "ext_sensor_status",
+    "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place", "ext_sensor_status", "lyrics_status", "lyrics_offset_set",
     "screen_preview", "screen_preview_end", "twin_watch",
 ];
 
@@ -414,6 +414,34 @@ pub async fn ext_sensor_status(core: State<'_, Core>) -> Result<Value, CoreError
     })
     .await
 }
+
+// ---------- 4.x lyrics item: what it is showing and the per-song timing offset ----------
+
+/// `{}` -> `{ track: "Title · Artist" | null, key, state: "loading" | "found" | "notFound" | "noSynced" | "instrumental" | "off" | "none",
+/// source: "lrclib" | "file" | null, offset }`. Published by the live engine each time it draws the lyrics item; "none" when nothing
+/// plays or Live is off.
+#[tauri::command]
+pub async fn lyrics_status(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, move |_a| {
+        let s = crate::live::lyrics::status();
+        Ok(json!({ "track": s.track, "key": s.key, "state": s.state, "source": s.source, "offset": s.offset }))
+    })
+    .await
+}
+
+/// `{ key, seconds }` -> `{ offset }`: remember this song's lyrics offset (clamped to +-10 s). The engine picks it up at once.
+#[tauri::command]
+pub async fn lyrics_offset_set(core: State<'_, Core>, key: String, seconds: f64) -> Result<Value, CoreError> {
+    run(&core, move |_a| {
+        if key.is_empty() || key.len() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Ok(json!({ "offset": 0.0 }));
+        }
+        let v = crate::live::lyrics::set_offset(&crate::live::lyrics::default_dir(), &key, seconds);
+        Ok(json!({ "offset": v }))
+    })
+    .await
+}
+
 
 // ---------- weather place ----------
 

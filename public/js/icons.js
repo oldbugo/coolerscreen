@@ -15,6 +15,7 @@ const P = {
   stats: '<path d="M4 6h16M4 12h16M4 18h10"/>',
   meters: '<path d="M4 6h9M4 12h13M4 18h6"/><path d="M17 6h3M19 12h1M14 18h6" opacity=".5"/>',
   cores: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
+  lyrics: '<path d="M4 7h9M4 12h6M4 17h9"/><path d="M17 17V6.5l3-.7"/><circle cx="15" cy="17" r="2"/>',
   music: '<path d="M9 17.5V5.5l10-2v12"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
   visualizer: '<path d="M5 19v-6M9 19V8M13 19v-9M17 19V5M21 19v-4"/>',
   slideshow: '<rect x="3" y="6" width="14" height="12" rx="1.5"/><path d="M20 8v8"/><path d="m3 15 4-4 4 4 2-2 4 4"/>',

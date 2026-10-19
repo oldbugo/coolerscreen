@@ -58,3 +58,43 @@ round-trip keeps old props byte-identical). Quiet DEBUG instance (port 9781, fak
 session looked right. Pictures: `E-m3-looks.png` (all five, sample render), `E-m3-panel-disc.png` (panel at 1280x860).
 Not verified: a spinning Disc in a live session (nothing was playing); CPU in a release build of the app (debug build measured the same for Card and
 Disc, so the look itself adds no visible load); the real screen.
+
+## M4: lyrics widget (option A, the karaoke line; user's pick 2026-10-19)
+
+New palette item **Lyrics** (Media). Contract: `docs/v3/theme-format.md` "lyrics" section. Design and sources: `E-lyrics-research.md`.
+
+- Code: `live/lyrics.rs` (data: LRC parser, title cleaning for YouTube-style titles, LRCLIB lookup with strict matching, back-off, disk cache,
+  `.lrc` folder, per-track offsets, smooth clock re-anchored on seeks and play/pause), `live/render/lyrics.rs` (drawing, cached line pictures),
+  `public/js/w-lyrics.js` (Properties). Hooks: `render.rs` (module, cache field, cluster flag, 30 Hz while a line fills or fades, draw arm),
+  `pipeline.rs` (the now-playing watcher also runs for a lyrics item), `morewidgets.rs` (type list and props cleaning), commands
+  `lyrics_status` / `lyrics_offset_set` (`core/commands.rs`, `main.rs`, `build.rs`, `capabilities/main.json`), `icons.js` (one icon line),
+  `morewidgets.js` (entry). No new CSS.
+- Off by default: "Find lyrics online" must be switched on per item; with it off nothing is sent anywhere (a `.lrc` folder still works).
+  When on: one lookup per song change, only while the item is drawn, sending title, artist and length to lrclib.net; requests are paced
+  (300 ms apart), `Retry-After` is honoured, failures back off 30 s to 10 min. Lyrics are cached under the app data folder (`lyrics/`).
+- No AGPL code: everything is our own (ideas only from the research notes).
+- Cost (release, per redraw of a 1680x756 frame with the item filling): card 3.3 ms whole frame (1.4 ms the item), gradient 3.9 ms (1.9 ms).
+  At 30 redraws/s while a line fills that is about 4 % of one core for the item, well under 1 % of the PC on a multi-core CPU.
+
+**For the PM:**
+- LRCLIB's API terms ask clients to identify themselves with app name, version and a homepage link or e-mail. We send
+  `CoolerScreen/<version> (private; lyrics widget)`; there is no public page to link. Decide whether to add a contact (not the user's
+  e-mail without asking them).
+- Helpers made 6 read-only lookups to lrclib.net in development (well-known songs, plus one for the song that was playing during the quiet
+  check); 3 of them were not planned (an ignored live test ran with `--include-ignored`).
+- On a very bright, busy background the dim previous/next lines and the gap dots are faint over the Card scrim (seen on the test pattern).
+  Fine on dark pictures; a "stronger card" option could follow if the user finds it hard to read.
+
+**Verification (M4):** release lib suite 382 passed, 0 failed, 23 ignored (lyrics tests include: draws only inside its box, centred, the fill
+grows left to right with identical ink rows, a cross-fade never puts ink on new rows, gap dots only change opacity, every no-lyrics state,
+CJK and very long lines stay inside, preview never creates a loader; LRC parsing, matching, cache, offsets, clock). Debug bin build with the
+new commands. Quiet DEBUG instance (port 9781, fake device, scratch home and gallery): palette entry with icon; panel controls as designed,
+"Find lyrics online" off by default; the three backgrounds; theme.json props; live frames with the PC's real (read-only) media session:
+"Lyrics lookup is off" with it off; after switching it on, one lookup found the song (`state: found, source: lrclib`) and the frame showed
+the intro dots with the first line. A bug found there (the panel kept polling `lyrics_status` after it closed) is fixed: the poll stops when
+the panel is gone and skips while hidden.
+Not verified: a sung line filling on the live screen in real time (the check saw the intro), the editor preview with no media session
+(should show the made-up demo lyric), CPU in a release build of the app, the real screen.
+
+Changelog line (for the PM): "New Lyrics widget: synced lyrics of what is playing, the current line filling in time with the previous and
+next line dim around it. Off until you switch on “Find lyrics online” (lrclib.net) or choose a folder of .lrc files."

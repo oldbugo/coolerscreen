@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::nowplaying::NowPlaying;
+use super::theme::Widget;
 
 const KEEP: Duration = Duration::from_secs(30);
 const MAX_BYTES: usize = 1024 * 1024;
@@ -152,6 +153,11 @@ pub fn natural_len(text: &str) -> f64 {
 /// the next line's start.
 pub const GAP_AFTER_NATURAL_S: f64 = 8.0;
 
+/// A line with no words to sing: empty, or only a note sign and white space. It counts as an instrumental gap.
+pub fn is_gap_text(t: &str) -> bool {
+    t.chars().all(|c| c.is_whitespace() || matches!(c, '\u{266a}' | '\u{266b}' | '\u{266c}' | '\u{2669}'))
+}
+
 /// Current line for `pos_s` (seconds, offset already applied).
 pub fn locate(lines: &[Line], pos_s: f64) -> Position {
     let n = lines.partition_point(|l| l.start_s <= pos_s);
@@ -161,7 +167,7 @@ pub fn locate(lines: &[Line], pos_s: f64) -> Position {
     let i = n - 1;
     let l = &lines[i];
     let next_in = lines.get(i + 1).map(|x| x.start_s - pos_s);
-    if l.text.is_empty() {
+    if is_gap_text(&l.text) {
         return Position { index: Some(i), progress: 0.0, gap: true, next_in };
     }
     let slot = (l.end_s - l.start_s).max(0.001);
@@ -395,8 +401,28 @@ pub trait Http: Send + Sync {
 
 pub struct ReqwestHttp;
 
+/// LRCLIB asks for paced, sequential requests: at least this long between the end of one call and the start of the next.
+const PACE: Duration = Duration::from_millis(300);
+static LAST_CALL: Mutex<Option<Instant>> = Mutex::new(None);
+
 impl Http for ReqwestHttp {
     fn get(&self, url: &str) -> Result<HttpReply, String> {
+        // the lock is held while waiting, so concurrent callers queue up behind each other
+        let mut g = LAST_CALL.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = *g {
+            let el = t.elapsed();
+            if el < PACE {
+                std::thread::sleep(PACE - el);
+            }
+        }
+        let r = Self::get_once(url);
+        *g = Some(Instant::now());
+        r
+    }
+}
+
+impl ReqwestHttp {
+    fn get_once(url: &str) -> Result<HttpReply, String> {
         use std::io::Read;
         let policy = reqwest::redirect::Policy::custom(|a| {
             let prev_https = a.previous().last().is_some_and(|u| u.scheme() == "https");
@@ -754,7 +780,104 @@ pub fn set_offset(dir: &Path, key: &str, secs: f64) -> f64 {
     if let Ok(b) = serde_json::to_vec(&m) {
         let _ = write_atomic(&offsets_path(dir), &b);
     }
+    OFFSET_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     v
+}
+
+/// Bumped by every [`set_offset`]; the renderer re-reads a track's offset when this changes (no restart needed).
+static OFFSET_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub fn offset_generation() -> u64 {
+    OFFSET_GEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// ================================================================= status (for the editor panel)
+
+/// What the lyrics widget is doing right now, published by the renderer each time it draws and read by the
+/// `lyrics_status` command. Stale (older than [`STATUS_FRESH`], e.g. Live is off) reads as state "none".
+#[derive(Clone, Debug, PartialEq)]
+pub struct Status {
+    /// "Title · Artist" of the playing song.
+    pub track: Option<String>,
+    pub key: String,
+    /// "loading" | "found" | "notFound" | "noSynced" | "instrumental" | "off" | "none"
+    pub state: &'static str,
+    /// "lrclib" | "file"
+    pub source: Option<&'static str>,
+    pub offset: f64,
+}
+
+impl Status {
+    pub fn none() -> Status {
+        Status { track: None, key: String::new(), state: "none", source: None, offset: 0.0 }
+    }
+}
+
+const STATUS_FRESH: Duration = Duration::from_secs(5);
+static STATUS: Mutex<Option<(Instant, Status)>> = Mutex::new(None);
+
+pub fn publish_status(s: Status) {
+    *STATUS.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), s));
+}
+
+pub fn status() -> Status {
+    match &*STATUS.lock().unwrap_or_else(|e| e.into_inner()) {
+        Some((t, s)) if t.elapsed() < STATUS_FRESH => s.clone(),
+        _ => Status::none(),
+    }
+}
+
+pub fn state_name(s: &State) -> &'static str {
+    match s {
+        State::Loading => "loading",
+        State::Found(_) => "found",
+        State::NotFound => "notFound",
+        State::NoSynced => "noSynced",
+        State::Instrumental => "instrumental",
+        State::Off => "off",
+    }
+}
+
+// ================================================================= widget props
+
+/// Props of the `lyrics` item (theme.json; additive; unknown keys ignored, missing = default).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LyricsProps {
+    /// false: never contacts the network (opt-in).
+    pub online: bool,
+    /// A folder of `.lrc` files, tried first; None = none.
+    pub folder: Option<String>,
+    /// Previous and next line, small and dim.
+    pub neighbours: bool,
+    /// "card" | "gradient" | "none"
+    pub background: String,
+    /// "#rrggbb"; None = a colour from the cover.
+    pub accent: Option<String>,
+}
+
+impl Default for LyricsProps {
+    fn default() -> Self {
+        LyricsProps { online: false, folder: None, neighbours: true, background: "card".into(), accent: None }
+    }
+}
+
+impl Widget {
+    pub fn lyrics(&self) -> LyricsProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+}
+
+/// Bound every prop of the item (called by `morewidgets::clean`). Idempotent.
+pub fn clean(o: &mut serde_json::Map<String, Value>) {
+    use super::morewidgets::{boolean, colour, short, word};
+    boolean(o, "online", false);
+    short(o, "folder", 260, true);
+    let f = o.get("folder").and_then(Value::as_str).map(|s| s.trim().to_string()).filter(|s| !s.is_empty() && !s.chars().any(|c| c.is_control()));
+    o.insert("folder".into(), f.map(Value::String).unwrap_or(Value::Null));
+    boolean(o, "neighbours", true);
+    word(o, "background", &["card", "gradient", "none"], "card");
+    colour(o, "accent", "#5ac8ff", true);
 }
 
 // ================================================================= resolve (one track, no threads)
@@ -831,6 +954,13 @@ impl LyricsLoader {
     }
     pub fn dir(&self) -> &Path {
         &self.s.dir
+    }
+
+    /// Tests and sample pictures: put a result in place without any lookup.
+    #[cfg(test)]
+    pub fn inject(&self, key: &str, st: State) {
+        let mut g = self.s.inner.lock().unwrap();
+        g.states.insert(key.to_string(), st);
     }
 
     /// Opt-in switch and optional sidecar folder. Turning things on re-checks tracks that were "off" / "not found".
@@ -1407,5 +1537,29 @@ mod tests {
         }
             break;
         }
+    }
+
+    #[test]
+    fn note_only_lines_are_gaps() {
+        assert!(is_gap_text("") && is_gap_text("  ") && is_gap_text("\u{266a}") && is_gap_text(" \u{266b} \u{266a} "));
+        assert!(!is_gap_text("la \u{266a}"));
+        let l = parse_lrc("[00:00.00]Words\n[00:10.00]\u{266a}\n[00:20.00]More words", 0.0);
+        let p = locate(&l, 12.0);
+        assert_eq!((p.index, p.gap, p.progress), (Some(1), true, 0.0));
+        assert!(!locate(&l, 22.0).gap);
+    }
+
+    #[test]
+    fn changing_an_offset_bumps_the_generation_and_status_goes_stale_to_none() {
+        let dir = std::env::temp_dir().join(format!("cs-lyr-gen-{}", std::process::id()));
+        let g0 = offset_generation();
+        assert_eq!(set_offset(&dir, "abc", 0.5), 0.5);
+        assert!(offset_generation() > g0);
+        assert_eq!(get_offset(&dir, "abc"), 0.5);
+        let _ = std::fs::remove_dir_all(&dir);
+        publish_status(Status { track: Some("A \u{b7} B".into()), key: "k".into(), state: "found", source: Some("lrclib"), offset: 0.25 });
+        let s = status();
+        assert!(s.state == "found" && s.offset == 0.25 || s.state == "none"); // another test may publish in parallel
+        assert_eq!(Status::none().state, "none");
     }
 }

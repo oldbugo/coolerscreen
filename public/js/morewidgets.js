@@ -9,9 +9,10 @@ import progress from './w-progress.js';
 import sunmoon from './w-sunmoon.js';
 import todo from './w-todo.js';
 import headlines from './w-headlines.js';
+import lyrics from './w-lyrics.js';
 import webpicture from './w-webpicture.js';
 // Item kinds that live in their own file (each default-exports { type, key, name, icon, group, props(), size(p), title(w), panel(w, host, api, h) }).
-const WIDGETS = [progress, sunmoon, todo, headlines, webpicture];
+const WIDGETS = [progress, sunmoon, todo, headlines, webpicture, lyrics];
 const own = t => WIDGETS.find(m => m.type === t);
 export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume', 'ping', 'agenda', ...WIDGETS.map(m => m.type)];
 export const isMore = t => MORE_TYPES.includes(t);
@@ -163,7 +164,7 @@ export function paintProps(w, host, api, ctx) {
     api.edited(); api.relabel(); api.repaint();
   };
 
-  if (own(w.type)) return own(w.type).panel(w, host, api, { colour, restructure, clamp, rateField });
+  if (own(w.type)) return own(w.type).panel(w, host, api, { colour, restructure, clamp, rateField, segField });
   switch (w.type) {
     case 'meters': return metersPanel();
     case 'cores':
