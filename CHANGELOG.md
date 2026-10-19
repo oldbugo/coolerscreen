@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.14.0 - 2026-10-19 (stream B: three new widgets)
+
+- **Progress:** day, week, month and year progress (pick any), with a big percent and a bar that grows sideways; the
+  week starts on the day Windows uses.
+- **Sun and moon:** sunrise, sunset, day length and the moon phase, worked out on the PC from your Weather city (no
+  internet); says so when no city is set.
+- **To-do list:** lines typed in Properties, ticked in the editor; done items greyed or hidden; 1 to 8 rows.
+- Theme contract v1.14.
+
 ## 4.13.0 - 2026-10-19 (stream C: restart)
 
 - **Restart CoolerScreen** button at the top of Settings: quits like tray Quit (the screen goes back to Embedded) and

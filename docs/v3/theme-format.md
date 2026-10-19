@@ -359,7 +359,7 @@ More types and metrics, all additive (code: `live/extsensors.rs`, `live/ping.rs`
   layout" item is moved (or shrunk) so it is not under the band. Only a left/right/top/bottom band counts (not the circle notch).
   Nothing in theme.json changes for this.
 
-### 4.0 W1 widgets (added 2026-10-19; contract version assigned by the PM)
+## v1.14 (4.14.0, stream B W1): progress bars, sun and moon, to-do list
 
 Three more types, all local (no network); code in `live/progress.rs`, `live/sunmoon.rs`, `live/todo.rs`, `render/*.rs`, `public/js/w-*.js`.
 
