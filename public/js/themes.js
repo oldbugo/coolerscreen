@@ -177,13 +177,13 @@ export function createThemes(ctx) {
     u.banner = el('div');
     // the one "Live layer" switch, snapping and guides
     u.layerSw = el('input', { type: 'checkbox', id: 'liveLayerSw', role: 'switch', onchange: e => { E.theme.liveLayer = e.target.checked; E.baseSig = null; paintBar(); paintStage(); edited(); } });
-    u.snapSw = el('input', { type: 'checkbox', id: 'snapSw', onchange: e => { E.snap = e.target.checked; } });
-    u.guidesSw = el('input', { type: 'checkbox', id: 'guidesSw', onchange: e => { E.guides = e.target.checked; lsSet('cs.guides', E.guides ? '1' : '0'); paintStage(); } });
+    u.snapSw = el('input', { type: 'checkbox', id: 'snapSw', role: 'switch', onchange: e => { E.snap = e.target.checked; } });
+    u.guidesSw = el('input', { type: 'checkbox', id: 'guidesSw', role: 'switch', onchange: e => { E.guides = e.target.checked; lsSet('cs.guides', E.guides ? '1' : '0'); paintStage(); } });
     u.bar = el('div', { class: 'ed-bar' },
-      el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the items are drawn on the screen. Off: only the picture.' }, u.layerSw, el('span', { class: 'switch-track', 'aria-hidden': 'true' }, el('span', { class: 'switch-knob' })), el('span', { text: 'Live layer' })),
+      el('label', { class: 'sw-inline', for: 'liveLayerSw', title: 'On: the items are drawn on the screen. Off: only the picture.' }, u.layerSw, el('span', { text: 'Live layer' })),
       u.layerHint = el('span', { class: 'muted small', hidden: true, text: 'No live items yet. Add one from the left.' }),
-      el('label', { class: 'check', title: 'Items snap to each other, the middle and the guides. Alt = free.' }, u.snapSw, 'Snap'),
-      el('label', { class: 'check', title: 'Where the screen curves or is hard to see (Settings > Screen guides)' }, u.guidesSw, 'Guides'));
+      el('label', { class: 'sw-inline', title: 'Items snap to each other, the middle and the guides. Alt = free.' }, u.snapSw, 'Snap'),
+      el('label', { class: 'sw-inline', title: 'Where the screen curves or is hard to see (Settings > Screen guides)' }, u.guidesSw, 'Guides'));
     u.stage = el('div', { class: 'stage', role: 'application', 'aria-label': 'Preview of the screen. Drag items to move them; use the handles to resize.' });
     u.imgBase = el('img', { class: 'layer', alt: '', draggable: false });
     u.imgLive = el('img', { class: 'layer', alt: '', draggable: false });
