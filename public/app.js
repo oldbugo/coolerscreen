@@ -1992,7 +1992,7 @@ function updateTuneState() {
     fill.style.width = Math.min(100, frac * 100) + '%';
     over.hidden = frac <= 1;
     over.style.width = Math.min(50, (frac - 1) * 100) / 0.75 * 0.75 + '%';
-    refs.meterText.textContent = `${mb(r.bytes)} of ${mb(budget)}` + (S.app.budgetMeasured ? ' (measured on your screen)' : ' (estimated; check the screen to measure)');
+    refs.meterText.textContent = `${mb(r.bytes)} of ${mb(budget)}` + (S.app.budgetRoomLimited ? ' (all the free space your screen reports)' : S.app.budgetMeasured ? ' (measured on your screen)' : ' (estimated; check the screen to measure)');
     refs.meter.setAttribute('aria-label', `Uses about ${mb(r.bytes)} of ${mb(budget)}`);
     if (!r.fits) { refs.meter.classList.add('danger'); stateText = `Too big by ${mb(r.bytes - budget)}`; stateCls = 'danger'; }
     else if (frac > 0.97) { refs.meter.classList.add('warn'); stateText = 'Close to the limit'; stateCls = 'warn'; }

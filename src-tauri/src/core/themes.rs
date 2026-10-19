@@ -611,6 +611,8 @@ impl App {
         let o = self.lib.read_original(oid).ok_or_else(gone)?;
         let t = self.load_theme(oid);
         ctx.progress(0.0, "Step 1 of 2: Preparing the picture");
+        // the picture is made for what the screen can take NOW (its own free space), not only for what it took last time
+        self.refresh_loop_room();
         // 1. the base: the version with the clip's settings (and the baked items), reused when it already exists
         let overlay = self.make_overlay(oid, &t)?;
         let want_key = overlay.as_ref().and_then(|ov| ov["key"].as_str().map(String::from));

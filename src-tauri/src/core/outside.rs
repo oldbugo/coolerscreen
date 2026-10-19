@@ -44,9 +44,26 @@ pub fn differs(baseline_free: f64, now_free: f64) -> bool {
 }
 
 impl App {
+    /// What the screen says a new loop file may take (free + the loop file it replaces, minus the margin), kept as the loop
+    /// budget's second limit. No free-block count in the answer: the record is dropped (the capacity estimate stands).
+    pub fn note_loop_room(&self, info: &Value) {
+        let s = self.settings.load();
+        let known = s.slot("standby").filter(|x| !js::truthy(x.get("incomplete"))).and_then(|x| x["size"].as_u64());
+        let room = free_blocks(info).and_then(|_| crate::device::ops::loop_room(info, known, self.lib.splash_size().unwrap_or(0)));
+        let _ = self.settings.update(|v| match room {
+            Some(r) => v["loopRoom"] = json!({ "bytes": js::num(r as f64), "at": js::iso_now() }),
+            None => {
+                if let Some(o) = v.as_object_mut() {
+                    o.remove("loopRoom");
+                }
+            }
+        });
+    }
+
     /// A check of the screen: remember the answer as the baseline the first time, flag a difference afterwards.
     pub fn note_screen_info(&self, info: &Value) {
         let Some((free, bs)) = free_blocks(info) else { return };
+        self.note_loop_room(info);
         let s = self.settings.load();
         let base = s.0.get("screenBaseline").and_then(|b| b["free"].as_f64());
         match base {
@@ -95,6 +112,16 @@ impl App {
     /// Without an answer (the final check failed) the baseline is dropped, so the next check starts it again.
     pub fn rebase_screen(&self, info: Option<&Value>) {
         let free = info.and_then(free_blocks).map(|f| f.0);
+        match info {
+            Some(i) => self.note_loop_room(i),
+            None => {
+                let _ = self.settings.update(|v| {
+                    if let Some(o) = v.as_object_mut() {
+                        o.remove("loopRoom");
+                    }
+                });
+            }
+        }
         let _ = self.settings.update(|v| {
             if let Some(o) = v.as_object_mut() {
                 o.remove("screenChanged");

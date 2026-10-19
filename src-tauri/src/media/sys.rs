@@ -174,9 +174,12 @@ mod tests {
             .unwrap();
         let s = String::from_utf8_lossy(&out.stdout);
         let pid: u32 = s.split("PID=").nth(1).and_then(|r| r.split_whitespace().next()).and_then(|v| v.parse().ok()).expect("child pid");
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let list = Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap();
-        let l = String::from_utf8_lossy(&list.stdout);
-        assert!(!l.contains(&pid.to_string()), "ping {pid} still running: {l}");
+        // wait (up to 10 s) for the system to end the child when the job handle closed
+        let t0 = std::time::Instant::now();
+        let running = || String::from_utf8_lossy(&Command::new("tasklist").args(["/FI", &format!("PID eq {pid}"), "/NH"]).output().unwrap().stdout).contains(&pid.to_string());
+        while running() && t0.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!running(), "ping {pid} still running");
     }
 }

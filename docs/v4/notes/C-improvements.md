@@ -145,3 +145,59 @@ exited at once (joined), the first stayed up; a third under another HOME stayed 
 app (pid 7356) was not touched. `--quit` tests re-run: 3 / 2 / 0 / 3 as before.
 Side effect: debug/scratch instances now also have another Tauri identifier, which is only where WebView2 would put its data when
 WEBVIEW2_USER_DATA_FOLDER is not set (the test scripts set it).
+
+## C5: "Store as Embedded" refused although "Preparing the picture" fitted (user bug, 4.9.1)
+
+**Cause (found with the user's real files, see finding 4 for how I could read them):** two budgets disagreed.
+Conversion, the Picture page and the Store pre-check used the *capacity budget* (settings.capacity, a record kept from the last
+measurement, here 11,550,000 = the MAX_CAPACITY cap, minus splash 537,054 and SAFETY 160,000 = 10,852,946). The device guard
+(`ops::loop_room`) used what the screen *reports now*: free blocks x 512 + the loop file it replaces (real record: standby 10,252,878
+bytes, stored 2026-10-18 10:21 UTC) - 256,000 = 10.46 MB. The capacity record was optimistic by about 0.4 MB (it is clamped at
+MAX_CAPACITY, while the screen's real numbers gave less), so a picture "that fits" could not be stored. Note the true numbers: the
+free space is about 905 blocks, i.e. about what it was after the last store; there was no outside change (see finding 3).
+
+**Fix:**
+1. One loop budget: `settings::budgets()` = min(capacity budget, the screen's own loop room). The room is recorded
+   (`loopRoom {bytes, at}` in settings.json) from every info answer: every check, the final check of a store, the skip-identical
+   read, and a new refresh before each store. Everything that uses the budget (conversion `budget_bytes`, the "too big" mark, the
+   Picture page meter, the send pre-check, the device guard) therefore agrees; the guard in `ops` still computes the same number from
+   its own fresh info, so it can only agree or be stricter by the margin of a stale record.
+2. `refresh_loop_room()` runs at the start of every Store as Embedded (`run_apply`): a read-only info (0x06) as a small hidden device
+   task; with live on it steps live aside for a moment (a store pauses it for minutes anyway), because with live on nothing else ever
+   reads the screen. Failures are ignored (last known budget stands; one line in device.log).
+3. A finished version that no longer fits is not reused: `create_version`'s duplicate check ignores a ready version bigger than the
+   current budget, so Store re-makes the picture "best that fits" instead of reusing the 10.83 MB one (test shows it: the old
+   picture is replaced by a smaller one and the store succeeds). The page shows the old one as "too big" already.
+4. The Picture page meter says "(all the free space your screen reports)" when the screen's room is the limit.
+Margins, documented at `settings::SAFETY`: SAFETY (160 KB) = slack on the derived capacity number; `ops::LOOP_MARGIN` (256 KB) = the
+screen's own bookkeeping kept free inside the real room. The true ceiling (measured 10,908,539) is not raised: the new rule only
+ever lowers the budget.
+Tests: `the_loop_budget_follows_the_screens_real_room` (budget == what the guard allows; recovers when space returns; failed final
+check drops the record) and `storing_makes_the_picture_fit_the_screens_real_room` (the second store, with no check in between,
+re-makes a smaller picture and succeeds). Suite: 274 pass.
+
+**Finding 3 (why the C2 check did not flag it):** it could not have, for three reasons, and the premise was also off:
+(a) the user's real settings.json has no `screenBaseline` at all: the last store (2026-10-18 10:21Z) predates C2, and the baseline is
+only taken from an info answer; (b) with Live on at start the page's check is answered from the live session ("the last answer
+stands", no info), so no check ever read the real free space, and the store path did not run one either; (c) C2 compares with the
+baseline from our last store, so it needs (a). Fixed by the pre-store refresh above (it calls the same `note_screen_info`, so a
+baseline is taken and any change > 64 blocks is flagged by the existing banner). (d) The premise: the ~690-block drop came from a
+stale read of the slot record (standby 10,610,433 / "Evangelion v2"): the real record is 10,252,878 and the real room equals
+about 905 free blocks, so the screen did NOT lose space after the last store; nothing needed flagging.
+
+**Finding 4 (device.log "silent" since 14:38): not a logging bug; a stale view.** The real `%APPDATA%\CoolerScreen\device.log` has the
+line "CoolerScreen 4.9.1 build 5205207 started, pid 23272" at 2026-10-19 03:38:46Z and keeps logging (it was written up to 05:01Z when
+I looked, 56,842 bytes). What the PM and I saw was a frozen copy (224,150 bytes, last write 14:36:17 local, no NULs) because the
+Claude desktop app is an MSIX-packaged app: processes it starts (our shells, scripts, test instances, `--quit`) see a private,
+copy-on-write view of `%APPDATA%` (`C:\Users\pc\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\CoolerScreen\...`);
+once a packaged process has touched a file, later changes by the real app are invisible to it. The same stale view explains the wrong
+slot record in the report. Read the real files from outside the package, e.g.
+`Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='cmd /c copy /y C:\Users\pc\AppData\Roaming\CoolerScreen\device.log <somewhere>'}`
+(WMI starts the process outside the package), then read the copy. Consequences worth acting on: nothing in the real app was wrong;
+PM/worker diagnostics that read the app folder from a packaged shell can be stale; and my first `--quit` used a result *file* in the app
+folder, which a packaged `--quit` would never see, so I changed `--quit` to answer through named kernel events only (no file); its four
+exit codes were re-verified (3, 2, 0, 3) after the change. Installs/test instances that WRITE to %APPDATA% from a packaged shell also
+write only into the private copy.
+
+Also in this commit: two flaky child-process tests (`jobobject::children_die_with_the_app`, `media::sys::adopted_children_die_with_the_app`)
+now wait up to 10 s for the system to end the child instead of a fixed 300/500 ms (they failed once in a full parallel run).
