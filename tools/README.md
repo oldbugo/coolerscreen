@@ -63,10 +63,25 @@ from the user's full-screen application. Also set `COOLERSCREEN_HOME`, `COOLERSC
 the window is built minimised without activation (taskbar button, easy to quit). A second launch from the Start menu still
 brings the window up as usual, except a second `--background` launch, which does nothing.
 
-## Quit the running app cleanly: `--quit`
+## Quit, restart or update the running app: `--quit`, `--restart`, `--update`
 
-`CoolerScreen.exe --quit` asks the running CoolerScreen (the one using the same app folder) to quit exactly like the tray's Quit:
-live stops with the normal hand-back to Embedded, bounded waits, the exit watchdog. It never shows a window and never starts an
-app. Exit codes: **0** the running app quit; **1** asked, but still running after 20 s; **2** refused because a job is running
-(upload, conversion, store, recording), nothing was done; **3** no running instance. A plain `taskkill /PID` (no /F) only closes
-the window; the app stays in the tray, so scripts use `--quit` instead.
+These ask the running CoolerScreen (the one using the same app folder and the same kind of build) to do what the tray's Quit does:
+live stops with the normal hand-back to Embedded, bounded waits, the exit watchdog. None of them shows a window, and none starts an
+app when none is running. A plain `taskkill /PID` (without /F) only closes the window; the app stays in the tray, so scripts use these.
+
+| Command | What the running app does |
+|---|---|
+| `CoolerScreen.exe --quit` | quits |
+| `CoolerScreen.exe --restart` | quits, then starts itself again quietly (`--background`) |
+| `CoolerScreen.exe --update <CoolerScreen_x.y.z_x64-setup.exe>` | quits, runs that installer silently (`/S`), then starts the new build quietly |
+
+Exit codes: **0** accepted and the running app has exited (for `--restart` / `--update` its fresh copy / the installer follows by
+itself); **1** accepted, but still running after 20 s; **2** refused because a job is running (upload, conversion, store, recording),
+nothing was done; **3** no running instance (nothing is started); **4** (`--update`) the file is not a CoolerScreen installer
+(name must be `CoolerScreen_<x>.<y>.<z>_x64-setup.exe`, an existing local file), nothing was done.
+
+How it works: the app owns named events and the requester answers through named memory (no files), and the restart/update is done by
+a small detached helper the real app spawns (`CoolerScreen.exe --relaunch-after <pid> ...`, a copy of the exe in the temp folder
+for an update). Because the real app spawns it, it and the app it starts run outside a Claude shell's private MSIX copy of
+`%APPDATA%`. Settings has a "Restart CoolerScreen" button at the top for the same thing by hand (troubleshooting).
+`tools/install-when-idle.ps1` uses `--update` when the running build has it, else `--quit` + `/S` without a restart.

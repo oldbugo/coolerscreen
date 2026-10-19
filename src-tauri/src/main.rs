@@ -7,6 +7,7 @@ mod live_app;
 mod instance_id;
 mod live_measure;
 mod quit_cmd;
+mod relaunch;
 mod window;
 
 use cs_core::core::commands::{self as cc, Core, EventRelay, TauriEvents};
@@ -22,7 +23,23 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // `--quit`: ask the running app (same app folder) to quit like the tray's Quit; never shows a window or starts an app.
     if args.iter().any(|a| a == "--quit") {
-        std::process::exit(quit_cmd::run_quit());
+        std::process::exit(quit_cmd::run_request(quit_cmd::Request::Quit));
+    }
+    // `--restart`: the running app quits like the tray's Quit and starts itself again quietly (`--background`).
+    if args.iter().any(|a| a == "--restart") {
+        std::process::exit(quit_cmd::run_request(quit_cmd::Request::Restart));
+    }
+    // `--update <CoolerScreen_x.y.z_x64-setup.exe>`: only when idle; the app quits, the installer runs silently, the new app starts quietly.
+    if let Some(i) = args.iter().position(|a| a == "--update") {
+        let p = args.get(i + 1).map(std::path::PathBuf::from).and_then(|p| std::fs::canonicalize(&p).ok()).map(|p| { let s = p.to_string_lossy().to_string(); s.strip_prefix(r"\\?\").map(String::from).unwrap_or(s) });
+        match p.filter(|p| relaunch::valid_installer(std::path::Path::new(p))) {
+            Some(p) => std::process::exit(quit_cmd::run_request(quit_cmd::Request::Update(p))),
+            None => std::process::exit(quit_cmd::EXIT_BAD),
+        }
+    }
+    // the detached helper a restart or update leaves behind (waits for the app to exit, installs, starts it again)
+    if args.iter().any(|a| a == relaunch::HELPER_FLAG) {
+        std::process::exit(relaunch::run_helper(&args));
     }
     let measure = live_measure::parse(&args);
     // `--tray` (the Windows start-up entry): no window, live on, icon in the tray.
@@ -65,6 +82,7 @@ fn main() {
             window::win_close,
             window::win_force_close,
             live_app::live_set,
+            live_app::app_restart,
             cc::app_state,
             cc::settings_update,
             cc::activity,
@@ -140,7 +158,7 @@ fn main() {
             // `CoolerScreen.exe --quit` from an installer or script reaches this app through a named event
             {
                 let (h1, h2) = (app.handle().clone(), app.handle().clone());
-                quit_cmd::listen(move || h1.state::<Core>().0.busy_for_quit(), move || live_app::quit_app(&h2));
+                quit_cmd::listen(move || h1.state::<Core>().0.busy_for_quit(), move |req| live_app::restart_app(&h2, req));
             }
             let c = app.state::<Core>().0.clone();
             let resolver_app = c.clone();

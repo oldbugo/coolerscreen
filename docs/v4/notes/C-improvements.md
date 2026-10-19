@@ -233,3 +233,60 @@ reports hidden): twin canvas shows the live picture (screenshot checked), frames
 stream and coming back starts it; a 220-event drag folded to about 100 placements, 9 saves in 1.7 s, the box moved the full distance;
 no page errors. **Not verified:** the user's feel of the drag on real hardware, the twin on a real screen/device, and with E1's new
 layout (E1 is being rebuilt in the same file: merge main again after it lands; my edits are the lines named above).
+
+## E3 rebased onto E1 (4.10.0)
+
+Merged main; the only conflict was the import block in `themes.js` (kept both: `createTwin` and E1's `edshell.js` / `edhooks.js`). The
+stage still has `u.imgBase` / `u.imgLive`, so the twin hook (one line after the stage is built) and the drag changes apply unchanged.
+Re-run: suite 277 pass; `tools/ui-shots/twin-flow.mjs` all 13 checks pass on a rebuilt quiet debug instance.
+
+## C6: Restart button, `--restart`, `--update` (user request 2026-10-19)
+
+What exists now:
+- **Settings > top: "Restart CoolerScreen"** (troubleshooting). The app runs the tray Quit path (live hands back to Embedded) and a
+  fresh copy starts, spawned by the app itself, window as usual (no `--background`). While a job runs it refuses with a message
+  ("Something is still running ... Restart when it has finished."). Tauri command `app_restart`.
+- **`CoolerScreen.exe --restart`**: like `--quit`; the app relaunches itself quietly (`--background`).
+- **`CoolerScreen.exe --update <CoolerScreen_x.y.z_x64-setup.exe>`**: only when idle. The file name must be exactly that pattern, be an
+  existing local file (no network path); the requester checks it (exit 4) and the app checks it again. The app quits cleanly, a
+  detached helper waits for its exit (30 s limit: if the app does not exit, nothing is installed or started), runs the installer `/S`
+  (10 min limit), then starts the new exe with `--background`. Whatever the installer did, the helper starts an app again.
+- Exit codes (also in tools/README.md): 0 accepted and the app exited; 1 accepted, still running after 20 s; 2 busy (a job is
+  running; nothing done); 3 no running instance (nothing started); 4 (`--update`) not an installer.
+- `tools/install-when-idle.ps1` uses `--update` when the running exe contains the helper flag (`--relaunch-after`, checked as a
+  literal in the exe, so no version guess), otherwise the old quit + `/S` without restart; 4.9.1 and older rules unchanged.
+
+**Design (reuses C4's kernel-object protocol, no files):** the app owns events `Local\CoolerScreenQuit-<scope>` (quit),
+`...-restart`, `...-update`; the requester creates answer events `-ok` / `-busy` / `-bad`, a named memory section `-arg` for the
+installer path, and `-pid` into which the app writes its process id before answering "ok". The requester waits on that PROCESS, not on
+the events (the new app uses the same event names within a second; waiting on the events made the first version return 1).
+Scope = build kind + app folder, so a debug or scratch instance can never be reached by, nor answer for, the installed app.
+The helper is this same exe in a special mode (`--relaunch-after <pid> <plain|background> <exe> [setup]`, handled before Tauri starts, so
+no window and no single-instance forwarding). For an update the helper is a copy in %TEMP% (`CoolerScreen-updater-<pid>.exe`) because the
+installer replaces the installed exe; copies of earlier runs are deleted at the next helper start (the running one cannot be, so
+one copy stays until then). Spawned detached, no window, breaking away from the app's job object when allowed. Helper steps are logged
+in device.log as "updater: ...".
+
+**MSIX reasoning (checked):** a process inherits the package identity of the process that CREATES it (its parent), not of whatever
+script asked for it. `--restart` / `--update` run in the shell only as requesters; the relaunch is created by the app itself, started
+by the user from the Start menu or Explorer, which has no package identity, so the helper and the new app run outside the private
+copy of %APPDATA% and write to the real folder. Test: a scratch instance started through WMI (Win32_Process.Create, outside any
+package, as Explorer would) was restarted and updated from my shell; `GetPackageFullName` reported "no package" for the instance before and
+after both (that includes my own shell in this session, which is not packaged here, so this run cannot show the difference; the
+protection comes from the parent rule above, and the scripts of this repo must still be started by the app, never by a shell, when
+the shell IS packaged). If the app itself was started from a packaged shell, its relaunch is packaged too (child of a packaged
+process): not our case for the installed app.
+
+**Verified (quiet debug instances, scratch HOME, debug builds have their own single-instance id; fake device):**
+- `--update` with a non-installer file / a missing file: 4. No instance: `--quit`, `--restart`, `--update` all 3, nothing started.
+- `--restart`: exit 0 after the old process ended; a new pid appeared with command line `... --background`; device.log: "restart
+  (--restart) requested: the tray Quit path", "updater: started ... again (background)".
+- `--update <stub installer named CoolerScreen_9.9.9_x64-setup.exe>`: exit 0; the stub ran with `/S`; a new pid appeared; log:
+  "update (--update) requested", "updater: running ... /S", "installer finished: exit code: 0", "started ... again (background)".
+- The Settings button (clicked through the real page of a scratch instance): at the top of Settings; the app restarted itself; the new
+  command line had no arguments (window as usual); log "restart requested (Settings)".
+- Busy refusal shares the code path verified for `--quit` in C4 (exit 2, nothing done); not re-run for the new commands.
+- Unit test: installer file-name rule (accepts `CoolerScreen_4.10.1_x64-setup.exe`; rejects 11 look-alikes, relative, UNC and missing paths).
+**Not verified:** a real NSIS installer run (a stub stood in), the new build starting after a real install, a real release build, the
+restart on the user's PC, install-when-idle.ps1 end to end (no installed app touched; the script was not run), and the busy case for
+`--restart` / `--update` / the button.

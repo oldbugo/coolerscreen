@@ -323,6 +323,37 @@ pub fn quit_app(app: &AppHandle) {
     });
 }
 
+/// Carry out a request from `--quit` / `--restart` / `--update` or the Settings button: leave a detached helper when the app is to
+/// come back (restart, update), then quit exactly like the tray's Quit. If the helper cannot be started the app does not quit.
+pub fn restart_app(app: &AppHandle, req: crate::quit_cmd::Request) {
+    use crate::quit_cmd::Request;
+    let pid = std::process::id();
+    let started = match &req {
+        Request::Quit => Ok(()),
+        Request::Restart => crate::relaunch::spawn_helper(pid, true, None),
+        Request::Update(p) => crate::relaunch::spawn_helper(pid, true, Some(std::path::Path::new(p))),
+    };
+    match started {
+        Ok(()) => quit_app(app),
+        Err(e) => cs_core::device::log(&format!("updater: could not start the helper ({e}); the app stays up")),
+    }
+}
+
+/// Settings > "Restart CoolerScreen" (troubleshooting): the tray Quit path, then a fresh copy started by the app itself with its
+/// window as usual. Refused with a clear message while a job runs.
+#[tauri::command]
+pub async fn app_restart(app: AppHandle, core: tauri::State<'_, Core>) -> Result<Value, CoreError> {
+    if core.0.busy_for_quit() {
+        return Err(CoreError::new("Something is still running (an upload, a conversion or a recording). Restart when it has finished."));
+    }
+    cs_core::device::log("restart requested (Settings): the tray Quit path");
+    let pid = std::process::id();
+    crate::relaunch::spawn_helper(pid, false, None).map_err(|e| CoreError::new(format!("Could not restart: {e}")))?;
+    let a = app.clone();
+    quit_app(&a);
+    Ok(serde_json::json!({ "restarting": true }))
+}
+
 /// Safety net: if quitting has not finished within ~3 s (a stuck USB call, a lock, a thread that will not end), leave anyway.
 /// The screen then keeps playing whatever it has (its stored loop after the stream times out).
 pub fn arm_exit_watchdog(why: &'static str) {
