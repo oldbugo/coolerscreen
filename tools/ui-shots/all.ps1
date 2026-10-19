@@ -1,10 +1,10 @@
 # One command: start a quiet test instance, take the whole screenshot set (or run the flow checks), stop the instance.
-#   powershell -ExecutionPolicy Bypass -File tools\ui-shots\all.ps1 -Exe <debug exe> -Scratch <folder> -Out <dir> [-Port 9333] [-Flows]
+#   powershell -ExecutionPolicy Bypass -File tools\ui-shots\all.ps1 -Exe <debug exe> -Scratch <folder> -Out <dir> [-Port 9371] [-Flows]
 param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [Parameter(Mandatory = $true)][string]$Scratch,
   [Parameter(Mandatory = $true)][string]$Out,
-  [int]$Port = 9333,
+  [int]$Port = 9371,
   [string]$Only = '',
   [switch]$Flows   # run flows.mjs (checks of the main flows) instead of the screenshot set
 )
