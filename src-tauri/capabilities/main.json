@@ -64,6 +64,7 @@
     "allow-calibration-set",
     "allow-fit-cal",
     "allow-weather-search",
-    "allow-weather-set-place"
+    "allow-weather-set-place",
+    "allow-ext-sensor-status"
   ]
 }

@@ -1,10 +1,10 @@
 //! The 4.0 stream B widgets: `meters`, `cores`, `network`, `disks`, `worldclock`, `timer` (props and data helpers live in
 //! `live/morewidgets.rs`). Same look as the other widgets (dark rounded card, Segoe UI, a missing reading is a greyed dash).
 //! Nothing moves up and down: bars grow sideways, a finished timer pulses its opacity.
-use super::sensors::{fill, info, line, mix, nice_ceil, stroke, Kind, GREY};
+use super::sensors::{arc, fill, info, line, mix, nice_ceil, stroke, Kind, GREY};
 use super::{round_rect, LocalTime, Rect, Renderer, Weight};
 use crate::live::metrics;
-use crate::live::morewidgets::{self as mw, CoresProps, DisksProps, MetersProps, NetworkProps, TimerProps, WorldClockProps};
+use crate::live::morewidgets::{self as mw, AgendaProps, CoresProps, DisksProps, MetersProps, NetworkProps, PingProps, TimerProps, VolumeProps, WorldClockProps};
 use crate::live::theme::{parse_color, SensorProps, Widget};
 use tiny_skia::PathBuilder;
 
@@ -13,6 +13,10 @@ const AMBER: [u8; 3] = [240, 200, 70];
 const RED: [u8; 3] = [240, 90, 80];
 const CYAN: [u8; 3] = [90, 200, 255];
 const GREEN: [u8; 3] = [90, 210, 130];
+
+fn bytes_text(b: f32) -> String {
+    if b >= 1e12 { format!("{:.2} TB", b / 1e12) } else if b >= 1e9 { format!("{:.1} GB", b / 1e9) } else { format!("{:.0} MB", b / 1e6) }
+}
 
 fn size_text(gb: f32) -> String {
     if gb >= 1000.0 { format!("{:.1} TB", gb / 1024.0) } else if gb >= 100.0 { format!("{gb:.0} GB") } else { format!("{gb:.1} GB") }
@@ -40,6 +44,10 @@ impl Renderer {
             "disks" => self.draw_disks(b, &w.id, &w.disks()),
             "worldclock" => self.draw_worldclock(b, &w.worldclock()),
             "timer" => self.draw_timer(b, &w.timer(), now),
+            "livetext" => self.draw_livetext(b, w, now),
+            "volume" => self.draw_volume(b, &w.volume()),
+            "ping" => self.draw_ping(b, &w.ping()),
+            "agenda" => self.draw_agenda(b, &w.agenda()),
             _ => {}
         }
     }
@@ -63,6 +71,221 @@ impl Renderer {
             round_rect(&mut self.layer, x, y, (w * frac).max(h), h, h / 2.0, [col[0], col[1], col[2], 255]);
         }
     }
+
+    // ------------------------------------------------------------ agenda
+
+    fn draw_agenda(&mut self, b: Rect, p: &AgendaProps) {
+        use crate::live::agenda;
+        let inner = self.mcard(b);
+        let col = parse_color(&p.color, [255, 255, 255]);
+        let now = agenda::now_local_secs();
+        let count = p.count.clamp(2, 6) as usize;
+        let view = if self.sample {
+            let t = |d: i64, h: i64, m: i64| (now.div_euclid(86400) + d) * 86400 + h * 3600 + m * 60;
+            agenda::AgendaView {
+                loaded: true,
+                error: None,
+                events: vec![
+                    agenda::Event { title: "Stand-up".into(), start: t(0, 23, 30), end: t(0, 23, 45), all_day: false },
+                    agenda::Event { title: "Dentist".into(), start: t(1, 14, 30), end: t(1, 15, 30), all_day: false },
+                    agenda::Event { title: "Mum's birthday".into(), start: t(2, 0, 0), end: t(3, 0, 0), all_day: true },
+                    agenda::Event { title: "Team lunch".into(), start: t(4, 12, 0), end: t(4, 13, 0), all_day: false },
+                    agenda::Event { title: "Flight to Perth".into(), start: t(5, 7, 15), end: t(5, 9, 0), all_day: false },
+                    agenda::Event { title: "Rent due".into(), start: t(6, 0, 0), end: t(7, 0, 0), all_day: true },
+                ],
+            }
+        } else if p.source.trim().is_empty() {
+            agenda::AgendaView { loaded: true, error: None, events: Vec::new() }
+        } else {
+            agenda::read(&p.source)
+        };
+        let events: Vec<&agenda::Event> = view.events.iter().filter(|e| e.end > now && (p.all_day || !e.all_day)).take(count).collect();
+        if events.is_empty() {
+            let msg = if p.source.trim().is_empty() && !self.sample {
+                "Add a calendar link or file"
+            } else if let Some(e) = &view.error {
+                e.as_str()
+            } else if !view.loaded {
+                "Loading\u{2026}"
+            } else {
+                "Nothing coming up"
+            };
+            let sz = self.fit_px(msg, Weight::Regular, inner.w, inner.h * 0.3);
+            let m = self.fit(msg, sz, Weight::Regular, inner.w);
+            self.text(&m, inner.x, inner.y + inner.h / 2.0 + sz as f32 * 0.3, sz, Weight::Regular, if view.error.is_some() { AMBER } else { GREY }, 1.0);
+            return;
+        }
+        let today = now.div_euclid(86400);
+        let n = events.len();
+        let row_h = inner.h / n as f32;
+        let sz = ((row_h * 0.5).min(inner.w * 0.09)).round().max(8.0) as u32;
+        let whens: Vec<String> = events
+            .iter()
+            .map(|e| {
+                let day = e.start.div_euclid(86400);
+                let (hh, mm) = ((e.start.rem_euclid(86400)) / 3600, (e.start.rem_euclid(3600)) / 60);
+                if e.start <= now {
+                    return "Now".to_string();
+                }
+                let dayname = match day - today {
+                    0 => "Today".to_string(),
+                    1 => "Tomorrow".to_string(),
+                    d if d < 7 => super::DAYS[((day + 4).rem_euclid(7)) as usize][..3].to_string(),
+                    _ => {
+                        let (_, m, dd) = crate::live::agenda::civil_from_days(day);
+                        format!("{} {}", dd, &super::MONTHS[(m as usize).clamp(1, 12) - 1][..3])
+                    }
+                };
+                match (e.all_day, day - today) {
+                    (true, _) => dayname,
+                    (false, 0) => format!("{hh:02}:{mm:02}"),
+                    (false, _) => format!("{dayname} {hh:02}:{mm:02}"),
+                }
+            })
+            .collect();
+        let wcol = whens.iter().map(|w| self.fonts.width(w, sz, Weight::Bold)).fold(0.0f32, f32::max).min(inner.w * 0.5);
+        for (i, e) in events.iter().enumerate() {
+            let base = inner.y + row_h * (i as f32 + 0.5) + sz as f32 * 0.36;
+            let w = self.fit(&whens[i], sz, Weight::Bold, wcol);
+            self.text(&w, inner.x, base, sz, Weight::Bold, if e.start <= now { GREEN } else { CYAN }, 1.0);
+            let t = self.fit(&e.title, sz, Weight::Regular, (inner.w - wcol - sz as f32 * 0.8).max(20.0));
+            self.text(&t, inner.x + wcol + sz as f32 * 0.8, base, sz, Weight::Regular, col, 1.0);
+        }
+    }
+
+    // ------------------------------------------------------------ ping
+
+    fn draw_ping(&mut self, b: Rect, p: &PingProps) {
+        let inner = self.mcard(b);
+        let secs = p.history.clamp(10.0, 600.0);
+        let host = crate::live::ping::clean_host(&p.host).unwrap_or_else(|| "1.1.1.1".into());
+        let graph = p.style == "graph";
+        let view = if self.sample {
+            Some(crate::live::ping::PingView { last: Some(14.0), tried: true, loss: 0.0, hist: sample_series(14.0, secs).into_iter().map(|(a, v)| (a, v.clamp(6.0, 60.0))).collect() })
+        } else {
+            crate::live::ping::read(&host, secs)
+        };
+        let (txt, col) = match &view {
+            Some(v) => match v.last {
+                Some(ms) => (format!("{ms:.0} ms"), if ms >= 120.0 { RED } else if ms >= 60.0 { AMBER } else { GREEN }),
+                None if v.tried => ("Timeout".to_string(), RED),
+                None => ("\u{2013}".to_string(), GREY),
+            },
+            None => ("\u{2013}".to_string(), GREY),
+        };
+        let head_h = if graph { inner.h * 0.5 } else { inner.h };
+        let lsz = (head_h * 0.22).min(inner.w * 0.1).max(8.0).round() as u32;
+        self.text("Ping", inner.x, inner.y + lsz as f32 * 0.85, lsz, Weight::Regular, LAB, 1.0);
+        let hw = self.fonts.width(&host, lsz, Weight::Regular);
+        let hs = self.fit(&host, lsz, Weight::Regular, (inner.w * 0.6).max(20.0));
+        let _ = hw;
+        self.text_r(&hs, inner.x + inner.w, inner.y + lsz as f32 * 0.85, lsz, Weight::Regular, LAB, 0.9);
+        let area_h = head_h - lsz as f32 * 1.2;
+        let vsz = self.fit_px(&txt, Weight::Bold, inner.w, area_h * 0.9);
+        let loss_note = view.as_ref().filter(|v| v.loss > 0.0 && v.last.is_some()).map(|v| format!("{:.0} % lost", v.loss * 100.0));
+        let base = inner.y + lsz as f32 * 1.2 + (area_h + vsz as f32 * 0.72) / 2.0;
+        self.text(&txt, inner.x, base, vsz, Weight::Bold, col, 1.0);
+        if let Some(n) = loss_note {
+            let nsz = (lsz as f32 * 0.9).round().max(8.0) as u32;
+            self.text_r(&n, inner.x + inner.w, base, nsz, Weight::Regular, AMBER, 1.0);
+        }
+        if graph {
+            let (px, pw) = (inner.x, inner.w);
+            let py = inner.y + head_h + inner.h * 0.03;
+            let ph = (inner.y + inner.h - py).max(6.0);
+            let hist = view.map(|v| v.hist).unwrap_or_default();
+            let peak = hist.iter().map(|h| h.1).fold(0.0f32, f32::max);
+            let max = nice_ceil((peak * 1.2).max(50.0));
+            for f in [0.0f32, 0.5, 1.0] {
+                line(&mut self.layer, px, py + ph * f, px + pw, py + ph * f, [255, 255, 255, if f == 1.0 { 55 } else { 28 }], 1.0, false);
+            }
+            self.plot(&hist, px, py, pw, ph, secs, max, col, true);
+        }
+    }
+
+    // ------------------------------------------------------------ volume
+
+    fn draw_volume(&mut self, b: Rect, p: &VolumeProps) {
+        let inner = self.mcard(b);
+        let v = if self.sample { Some(crate::live::volume::Vol { level: 0.42, muted: false }) } else { crate::live::volume::read() };
+        let col = parse_color(&p.color, CYAN);
+        let (frac, muted, present) = match v {
+            Some(v) => (v.level, v.muted, true),
+            None => (0.0, false, false),
+        };
+        let shown = self.eased("volume".to_string(), frac);
+        let accent = if !present || muted { GREY } else { col };
+        let txt = if !present { "\u{2013}".to_string() } else if muted { "Muted".to_string() } else { format!("{:.0} %", frac * 100.0) };
+        if p.style == "ring" {
+            let lab = inner.h * 0.14;
+            let d = inner.w.min(inner.h - lab * 1.3).max(10.0);
+            let (cx, cy) = (inner.x + inner.w / 2.0, inner.y + (inner.h - lab * 1.3) / 2.0);
+            let width = d * 0.11;
+            let r = (d - width) / 2.0;
+            arc(&mut self.layer, cx, cy, r, 135.0, 270.0, [255, 255, 255, 40], width);
+            if present && !muted && shown > 0.004 {
+                arc(&mut self.layer, cx, cy, r, 135.0, 270.0 * shown, [accent[0], accent[1], accent[2], 255], width);
+            }
+            let sz = self.fit_px(&txt, Weight::Bold, d * 0.62, d * 0.26);
+            let tw = self.fonts.width(&txt, sz, Weight::Bold);
+            self.text(&txt, cx - tw / 2.0, cy + sz as f32 * 0.3, sz, Weight::Bold, accent, 1.0);
+            let lsz = (lab * 0.85).round().max(8.0) as u32;
+            let lw = self.fonts.width("Volume", lsz, Weight::Regular);
+            self.text("Volume", inner.x + (inner.w - lw) / 2.0, inner.y + inner.h - lab * 0.15, lsz, Weight::Regular, LAB, 1.0);
+        } else {
+            let row = inner.h * 0.55;
+            let vsz = self.fit_px(&txt, Weight::Bold, inner.w * 0.55, row * 0.95);
+            let lsz = ((vsz as f32) * 0.66).round().max(8.0) as u32;
+            let base = inner.y + row * 0.82;
+            self.text("Volume", inner.x, base, lsz, Weight::Regular, LAB, 1.0);
+            self.text_r(&txt, inner.x + inner.w, base, vsz, Weight::Bold, accent, 1.0);
+            let bh = (inner.h * 0.2).clamp(4.0, 30.0);
+            self.track_and_fill(inner.x, inner.y + inner.h - bh - inner.h * 0.08, inner.w, bh, if muted { 0.0 } else { shown }, accent, present);
+        }
+    }
+
+
+    // ------------------------------------------------------------ live text
+
+    /// The text widget with `{words}` replaced by live values (same look and options as the plain text).
+    fn draw_livetext(&mut self, b: Rect, w: &Widget, now: &LocalTime) {
+        let src = w.livetext_source();
+        let mut props = w.livetext();
+        let (h12, hh) = (if now.hour % 12 == 0 { 12 } else { now.hour % 12 }, now.hour);
+        let text = mw::expand(&src, |word| {
+            let metric = match word {
+                "time" => return Some(Some(format!("{hh:02}:{:02}", now.minute))),
+                "time12" => return Some(Some(format!("{h12}:{:02} {}", now.minute, if hh >= 12 { "PM" } else { "AM" }))),
+                "seconds" => return Some(Some(format!("{hh:02}:{:02}:{:02}", now.minute, now.second))),
+                "date" => return Some(Some(format!("{} {}", now.day, super::MONTHS[(now.month as usize).clamp(1, 12) - 1]))),
+                "weekday" => return Some(Some(super::DAYS[(now.weekday as usize) % 7].to_string())),
+                "uptime" => return Some(Some(super::extras::uptime_text(if self.sample { 3 * 86400 + 4 * 3600 } else { super::extras::uptime_secs() }))),
+                "volume" => return Some(if self.sample { Some("42 %".to_string()) } else { crate::live::volume::read().map(|v| format!("{:.0} %", v.level * 100.0)) }),
+                "cpu" => "cpu.load",
+                "cputemp" => "cpu.temp",
+                "cpupower" => "cpu.power",
+                "cpufan" => "cpu.fan",
+                "gpu" => "gpu.load",
+                "gputemp" => "gpu.temp",
+                "vram" => "gpu.vram",
+                "ram" => "ram.used",
+                "down" => "net.down",
+                "up" => "net.up",
+                "diskread" => "disk.read",
+                "diskwrite" => "disk.write",
+                _ => return None,
+            };
+            let sp = SensorProps { metric: metric.into(), ..SensorProps::default() };
+            let r = self.read_metric(&sp, false);
+            Some(r.value.map(|v| {
+                let (n, u) = super::sensors::format_value(metric, v, false, None);
+                if u.is_empty() || u.starts_with('%') || u.starts_with('\u{00B0}') { format!("{n}{u}") } else { format!("{n} {u}") }
+            }))
+        });
+        props.text = text;
+        self.draw_text(b, &props);
+    }
+
 
     // ------------------------------------------------------------ meters
 
@@ -199,7 +422,10 @@ impl Renderer {
     // ------------------------------------------------------------ network
 
     fn draw_network(&mut self, b: Rect, p: &NetworkProps) {
-        let inner = self.mcard(b);
+        let mut inner = self.mcard(b);
+        if p.totals {
+            inner = self.network_footer(inner, p);
+        }
         let hz = p.rate.clamp(1, 4);
         let secs = p.history.clamp(10.0, 600.0);
         let kd = metrics::key("net.down", 0, "", p.adapter.as_deref());
@@ -261,6 +487,26 @@ impl Renderer {
             let ms = (ph * 0.14).clamp(8.0, 18.0).round() as u32;
             self.text(&format!("{n} {u}"), px + 3.0, py + ms as f32 * 1.05, ms, Weight::Regular, LAB, 0.8);
         }
+    }
+
+    /// The "since start-up" line at the bottom of the network widget; returns the area left for the rest.
+    fn network_footer(&mut self, inner: Rect, p: &NetworkProps) -> Rect {
+        let foot = (inner.h * 0.13).clamp(10.0, 34.0);
+        let (rx, tx) = if self.sample {
+            (Some(48.2e9), Some(3.1e9))
+        } else {
+            let h = metrics::hub();
+            let a = p.adapter.as_deref().unwrap_or("*");
+            (h.read(&format!("net.rx.total:{a}"), 1).0, h.read(&format!("net.tx.total:{a}"), 1).0)
+        };
+        let txt = match (rx, tx) {
+            (Some(r), Some(t)) => format!("Since start-up   down {}   up {}", bytes_text(r), bytes_text(t)),
+            _ => "Since start-up   \u{2013}".to_string(),
+        };
+        let sz = (foot * 0.9).round().max(8.0) as u32;
+        let txt = self.fit(&txt, sz, Weight::Regular, inner.w);
+        self.text(&txt, inner.x, inner.y + inner.h - foot * 0.2, sz, Weight::Regular, LAB, 0.95);
+        Rect { h: (inner.h - foot * 1.3).max(8.0), ..inner }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -549,5 +795,52 @@ mod tests {
         // the cores really were read: every logical core slot exists in the sampler
         let (v, _) = crate::live::metrics::hub().read("cpu.core:0", 2);
         let _ = v;
+    }
+
+    #[test]
+    fn every_metric_is_a_meter_row_and_the_new_readings_are_polled() {
+        let rows: Vec<serde_json::Value> = crate::live::theme::SENSOR_METRICS.iter().map(|m| json!({ "metric": m })).collect();
+        // the meters widget holds 8 rows: draw them in chunks
+        for chunk in rows.chunks(8) {
+            let t = theme(&[("meters", 0.0, 0.0, 0.5, 1.0, json!({ "rows": chunk })), ("network", 0.5, 0.0, 0.5, 0.5, json!({ "totals": true }))]);
+            crate::live::render_preview(&t, 640, 288, true).unwrap();
+        }
+        let h = crate::live::metrics::hub();
+        for k in ["disk.read", "disk.write", "net.rx.total:*", "net.tx.total:*"] {
+            h.read(k, 4);
+        }
+        let mut rx = None;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            rx = h.read("net.rx.total:*", 4).0;
+            if rx.is_some() {
+                break;
+            }
+        }
+        assert!(rx.is_some_and(|v| v > 0.0), "adapter counters are read");
+        let (r, _) = h.read("disk.read", 4);
+        eprintln!("disk read now: {r:?}");
+    }
+
+    #[test]
+    fn b2_widgets_draw_in_every_option() {
+        let t = theme(&[
+            ("livetext", 0.02, 0.03, 0.5, 0.1, json!({ "text": "{time}  CPU {cpu} {cputemp}  GPU {gpu} {gputemp}  {nope} {down}", "weight": "bold" })),
+            ("volume", 0.02, 0.16, 0.22, 0.16, json!({})),
+            ("volume", 0.26, 0.16, 0.14, 0.34, json!({ "style": "ring", "color": "#ff9900" })),
+            ("ping", 0.02, 0.36, 0.22, 0.2, json!({})),
+            ("ping", 0.02, 0.58, 0.3, 0.38, json!({ "style": "graph", "host": "example.com" })),
+            ("agenda", 0.42, 0.16, 0.34, 0.36, json!({ "count": 5 })),
+            ("agenda", 0.42, 0.56, 0.34, 0.18, json!({ "source": "" })),
+            ("meters", 0.78, 0.03, 0.2, 0.5, json!({ "rows": [{ "metric": "cpu.temp" }, { "metric": "cpu.power" }, { "metric": "cpu.fan" }, { "metric": "board.temp" }, { "metric": "disk.read" }, { "metric": "disk.write" }] })),
+            ("network", 0.36, 0.76, 0.4, 0.22, json!({ "totals": true })),
+        ]);
+        dump("b2", &crate::live::render_preview(&t, 1200, 540, true).unwrap());
+        let mut tiny = t.clone();
+        tiny.theme.widgets.iter_mut().for_each(|x| {
+            x.w = 0.02;
+            x.h = 0.02;
+        });
+        crate::live::render_preview(&tiny, 320, 144, true).unwrap();
     }
 }

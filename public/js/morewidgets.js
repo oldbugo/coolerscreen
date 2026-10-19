@@ -5,7 +5,7 @@
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 /** The new item types. */
-export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer'];
+export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume', 'ping', 'agenda'];
 export const isMore = t => MORE_TYPES.includes(t);
 
 const meterRows = () => ['cpu.load', 'ram.used', 'gpu.load', 'gpu.temp'].map(metric => ({ metric }));
@@ -14,17 +14,21 @@ const meterRows = () => ['cpu.load', 'ram.used', 'gpu.load', 'gpu.temp'].map(met
 export const ENTRIES = {
   meters: { type: 'meters', name: 'Meters', icon: '☷', props: () => ({ rows: meterRows(), unit: 'C', bars: true, rate: 1 }) },
   cores: { type: 'cores', name: 'CPU cores', icon: '▦', props: () => ({ style: 'bars', average: true, color: null, rate: 2 }) },
-  network: { type: 'network', name: 'Down + up', icon: '⇵', props: () => ({ graph: true, history: 60, downColor: '#5ad2a0', upColor: '#aa8cff', rate: 2 }) },
+  network: { type: 'network', name: 'Down + up', icon: '⇵', props: () => ({ graph: true, totals: false, history: 60, downColor: '#5ad2a0', upColor: '#aa8cff', rate: 2 }) },
   disks: { type: 'disks', name: 'All disks', icon: '▤', props: () => ({ drives: [], show: 'used', maxRows: 4 }) },
   worldclock: { type: 'worldclock', name: 'World clocks', icon: '◷', props: () => ({
     zones: [{ name: 'New York', tz: 'Eastern Standard Time' }, { name: 'London', tz: 'GMT Standard Time' }, { name: 'Tokyo', tz: 'Tokyo Standard Time' }], format: '24h', color: '#ffffff' }) },
+  livetext: { type: 'livetext', name: 'Live text', icon: 'T', props: () => ({ text: '{time}  CPU {cpu}  GPU {gpu}', size: 0.08, color: '#ffffff', opacity: 1, align: 'left', weight: 'regular' }) },
+  volume: { type: 'volume', name: 'Volume', icon: '♪', props: () => ({ style: 'bar', color: '#5ac8ff' }) },
+  ping: { type: 'ping', name: 'Ping', icon: '⇄', props: () => ({ host: '1.1.1.1', style: 'number', history: 60 }) },
+  agenda: { type: 'agenda', name: 'Agenda', icon: '▦', props: () => ({ source: '', count: 4, allDay: true, color: '#ffffff' }) },
   timer: { type: 'timer', name: 'Timer', icon: '⏲', props: () => ({ mode: 'stopwatch', running: false, startedAt: 0, elapsedMs: 0, duration: 300, workMin: 25, breakMin: 5, color: '#ffffff' }) },
 };
 
 /** [group name, entry keys] pairs added to the palette (widgets.js puts them into the existing groups). */
-export const PALETTE_ADD = { Time: ['worldclock', 'timer'], Sensors: ['meters', 'cores', 'network', 'disks'] };
+export const PALETTE_ADD = { Time: ['worldclock', 'timer', 'agenda'], Sensors: ['meters', 'cores', 'network', 'disks', 'ping'], Media: ['volume'], Decoration: ['livetext'] };
 
-export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer' };
+export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer', livetext: 'Live text', volume: 'Volume', ping: 'Ping', agenda: 'Agenda' };
 
 /** Default box [w, h] as fractions of the 2400x1080 canvas. */
 export function defaultSize(type, p = {}) {
@@ -35,6 +39,10 @@ export function defaultSize(type, p = {}) {
     case 'disks': return [0.28, clamp(0.1 * (p.maxRows || 4) + 0.04, 0.22, 0.7)];
     case 'worldclock': return [0.26, clamp(0.12 * Math.max(1, (p.zones || []).length || 3) + 0.04, 0.2, 0.7)];
     case 'timer': return [0.28, 0.28];
+    case 'livetext': return [0.5, 0.12];
+    case 'agenda': return [0.34, 0.3];
+    case 'ping': return p.style === 'graph' ? [0.3, 0.3] : [0.22, 0.2];
+    case 'volume': return p.style === 'ring' ? [0.14, 0.32] : [0.26, 0.16];
     default: return null;
   }
 }
@@ -42,10 +50,17 @@ export function defaultSize(type, p = {}) {
 export function nameOf(w) {
   const p = w.props || {};
   if (w.type === 'timer') return p.label || ({ stopwatch: 'Stopwatch', timer: 'Timer', pomodoro: 'Pomodoro' })[p.mode] || 'Timer';
+  if (w.type === 'livetext') { const t = (p.text || '').replace(/\s+/g, ' ').trim(); return t ? `Live text: “${t.slice(0, 20)}${t.length > 20 ? '…' : ''}”` : 'Live text'; }
   if (w.type === 'meters') return `Meters (${(p.rows || []).length})`;
   if (w.type === 'worldclock') return `World clocks (${(p.zones || []).length})`;
   return TYPE_NAME[w.type] || w.type;
 }
+
+/** Words a live text understands, (word, what it shows); the same list as live/morewidgets.rs WORDS. */
+export const WORDS = [['time', 'Time (24-hour)'], ['time12', 'Time (12-hour)'], ['seconds', 'Time with seconds'], ['date', 'Date'], ['weekday', 'Weekday'],
+  ['cpu', 'CPU load'], ['cputemp', 'CPU temperature'], ['cpupower', 'CPU power'], ['cpufan', 'CPU fan'], ['gpu', 'GPU load'], ['gputemp', 'GPU temperature'],
+  ['vram', 'GPU memory'], ['ram', 'RAM used'], ['down', 'Download speed'], ['up', 'Upload speed'], ['diskread', 'Disk read speed'], ['diskwrite', 'Disk write speed'],
+  ['uptime', 'Uptime'], ['volume', 'Volume']];
 
 /** Windows time-zone ids with the usual city (id, city). */
 export const ZONES = [
@@ -63,6 +78,18 @@ export const ZONES = [
   ['New Zealand Standard Time', 'Auckland'], ['Fiji Standard Time', 'Fiji'],
 ];
 const cityOf = tz => (ZONES.find(z => z[0] === tz) || [])[1] || '';
+
+/** Readings that need a tool the user runs (HWiNFO / LibreHardwareMonitor). */
+export const EXT_METRICS = ['cpu.temp', 'cpu.power', 'cpu.fan', 'board.temp'];
+
+/** A muted line saying where the metric is read from, or why it is unavailable (empty for ordinary metrics). */
+export function extNote(api, metric) {
+  const p = api.el('p', { class: 'muted small' });
+  if (!EXT_METRICS.includes(metric)) { p.hidden = true; return p; }
+  p.textContent = 'Checking…';
+  api.backend.call('ext_sensor_status').then(s => { p.textContent = s.message; p.classList.toggle('warn-text', !s.ok); }, () => { p.hidden = true; });
+  return p;
+}
 
 export function hasPanel(type) { return isMore(type); }
 
@@ -105,7 +132,7 @@ export function paintProps(w, host, api, ctx) {
         colour('color', 'Colour', '#5ac8ff', true), rateField());
       return true;
     case 'network': {
-      host.append(swRow('Graph', p.graph !== false, v => restructure(() => { p.graph = v; })));
+      host.append(swRow('Graph', p.graph !== false, v => restructure(() => { p.graph = v; })), swRow('Totals', !!p.totals, v => api.set('totals', v), 'Data moved since start-up.'));
       if (p.graph !== false) host.append(field('History (s)', range('pHist', clamp(p.history || 60, 10, 600), 10, 600, 10, v => api.set('history', Math.round(v)), v => String(v)), 'pHist'));
       host.append(colour('downColor', 'Download', '#5ad2a0'), colour('upColor', 'Upload', '#aa8cff'), rateField());
       return true;
@@ -125,6 +152,35 @@ export function paintProps(w, host, api, ctx) {
     }
     case 'worldclock': return worldPanel();
     case 'timer': return timerPanel();
+    case 'livetext': return liveTextPanel();
+    case 'agenda': {
+      const src = el('input', { type: 'text', id: 'pSrc', maxLength: 500, spellcheck: false, placeholder: 'https://… or C:\\…\\calendar.ics',
+        onchange: e => { p.source = e.target.value.trim().replace(/^"|"$/g, ''); e.target.value = p.source; api.edited(); } });
+      src.value = p.source || '';
+      host.append(field('Calendar link or file', src, 'pSrc'),
+        el('p', { class: 'muted small', text: 'A calendar link (iCal / .ics, https or webcal) or an .ics file on this PC. It is kept in this theme and fetched every 15 minutes while the item is shown.' }),
+        field('Events', select2('pCnt', String(clamp(p.count || 4, 2, 6)), [2, 3, 4, 5, 6].map(n => [String(n), String(n)]), v => api.set('count', Number(v))), 'pCnt'),
+        swRow('All-day events', p.allDay !== false, v => api.set('allDay', v)),
+        colour('color', 'Colour', '#ffffff'));
+      return true;
+    }
+    case 'ping': {
+      const hostIn = el('input', { type: 'text', id: 'pHost', maxLength: 60, spellcheck: false, placeholder: '1.1.1.1', onchange: e => {
+        const v = e.target.value.trim();
+        p.host = /^[A-Za-z0-9.-]{1,60}$/.test(v) ? v : '1.1.1.1'; e.target.value = p.host; api.edited();
+      } });
+      hostIn.value = p.host || '1.1.1.1';
+      host.append(field('Host', hostIn, 'pHost'),
+        el('p', { class: 'muted small', text: 'Sends one small ping a second to this address while the item is shown.' }),
+        field('Style', select2('pStyle', p.style || 'number', [['number', 'Number'], ['graph', 'Graph']], v => restructure(() => { p.style = v; })), 'pStyle'));
+      if (p.style === 'graph') host.append(field('History (s)', range('pHist', clamp(p.history || 60, 10, 600), 10, 600, 10, v => api.set('history', Math.round(v)), v => String(v)), 'pHist'));
+      return true;
+    }
+    case 'volume':
+      host.append(
+        field('Style', select2('pStyle', p.style || 'bar', [['bar', 'Bar'], ['ring', 'Ring']], v => restructure(() => { p.style = v; })), 'pStyle'),
+        colour('color', 'Colour', '#5ac8ff'));
+      return true;
     default: return false;
   }
 
@@ -162,12 +218,36 @@ export function paintProps(w, host, api, ctx) {
     };
     draw();
     const add = el('button', { type: 'button', class: 'btn secondary', text: 'Add a row', disabled: rows.length >= 8, onclick: () => restructure(() => { rows.push({ metric: 'cpu.load' }); }) });
-    host.append(el('p', { class: 'small muted', text: 'Rows' }), list, el('div', { class: 'row' }, add),
+    const ext = rows.map(r => r.metric).find(m => EXT_METRICS.includes(m));
+    host.append(el('p', { class: 'small muted', text: 'Rows' }), list, ext ? extNote(api, ext) : el('span'), el('div', { class: 'row' }, add),
       swRow('Bars', p.bars !== false, v => api.set('bars', v)));
     if (rows.some(r => r.metric === 'cpu.temp' || r.metric === 'gpu.temp')) {
       host.append(field('Unit', select2('pUnit', p.unit || ctx.tempUnit(), [['C', '°C'], ['F', '°F']], v => api.set('unit', v)), 'pUnit'));
     }
     host.append(rateField());
+    return true;
+  }
+
+  function liveTextPanel() {
+    const t = el('input', { type: 'text', id: 'pText', maxLength: 200, spellcheck: false, oninput: e => { p.text = e.target.value; api.edited(); api.relabel(); } });
+    t.value = typeof p.text === 'string' ? p.text : '';
+    // insert a word where the cursor is
+    const words = el('select', { id: 'pWord', 'aria-label': 'Insert a word', onchange: e => {
+      const word = e.target.value; e.target.value = '';
+      if (!word) return;
+      const a = t.selectionStart ?? t.value.length, b = t.selectionEnd ?? a;
+      t.value = t.value.slice(0, a) + '{' + word + '}' + t.value.slice(b);
+      t.focus(); t.selectionStart = t.selectionEnd = a + word.length + 2;
+      p.text = t.value; api.edited(); api.relabel();
+    } }, [el('option', { value: '', text: 'Insert a word…' }), ...WORDS.map(([id, text]) => el('option', { value: id, text }))]);
+    words.value = '';
+    host.append(
+      field('Text', t, 'pText'), field('Words', words, 'pWord'),
+      field('Size', range('pSize', Math.round(clamp(p.size ?? 0.08, 0.02, 0.3) * 100), 2, 30, 1, v => api.set('size', Math.round(v) / 100), v => v + ' %'), 'pSize'),
+      field('Weight', select2('pWeight', p.weight || 'regular', [['light', 'Light'], ['regular', 'Regular'], ['bold', 'Bold']], v => api.set('weight', v)), 'pWeight'),
+      field('Align', select2('pAlign', p.align || 'left', [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']], v => api.set('align', v)), 'pAlign'),
+      colour('color', 'Colour', '#ffffff'),
+      field('Opacity', range('pOp', Math.round(clamp(p.opacity ?? 1, 0, 1) * 100), 0, 100, 5, v => api.set('opacity', v / 100), v => v + ' %'), 'pOp'));
     return true;
   }
 

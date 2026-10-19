@@ -10,6 +10,8 @@
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
 pub mod effects;
 pub mod encode;
+pub mod extsensors;
+pub mod agenda;
 pub mod audio;
 pub mod fitcal;
 pub mod gif;
@@ -17,6 +19,7 @@ pub mod metrics;
 pub mod morewidgets;
 pub mod mask;
 pub mod nowplaying;
+pub mod ping;
 pub mod pipeline;
 pub mod preview;
 pub mod render;
@@ -24,6 +27,7 @@ pub mod sensors;
 pub mod session;
 pub mod theme;
 pub mod video;
+pub mod volume;
 pub mod weather;
 
 pub use preview::{render_base_overlay, render_preview};

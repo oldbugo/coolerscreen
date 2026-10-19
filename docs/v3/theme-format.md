@@ -320,3 +320,26 @@ nothing moves up and down. Code: `src-tauri/src/live/morewidgets.rs` (props, cle
   theme's current effect key differs from the stored version's (any effect setting, or going back to the picture); widget edits do not count.
 - Live hands over to a matching recording like to any base: cross-fade onto the loop's first frame (the effect at phase 0). With no matching
   recording live stops at once.
+
+## v1.12 (4.5.0, stream B2): more widgets, second batch
+
+More types and metrics, all additive (code: `live/extsensors.rs`, `live/ping.rs`, `live/agenda.rs`, `live/volume.rs`, `live/morewidgets.rs`,
+`render/more.rs`, `public/js/morewidgets.js`).
+
+- New sensor metrics (usable in `sensor` and in `meters` rows): `cpu.power` (W), `cpu.fan` (RPM), `board.temp`, `disk.read` and
+  `disk.write` (bytes/s). `cpu.temp` (reserved since 1.6, always a dash until now) now reads a tool the user already runs:
+  HWiNFO shared memory (`Global\HWiNFO_SENS_SM2`, "Shared Memory Support" on) or LibreHardwareMonitor's web server
+  (`http://127.0.0.1:8085/data.json`). CoolerScreen never installs, starts or elevates either; with neither running the readings stay a
+  grey dash, and the editor says so (`ext_sensor_status` command: `{ source, ok, message }`). The same four tool-backed metrics
+  (`cpu.temp`, `cpu.power`, `cpu.fan`, `board.temp`) are the only ones affected.
+- `network` gets `totals` bool (false): a footer with the data moved since start-up (adapter counters).
+- `livetext`: the `text` widget's props (`text`, `size`, `color`, `opacity`, `align`, `weight`) with `{words}` replaced by live values:
+  time, time12, seconds, date, weekday, cpu, cputemp, cpupower, cpufan, gpu, gputemp, vram, ram, down, up, diskread, diskwrite, uptime,
+  volume. An unknown word stays as typed; a missing value shows a dash. Default text `{time}  CPU {cpu}  GPU {gpu}`.
+- `volume`: `style` "bar"|"ring", `color`. The default playback device's master volume (read only; "Muted" when muted).
+- `ping`: `host` (default "1.1.1.1"; letters, digits, dots, dashes), `style` "number"|"graph", `history` 10-600 s. One ICMP echo per
+  second to that host while the item is shown (at most 3 hosts at once); green under 60 ms, amber to 120, red above or "Timeout".
+- `agenda`: `source` (an https:// or webcal:// calendar link, or the path of an .ics file; empty = nothing chosen), `count` 2-6 (4),
+  `allDay` bool (true), `color`. Link fetched every 15 minutes (file re-read when it changes) only while shown. Recurrence:
+  DAILY / WEEKLY(BYDAY) / MONTHLY / YEARLY with INTERVAL, COUNT, UNTIL, EXDATE. The link is stored in theme.json (it may be a secret
+  address: a future theme-sharing export should drop `agenda.source`).

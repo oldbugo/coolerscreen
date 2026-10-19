@@ -272,9 +272,9 @@ impl Default for Threshold {
 }
 
 /// Metrics a `sensor` widget can show.
-pub const SENSOR_METRICS: [&str; 15] = [
+pub const SENSOR_METRICS: [&str; 20] = [
     "cpu.load", "cpu.core", "cpu.temp", "cpu.clock", "gpu.load", "gpu.temp", "gpu.clock", "gpu.vram", "gpu.power", "gpu.fan", "ram.used", "net.down",
-    "net.up", "disk.used", "disk.activity",
+    "net.up", "disk.used", "disk.activity", "cpu.power", "cpu.fan", "board.temp", "disk.read", "disk.write",
 ];
 pub const SENSOR_STYLES: [&str; 6] = ["number", "bar", "ring", "gauge", "graph", "sparkline"];
 

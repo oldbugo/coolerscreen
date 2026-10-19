@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-pub const TYPES: [&str; 6] = ["meters", "cores", "network", "disks", "worldclock", "timer"];
+pub const TYPES: [&str; 10] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume", "ping", "agenda"];
 
 pub fn is_more(kind: &str) -> bool {
     TYPES.contains(&kind)
@@ -73,6 +73,8 @@ impl Default for CoresProps {
 #[serde(default, rename_all = "camelCase")]
 pub struct NetworkProps {
     pub graph: bool,
+    /// A footer with the data moved since the adapters came up (about: since the PC started).
+    pub totals: bool,
     /// Seconds of history in the graph (10..600).
     pub history: f32,
     /// null = the busiest adapter.
@@ -83,7 +85,7 @@ pub struct NetworkProps {
 }
 impl Default for NetworkProps {
     fn default() -> Self {
-        NetworkProps { graph: true, history: 60.0, adapter: None, down_color: "#5ad2a0".into(), up_color: "#aa8cff".into(), rate: 2 }
+        NetworkProps { graph: true, totals: false, history: 60.0, adapter: None, down_color: "#5ad2a0".into(), up_color: "#aa8cff".into(), rate: 2 }
     }
 }
 
@@ -160,7 +162,125 @@ impl Default for TimerProps {
     }
 }
 
+/// What a new "Live text" says until the user types their own.
+pub const DEFAULT_LIVETEXT: &str = "{time}  CPU {cpu}  GPU {gpu}";
+
+/// Words usable in a live text: (word, what it shows). The editor lists the same words.
+pub const WORDS: [(&str, &str); 19] = [
+    ("time", "Time (24-hour)"),
+    ("time12", "Time (12-hour)"),
+    ("seconds", "Time with seconds"),
+    ("date", "Date"),
+    ("weekday", "Weekday"),
+    ("cpu", "CPU load"),
+    ("cputemp", "CPU temperature"),
+    ("cpupower", "CPU power"),
+    ("cpufan", "CPU fan"),
+    ("gpu", "GPU load"),
+    ("gputemp", "GPU temperature"),
+    ("vram", "GPU memory"),
+    ("ram", "RAM used"),
+    ("down", "Download speed"),
+    ("up", "Upload speed"),
+    ("diskread", "Disk read speed"),
+    ("diskwrite", "Disk write speed"),
+    ("uptime", "Uptime"),
+    ("volume", "Volume"),
+];
+
+/// Replace `{word}` with `value(word)`; a word the resolver does not know is left as typed, a missing value shows a dash.
+pub fn expand(text: &str, mut value: impl FnMut(&str) -> Option<Option<String>>) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('}') {
+            Some(j) if after[..j].chars().all(|c| c.is_ascii_alphanumeric()) && j > 0 => {
+                match value(&after[..j]) {
+                    Some(Some(v)) => out.push_str(&v),
+                    Some(None) => out.push('\u{2013}'),
+                    None => out.push_str(&rest[i..i + j + 2]),
+                }
+                rest = &after[j + 1..];
+            }
+            _ => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VolumeProps {
+    /// "bar" | "ring"
+    pub style: String,
+    pub color: String,
+}
+impl Default for VolumeProps {
+    fn default() -> Self {
+        VolumeProps { style: "bar".into(), color: "#5ac8ff".into() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PingProps {
+    /// The host that is pinged (typed by the user).
+    pub host: String,
+    /// "number" | "graph"
+    pub style: String,
+    /// Seconds of history in the graph (10..600).
+    pub history: f32,
+}
+impl Default for PingProps {
+    fn default() -> Self {
+        PingProps { host: "1.1.1.1".into(), style: "number".into(), history: 60.0 }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgendaProps {
+    /// A calendar link (https:// or webcal://) or the path of an .ics file; empty = nothing chosen yet.
+    pub source: String,
+    /// How many events (2..6).
+    pub count: u32,
+    /// Also list all-day events.
+    pub all_day: bool,
+    pub color: String,
+}
+impl Default for AgendaProps {
+    fn default() -> Self {
+        AgendaProps { source: String::new(), count: 4, all_day: true, color: "#ffffff".into() }
+    }
+}
+
 impl Widget {
+    pub fn agenda(&self) -> AgendaProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn ping(&self) -> PingProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn volume(&self) -> VolumeProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn livetext(&self) -> super::theme::TextProps {
+        let mut p = self.props.clone();
+        if let Some(o) = p.as_object_mut() {
+            o.remove("text");
+        }
+        serde_json::from_value(p).unwrap_or_default()
+    }
+    pub fn livetext_source(&self) -> String {
+        self.props.get("text").and_then(Value::as_str).unwrap_or(DEFAULT_LIVETEXT).chars().take(200).collect()
+    }
     pub fn meters(&self) -> MetersProps {
         serde_json::from_value(self.props.clone()).unwrap_or_default()
     }
@@ -273,6 +393,7 @@ pub fn clean(kind: &str, props: &mut Value) {
         }
         "network" => {
             boolean(o, "graph", true);
+            boolean(o, "totals", false);
             number(o, "history", 60.0, 10.0, 600.0);
             short(o, "adapter", 60, true);
             if o.get("adapter").and_then(Value::as_str) == Some("") {
@@ -316,6 +437,37 @@ pub fn clean(kind: &str, props: &mut Value) {
             o.insert("zones".into(), Value::Array(zones));
             word(o, "format", &["24h", "12h"], "24h");
             colour(o, "color", "#ffffff", false);
+        }
+        "agenda" => {
+            short(o, "source", 500, false);
+            let s = o.get("source").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            // only what the engine can read: a link, or an .ics file path; anything else is dropped
+            let ok = s.is_empty() || super::agenda::classify(&s).is_some();
+            o.insert("source".into(), json!(if ok { s } else { String::new() }));
+            int(o, "count", 4, 2, 6);
+            boolean(o, "allDay", true);
+            colour(o, "color", "#ffffff", false);
+        }
+        "ping" => {
+            let h = o.get("host").and_then(Value::as_str).and_then(super::ping::clean_host).unwrap_or_else(|| "1.1.1.1".into());
+            o.insert("host".into(), json!(h));
+            word(o, "style", &["number", "graph"], "number");
+            number(o, "history", 60.0, 10.0, 600.0);
+        }
+        "volume" => {
+            word(o, "style", &["bar", "ring"], "bar");
+            colour(o, "color", "#5ac8ff", false);
+        }
+        "livetext" => {
+            if !o.get("text").is_some_and(Value::is_string) {
+                o.insert("text".into(), json!(DEFAULT_LIVETEXT));
+            }
+            short(o, "text", 200, false);
+            number(o, "size", 0.08, 0.02, 0.3);
+            colour(o, "color", "#ffffff", false);
+            number(o, "opacity", 1.0, 0.0, 1.0);
+            word(o, "align", &["left", "center", "right"], "left");
+            word(o, "weight", &["light", "regular", "bold"], "regular");
         }
         "timer" => {
             word(o, "mode", &["stopwatch", "timer", "pomodoro"], "stopwatch");
@@ -546,6 +698,44 @@ mod tests {
         let mut p = json!({ "x": 1 });
         clean("clock", &mut p);
         assert_eq!(p, json!({ "x": 1 }));
+    }
+
+    #[test]
+    fn live_words_expand() {
+        let f = |w: &str| match w {
+            "cpu" => Some(Some("34 %".to_string())),
+            "cputemp" => Some(None),
+            _ => None,
+        };
+        assert_eq!(expand("CPU {cpu} {cputemp} {nope} {} { cpu } {unclosed", f), "CPU 34 % \u{2013} {nope} {} { cpu } {unclosed");
+        assert_eq!(expand("no words", f), "no words");
+        assert_eq!(expand("{cpu}{cpu}", f), "34 %34 %");
+        let mut p = json!({ "size": 9, "align": "up" });
+        clean("livetext", &mut p);
+        assert_eq!((p["size"].clone(), p["align"].clone(), p["text"].clone()), (json!(0.3), json!("left"), json!(DEFAULT_LIVETEXT)));
+        let mut p = json!({ "text": "hello {time}" });
+        clean("livetext", &mut p);
+        assert_eq!(p["text"], "hello {time}");
+    }
+
+
+    #[test]
+    fn b2_props_are_cleaned() {
+        let mut p = json!({ "host": "bad host!", "style": "pie", "history": 1 });
+        clean("ping", &mut p);
+        assert_eq!((p["host"].clone(), p["style"].clone(), p["history"].clone()), (json!("1.1.1.1"), json!("number"), json!(10.0)));
+        let mut p = json!({ "host": " example.com " });
+        clean("ping", &mut p);
+        assert_eq!(p["host"], "example.com");
+        for (src, kept) in [("http://x.example/a.ics", false), ("https://x.example/a.ics", true), ("webcal://x.example/a", true), ("C:/a/b.ics", true), ("C:/a/b.txt", false), ("file:///c:/x.ics", false), ("", true)] {
+            let mut p = json!({ "source": src, "count": 99 });
+            clean("agenda", &mut p);
+            assert_eq!(p["source"] == src, kept && !src.is_empty() || src.is_empty(), "{src}");
+            assert_eq!(p["count"], 6);
+        }
+        let mut p = json!({ "style": "square", "color": "nope" });
+        clean("volume", &mut p);
+        assert_eq!((p["style"].clone(), p["color"].clone()), (json!("bar"), json!("#5ac8ff")));
     }
 
     #[test]
