@@ -23,3 +23,40 @@ input[type="checkbox"][role="switch"]:disabled { opacity: .45; cursor: not-allow
 
 /* plain checkboxes (choosing several items) and radios */
 input[type="checkbox"]:not([role="switch"]), input[type="radio"] { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; flex: none; }
+
+/* ---------- buttons: .btn alone = secondary; .primary for the main action; .ghost and .danger; .big for a page's main action ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2); flex: none;
+  height: var(--h-md); padding: 0 var(--s3); border-radius: var(--r-md); white-space: nowrap; cursor: pointer;
+  font-size: var(--fs-body); font-weight: 500; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border-control);
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.btn:hover:not(:disabled) { background: var(--surface-3); }
+.btn.big { height: var(--h-lg); padding: 0 var(--s4); font-weight: 600; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--accent); padding: 0 var(--s2); }
+.btn.ghost:hover:not(:disabled) { background: var(--accent-soft); }
+.btn.danger { background: transparent; color: var(--danger); }
+.btn.danger:hover:not(:disabled) { background: var(--danger-soft); border-color: var(--danger); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.small-btn, .btn.nudge { height: var(--h-sm); padding: 0 var(--s2); font-size: var(--fs-small); }
+.btn.ghost.small-btn { padding: 0 var(--s2); }
+/* an action inside a sentence: looks like a link */
+.btn.inline-btn, .linkbtn {
+  display: inline; height: auto; padding: 0; border: 0; background: none; color: var(--accent);
+  font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.btn.inline-btn:hover:not(:disabled), .linkbtn:hover { background: none; color: var(--accent-hover); }
+
+/* icon-only buttons: always with aria-label + title. .icon-btn = the bordered version that sits next to an input */
+.iconbtn, .icon-btn {
+  display: inline-grid; place-items: center; flex: none; width: var(--h-md); height: var(--h-md); padding: 0;
+  border-radius: var(--r-md); border: 1px solid transparent; background: transparent; color: var(--text-muted); cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.icon-btn { border-color: var(--border-control); background: var(--surface-2); color: var(--text); }
+.iconbtn:hover:not(:disabled), .icon-btn:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.iconbtn:disabled, .icon-btn:disabled { opacity: .35; cursor: default; }
+.iconbtn svg, .icon-btn svg, .btn svg { flex: none; }
