@@ -1,14 +1,18 @@
 # Start a QUIET CoolerScreen test instance for UI screenshots (never visible, never focused, fake screen).
-#   powershell -ExecutionPolicy Bypass -File tools\ui-shots\run.ps1 -Exe <debug coolerscreen.exe> -Scratch <folder> [-Port 9333] [-Fake winusb]
+#   powershell -ExecutionPolicy Bypass -File tools\ui-shots\run.ps1 -Exe <debug coolerscreen.exe> -Scratch <folder> [-Port 9371] [-Fake winusb]
 # Prints the process id; stop it with Stop-Process -Id <id>. Needs a debug build (COOLERSCREEN_MULTI only works there).
 param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [Parameter(Mandatory = $true)][string]$Scratch,
-  [int]$Port = 9333,
+  [int]$Port = 9371,
   [string]$Fake = 'winusb',
   [string]$HomeDir = 'home',
   [string]$Gallery = 'gallery'
 )
+# Another session's test app may already use this debug port; a script would then drive the wrong app. Refuse.
+if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
+  throw "Port $Port is already in use (another test app?). Pick another -Port."
+}
 $env:COOLERSCREEN_FAKE_DEVICE = $Fake
 $env:COOLERSCREEN_MULTI = '1'
 $env:COOLERSCREEN_TEST_QUIET = '1'
