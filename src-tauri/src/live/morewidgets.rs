@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-pub const TYPES: [&str; 10] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume", "ping", "agenda"];
+pub const TYPES: [&str; 13] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume", "ping", "agenda", "progress", "sunmoon", "todo"];
 
 pub fn is_more(kind: &str) -> bool {
     TYPES.contains(&kind)
@@ -303,7 +303,7 @@ impl Widget {
 
 // ---------------------------------------------------------------- cleaning
 
-fn word(o: &mut Map<String, Value>, key: &str, ok: &[&str], dflt: &str) {
+pub(crate) fn word(o: &mut Map<String, Value>, key: &str, ok: &[&str], dflt: &str) {
     let v = match o.get(key).and_then(Value::as_str) {
         Some(s) if ok.contains(&s) => s.to_string(),
         _ => dflt.to_string(),
@@ -311,7 +311,7 @@ fn word(o: &mut Map<String, Value>, key: &str, ok: &[&str], dflt: &str) {
     o.insert(key.into(), json!(v));
 }
 
-fn colour(o: &mut Map<String, Value>, key: &str, dflt: &str, nullable: bool) {
+pub(crate) fn colour(o: &mut Map<String, Value>, key: &str, dflt: &str, nullable: bool) {
     let ok = |s: &str| s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit());
     let v = match o.get(key).and_then(Value::as_str) {
         Some(s) if ok(s) => json!(s.to_lowercase()),
@@ -321,22 +321,22 @@ fn colour(o: &mut Map<String, Value>, key: &str, dflt: &str, nullable: bool) {
     o.insert(key.into(), v);
 }
 
-fn number(o: &mut Map<String, Value>, key: &str, dflt: f64, lo: f64, hi: f64) {
+pub(crate) fn number(o: &mut Map<String, Value>, key: &str, dflt: f64, lo: f64, hi: f64) {
     let x = o.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(dflt).clamp(lo, hi);
     o.insert(key.into(), json!(x));
 }
 
-fn int(o: &mut Map<String, Value>, key: &str, dflt: i64, lo: i64, hi: i64) {
+pub(crate) fn int(o: &mut Map<String, Value>, key: &str, dflt: i64, lo: i64, hi: i64) {
     let x = o.get(key).and_then(Value::as_f64).filter(|x| x.is_finite()).map(|x| x.round() as i64).unwrap_or(dflt).clamp(lo, hi);
     o.insert(key.into(), json!(x));
 }
 
-fn boolean(o: &mut Map<String, Value>, key: &str, dflt: bool) {
+pub(crate) fn boolean(o: &mut Map<String, Value>, key: &str, dflt: bool) {
     let b = o.get(key).and_then(Value::as_bool).unwrap_or(dflt);
     o.insert(key.into(), json!(b));
 }
 
-fn short(o: &mut Map<String, Value>, key: &str, max: usize, nullable: bool) {
+pub(crate) fn short(o: &mut Map<String, Value>, key: &str, max: usize, nullable: bool) {
     let v = match o.get(key) {
         Some(Value::String(s)) => json!(s.chars().take(max).collect::<String>()),
         _ if nullable => Value::Null,
@@ -458,6 +458,9 @@ pub fn clean(kind: &str, props: &mut Value) {
             word(o, "style", &["bar", "ring"], "bar");
             colour(o, "color", "#5ac8ff", false);
         }
+        "progress" => super::progress::clean(o),
+        "sunmoon" => super::sunmoon::clean(o),
+        "todo" => super::todo::clean(o),
         "livetext" => {
             if !o.get("text").is_some_and(Value::is_string) {
                 o.insert("text".into(), json!(DEFAULT_LIVETEXT));
