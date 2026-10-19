@@ -821,4 +821,26 @@ mod tests {
         let (r, _) = h.read("disk.read", 4);
         eprintln!("disk read now: {r:?}");
     }
+
+    #[test]
+    fn b2_widgets_draw_in_every_option() {
+        let t = theme(&[
+            ("livetext", 0.02, 0.03, 0.5, 0.1, json!({ "text": "{time}  CPU {cpu} {cputemp}  GPU {gpu} {gputemp}  {nope} {down}", "weight": "bold" })),
+            ("volume", 0.02, 0.16, 0.22, 0.16, json!({})),
+            ("volume", 0.26, 0.16, 0.14, 0.34, json!({ "style": "ring", "color": "#ff9900" })),
+            ("ping", 0.02, 0.36, 0.22, 0.2, json!({})),
+            ("ping", 0.02, 0.58, 0.3, 0.38, json!({ "style": "graph", "host": "example.com" })),
+            ("agenda", 0.42, 0.16, 0.34, 0.36, json!({ "count": 5 })),
+            ("agenda", 0.42, 0.56, 0.34, 0.18, json!({ "source": "" })),
+            ("meters", 0.78, 0.03, 0.2, 0.5, json!({ "rows": [{ "metric": "cpu.temp" }, { "metric": "cpu.power" }, { "metric": "cpu.fan" }, { "metric": "board.temp" }, { "metric": "disk.read" }, { "metric": "disk.write" }] })),
+            ("network", 0.36, 0.76, 0.4, 0.22, json!({ "totals": true })),
+        ]);
+        dump("b2", &crate::live::render_preview(&t, 1200, 540, true).unwrap());
+        let mut tiny = t.clone();
+        tiny.theme.widgets.iter_mut().for_each(|x| {
+            x.w = 0.02;
+            x.h = 0.02;
+        });
+        crate::live::render_preview(&tiny, 320, 144, true).unwrap();
+    }
 }
