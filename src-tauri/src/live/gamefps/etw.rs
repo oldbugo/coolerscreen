@@ -23,60 +23,7 @@ use std::time::{Duration, Instant};
 use windows::core::{GUID, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_SUCCESS};
 use windows::Win32::System::Diagnostics::Etw::*;
-
-// The windows crate gates OpenTraceW / EVENT_TRACE_LOGFILEW behind `Win32_System_Time` and QueryPerformance* behind
-// `Win32_System_Performance` (not enabled in Cargo.toml), so the few items needed are declared by hand (x64 layouts copied from
-// the windows-0.62 definitions; TIME_ZONE_INFORMATION is opaque: 172 bytes, align 4).
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct TraceLogfileHeader {
-    buffer_size: u32,
-    version: u32,
-    provider_version: u32,
-    number_of_processors: u32,
-    end_time: i64,
-    timer_resolution: u32,
-    maximum_file_size: u32,
-    log_file_mode: u32,
-    buffers_written: u32,
-    anonymous2: [u32; 4],
-    logger_name: PWSTR,
-    log_file_name: PWSTR,
-    time_zone: [u32; 43],
-    boot_time: i64,
-    perf_freq: i64,
-    start_time: i64,
-    reserved_flags: u32,
-    buffers_lost: u32,
-}
-
-#[repr(C)]
-struct EventTraceLogfileW {
-    log_file_name: PWSTR,
-    logger_name: PWSTR,
-    current_time: i64,
-    buffers_read: u32,
-    process_trace_mode: u32,
-    current_event: EVENT_TRACE,
-    logfile_header: TraceLogfileHeader,
-    buffer_callback: Option<unsafe extern "system" fn(*mut c_void) -> u32>,
-    buffer_size: u32,
-    filled: u32,
-    events_lost: u32,
-    event_record_callback: Option<unsafe extern "system" fn(*mut EVENT_RECORD)>,
-    is_kernel_trace: u32,
-    context: *mut c_void,
-}
-
-#[link(name = "advapi32")]
-extern "system" {
-    fn OpenTraceW(logfile: *mut EventTraceLogfileW) -> PROCESSTRACE_HANDLE;
-}
-#[link(name = "kernel32")]
-extern "system" {
-    fn QueryPerformanceCounter(count: *mut i64) -> i32;
-    fn QueryPerformanceFrequency(freq: *mut i64) -> i32;
-}
+use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 pub const SESSION_NAME: &str = "CoolerScreen-GameFPS";
 
@@ -292,12 +239,12 @@ impl EtwSession {
         // SAFETY: zeroed EVENT_TRACE_LOGFILEW is a valid "empty" value; the name buffer outlives OpenTraceW (which copies it
         // into the trace handle's state).
         let trace = unsafe {
-            let mut lf: EventTraceLogfileW = std::mem::zeroed();
-            lf.logger_name = PWSTR(logname.as_mut_ptr());
-            lf.process_trace_mode =
+            let mut lf: EVENT_TRACE_LOGFILEW = std::mem::zeroed();
+            lf.LoggerName = PWSTR(logname.as_mut_ptr());
+            lf.Anonymous1.ProcessTraceMode =
                 PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
-            lf.event_record_callback = Some(callback);
-            lf.context = ctx as *mut c_void;
+            lf.Anonymous2.EventRecordCallback = Some(callback);
+            lf.Context = ctx as *mut c_void;
             OpenTraceW(&mut lf).Value
         };
         if trace == u64::MAX || trace == 0 {
