@@ -23,6 +23,21 @@ pub fn free_blocks(info: &Value) -> Option<(f64, f64)> {
     Some((free, if bs.is_finite() && bs > 0.0 { bs } else { 512.0 }))
 }
 
+/// SHA-1 of a file, read in pieces (what identifies a stored clip).
+pub fn file_hash(p: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(p)?;
+    let mut h = sha1_smol::Sha1::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            return Ok(h.digest().to_string());
+        }
+        h.update(&buf[..n]);
+    }
+}
+
 /// Did the free space move by more than the tolerance since the baseline?
 pub fn differs(baseline_free: f64, now_free: f64) -> bool {
     (baseline_free - now_free).abs() > TOLERANCE_BLOCKS
@@ -49,6 +64,31 @@ impl App {
             }
             Some(_) => {}
         }
+    }
+
+    /// Is the loop about to be stored exactly what the screen holds? Some(final info) only when everything agrees: the loop slot's
+    /// record is complete, the same size and the same content (hash; records from before hashes existed count only when they name
+    /// this very version), no outside change is open, a baseline exists, and a fresh read-only info check shows the same free
+    /// space as the baseline taken after our last store. Anything else (or a failed read) is None: send.
+    pub(crate) fn already_on_screen(&self, vid: &str, size: u64, hash: &str) -> Option<Value> {
+        let s = self.settings.load();
+        let slot = s.slot("standby")?;
+        if js::truthy(slot.get("incomplete")) || slot["size"].as_u64()? != size {
+            return None;
+        }
+        if s.0.get("screenChanged").is_some_and(|c| c.is_object()) {
+            return None;
+        }
+        let base = s.0.get("screenBaseline")?["free"].as_f64()?;
+        match slot["hash"].as_str() {
+            Some(h) if h != hash => return None,
+            Some(_) => {}
+            None if slot["versionId"].as_str() != Some(vid) => return None,
+            None => {}
+        }
+        let info = self.device.read_info().ok()?;
+        let (free, _) = free_blocks(&info)?;
+        (!differs(base, free)).then_some(info)
     }
 
     /// The app just stored something and checked the screen afterwards: that is the new baseline and nothing is open.

@@ -1331,7 +1331,7 @@ fn a_check_flags_screen_content_changed_outside_the_app() {
     app.device_check().unwrap();
     assert!(flagged(&app).is_null());
     // a store whose final check failed drops the baseline; the next check starts over without a false alarm
-    app.device.fake_set_free(100);
+    app.device.fake_set_free(4700);
     app.rebase_screen(None);
     app.device_check().unwrap();
     assert!(flagged(&app).is_null());
@@ -1410,4 +1410,52 @@ fn previewing_a_theme_saves_nothing_and_ends_cleanly() {
     assert!(!app.live.previewing() && !app.live.running(), "Live was off: the temporary stream is gone");
     assert_eq!(app.preview_end_on_screen()["ended"], json!(false));
     assert_eq!(std::fs::read(app.settings.file()).unwrap(), settings_before);
+}
+
+#[test]
+fn an_identical_clip_is_not_sent_again_but_anything_doubtful_is() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Same twice.mp4");
+    let apply = |app: &App| {
+        let r = app.theme_apply(&oid).unwrap();
+        let j = wait_job(app, r["jobId"].as_str().unwrap());
+        assert_eq!(j["state"], "done", "{j}");
+        j
+    };
+    let uploads = |app: &App| app.sched.activity(0).into_iter().filter(|j| j.kind == "send").count();
+    let j1 = apply(&app);
+    assert_eq!(j1["result"]["alreadyOnScreen"], json!(false), "the first store sends");
+    let vid = j1["result"]["versionId"].as_str().unwrap().to_string();
+    let slot = app.settings.load().slot("standby").cloned().unwrap();
+    assert!(slot["hash"].is_string(), "the slot remembers the content hash: {slot}");
+    // the same clip again, screen unchanged: finished at once, nothing sent
+    let before = std::time::Instant::now();
+    let j2 = apply(&app);
+    assert_eq!(j2["result"]["alreadyOnScreen"], json!(true));
+    assert_eq!(j2["result"]["versionId"], json!(vid));
+    assert!(before.elapsed() < Duration::from_secs(3), "no upload happened: {:?}", before.elapsed());
+    assert_eq!(j2["message"], json!("Already on the screen"));
+    assert_eq!(app.live_theme_oid().as_deref(), Some(oid.as_str()));
+    let _ = uploads(&app);
+    // the screen's free space moved (something else wrote to it): send
+    app.device.fake_set_free(4700);
+    assert_eq!(apply(&app)["result"]["alreadyOnScreen"], json!(false), "a different free space means we cannot know: send");
+    app.device.fake_set_free(4880);
+    // after that store the baseline is the new free space; same again skips
+    assert_eq!(apply(&app)["result"]["alreadyOnScreen"], json!(false), "free space differs from the new baseline (4700 vs 4880): send");
+    assert_eq!(apply(&app)["result"]["alreadyOnScreen"], json!(true));
+    // an open "changed outside" note, an incomplete record, or a missing baseline: send
+    app.settings.update(|s| s["screenChanged"] = json!({ "was": 1, "now": 2, "blockSize": 512, "at": "x" })).unwrap();
+    // (storing clears the open note, so check the guard itself)
+    let h = slot["hash"].as_str().unwrap();
+    assert!(app.already_on_screen(&vid, slot["size"].as_u64().unwrap(), h).is_none());
+    app.settings.update(|s| { s.as_object_mut().unwrap().remove("screenChanged"); }).unwrap();
+    assert!(app.already_on_screen(&vid, slot["size"].as_u64().unwrap(), h).is_some());
+    assert!(app.already_on_screen(&vid, slot["size"].as_u64().unwrap() + 1, h).is_none(), "another size");
+    assert!(app.already_on_screen(&vid, slot["size"].as_u64().unwrap(), "0000").is_none(), "another content");
+    app.settings.patch_slot("standby", &json!({ "incomplete": true })).unwrap();
+    assert!(app.already_on_screen(&vid, slot["size"].as_u64().unwrap(), h).is_none(), "an interrupted store is never trusted");
+    app.settings.patch_slot("standby", &json!({ "incomplete": false })).unwrap();
+    app.settings.update(|s| { s.as_object_mut().unwrap().remove("screenBaseline"); }).unwrap();
+    assert!(app.already_on_screen(&vid, slot["size"].as_u64().unwrap(), h).is_none(), "no baseline: send");
 }

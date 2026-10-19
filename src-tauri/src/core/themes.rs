@@ -658,13 +658,13 @@ impl App {
         if sent.is_err() {
             target_clear(&vid);
         }
-        sent?;
+        let skipped = sent?["skipped"] == json!(true);
         // done: the slot names this theme (live follows it unless another theme was chosen with "Use this theme")
         ctx.progress(SEND_END, "Step 2 of 2: Storing as Embedded");
         self.after_base_sent(&vid);
         target_clear(&vid);
-        ctx.progress(1.0, "Done");
-        Ok(json!({ "originalId": oid, "versionId": vid }))
+        ctx.progress(1.0, if skipped { "Already on the screen" } else { "Done" });
+        Ok(json!({ "originalId": oid, "versionId": vid, "alreadyOnScreen": skipped }))
     }
 
     /// Store a theme as Embedded: make its base picture and write it to the screen. Returns `{ jobId }`.

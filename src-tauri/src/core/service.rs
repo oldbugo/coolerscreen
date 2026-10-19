@@ -717,6 +717,8 @@ impl App {
                 mb(budget)
             )));
         }
+        // Content hash: recorded with the loop slot, and what lets an identical clip be recognised (A4: skip identical sends).
+        let hash = super::outside::file_hash(&file).ok();
         let mut items: Vec<(PathBuf, Slot)> = vec![];
         let cur = self.settings.load().slot("startup").cloned();
         let sp = match self.splash(tctx) {
@@ -733,11 +735,26 @@ impl App {
             }
         }
         items.push((file, Slot::Standby));
+        // Already what the screen holds (and the screen agrees): nothing to send. The 10 MB upload takes minutes; when unsure it is sent.
+        if items.len() == 1 {
+            if let Some(info) = hash.as_deref().and_then(|h| self.already_on_screen(vid, size, h)) {
+                crate::device::log(&format!("send skipped: {vid} is already on the screen (same content, same free space)"));
+                tctx.progress_bytes(1.0, "Already on the screen", size, size);
+                let name = o.as_ref().and_then(|o| o["name"].as_str()).unwrap_or("(deleted clip)").to_string();
+                let label = if truthy(v.get("label")) { v["label"].as_str().unwrap_or("").to_string() } else { format!("v{}", js::fmt(v["n"].as_f64().unwrap_or(0.0))) };
+                // the slot now names this version (identical content may come from another version of the same clip)
+                let _ = self.settings.record_slot("standby", Some(json!({ "name": name, "size": size, "originalId": oid, "versionId": vid, "label": label, "hash": hash })));
+                self.after_base_sent(vid);
+                self.rebase_screen(Some(&info));
+                self.lib.bump();
+                return Ok(json!({ "ok": true, "skipped": true, "versionId": vid, "name": name, "label": label, "finalInfo": info }));
+            }
+        }
         let sizes: Vec<u64> = items.iter().map(|(f, _)| std::fs::metadata(f).map(|m| m.len()).unwrap_or(0)).collect();
         let bytes_total: u64 = sizes.iter().sum();
         let name = o.as_ref().and_then(|o| o["name"].as_str()).unwrap_or("(deleted clip)").to_string();
         let label = if truthy(v.get("label")) { v["label"].as_str().unwrap_or("").to_string() } else { format!("v{}", js::fmt(v["n"].as_f64().unwrap_or(0.0))) };
-        let record = json!({ "name": name, "size": size, "originalId": oid, "versionId": vid, "label": label });
+        let record = json!({ "name": name, "size": size, "originalId": oid, "versionId": vid, "label": label, "hash": hash });
         let started = std::time::Instant::now();
         let n = items.len();
         let mut loop_started = false;

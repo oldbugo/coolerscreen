@@ -171,6 +171,11 @@ impl DeviceService {
         v
     }
 
+    /// One read-only info answer, never restarting the screen (the skip-identical-send check: when this fails the caller just sends).
+    pub fn read_info(&self) -> CoreResult<Value> {
+        self.check_once()
+    }
+
     fn check_once(&self) -> CoreResult<Value> {
         if self.fake.is_some() {
             self.fsleep(600);
