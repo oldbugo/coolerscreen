@@ -3,6 +3,7 @@ import { W, H, frameGeometry, fitZoom, bandPx, styleNotch, makeCornersOverlay, s
 import { openDialog } from './js/dialog.js';
 import './js/titlebar.js';
 import { icon, upgradeGlyphs } from './js/icons.js';
+import { initSettingsNav } from './js/settingsnav.js';
 import { backend } from './js/backend.js';
 import { createBandSlider } from './js/bandslider.js';
 import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
@@ -2809,6 +2810,7 @@ initApply({ call, backend, plainWait });
 
 // ---------- start ----------
 upgradeGlyphs();
+initSettingsNav();
 (async function init() {
   // Opens on the view chosen last time (On screen by default); with nothing on the screen yet, on My themes (or Browse).
   const stored = lsGet(HOME_KEY);

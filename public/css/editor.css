@@ -41,3 +41,16 @@
   .ed { grid-template-columns: 196px minmax(0, 1fr) 248px; }
   .ed-center { padding: var(--s3) var(--s4) var(--s4); }
 }
+
+/* Properties (and Theme settings): one field pattern. Label above, control full width; two short numbers side by side
+   in .props-grid; a value with its reset in .inline-ctl; sections divided by hr.sep + h3 (ui-style-guide.md 4). */
+.ed-right h3 { margin-bottom: var(--s3); }
+.ed-right .field input[type="number"], .ed-right .field input[type="text"], .ed-right .field select, .ed-right .field textarea { width: 100%; }
+.ed-right .inline-ctl input[type="number"], .ed-right .inline-ctl input[type="text"] { flex: 1; width: auto; min-width: 0; }
+.ed-right .row.between { margin: 0 0 var(--s2); }
+.ed-right .row.between h3 { margin: 0; }
+.ed-right .off-row { grid-template-columns: minmax(0, 1fr) 96px; }
+.ed-right .sw-row label { color: var(--text); }
+.ed-right .sep { margin: var(--s4) 0; }
+.ed-right .seg { margin-bottom: var(--s3); }
+.ed-right .hint { margin: calc(-1 * var(--s2)) 0 var(--s3); }

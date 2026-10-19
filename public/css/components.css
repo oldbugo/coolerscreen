@@ -67,3 +67,13 @@ svg.ico { display: block; flex: none; }
 
 /* ---------- scrollbars: thin and dark everywhere ---------- */
 * { scrollbar-width: thin; scrollbar-color: var(--border-control) transparent; }
+
+/* ---------- Settings drawer: section index under the title ---------- */
+.drawer-index { display: flex; flex-wrap: wrap; gap: var(--s1); padding: var(--s3) var(--s5); border-bottom: 1px solid var(--border); background: var(--surface-1); }
+.chip-link { height: 24px; padding: 0 var(--s2); border-radius: var(--r-full); border: 1px solid var(--border); background: transparent; color: var(--text-muted); font-size: var(--fs-tiny); cursor: pointer; white-space: nowrap; }
+.chip-link:hover { color: var(--text); border-color: var(--border-control); }
+.chip-link.on { color: var(--text); background: var(--surface-3); border-color: var(--border-control); }
+.drawer-body section { padding: var(--s4) 0 var(--s5); scroll-margin-top: 0; }
+.drawer-body section h3 { margin-bottom: var(--s3); }
+.drawer-body .field select { min-width: 200px; }
+.drawer-body .src-row:first-of-type { border-top: 0; }
