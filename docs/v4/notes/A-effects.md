@@ -72,3 +72,46 @@ targets use plain loops). That made them about 5 times faster without touching t
 - Behaviour with a screen fit and shift on live frames beyond the unit test (effects fill the visible rectangle; tested with a
   shifted rectangle).
 - The preview in the editor shows one fixed moment (phase 0.3), it does not animate.
+
+## A2: the Embedded face of an effect theme
+
+**What it does.** "Update Embedded" / "Store as Embedded" / "Use and store as Embedded" on an effect theme now records one loop of the
+effect and stores it on the screen through the normal path (same job, same two steps; step 1 first says "Recording the effect").
+Nothing new is ever sent to the device: the stored file is the ordinary MJPEG base, 4:2:0, portrait, from the usual conversion with the
+screen fit, corners, notch, `onBase` text and pictures and the "best that fits" quality search against the flash budget. No
+`0x05`, `0x0C` or `0x23` anywhere.
+
+- **Recording** (`live/effects/record.rs`): frames at phase i/N for i in 0..N, N = loop seconds x 18 (the screen's rate), rendered at the
+  2400x1080 design size and piped to ffmpeg as a high quality MJPEG intermediate in `<theme folder>/effect/loop-<key>-<N>.mkv`
+  (cached; old recordings of the theme are deleted after a successful store).
+- **Version**: `create_version` takes `effect: { key, file, length }` (the clip replaces the original's file as the source; start 0, length
+  = the whole loop, blend 0). The version remembers `effect.key`; `run_version` converts from the recorded clip (and probes it). Library
+  duplicate detection includes the effect key.
+- **Fits the screen**: if the loop is longer than the auto maximum (`max_seconds`) or still too big at the lowest quality, it is recorded
+  played faster (1.5x, 2x, 3x, 4x, 6x) until it fits; the live effect keeps its own speed.
+- **Stale** (standing rule): `Params::key()` (settings + `RENDER_VERSION`) is compared with the stored version's `effect.key`; any effect
+  change, or switching back to the picture, sets `baseStale` ("Embedded is out of date (effect/...)") exactly like a corner or fit
+  change; live-only changes (widgets) do not. Bump `RENDER_VERSION` if an effect's drawing is improved.
+- **Hand-over**: when the stored loop matches (`ThemeLive.effect_stored`), stopping live cross-fades to the effect at phase 0, which is the
+  loop's first frame, drawn by the engine (no decoder); otherwise (no recording yet, or the effect changed) it stops at once as in A1.
+- **Editor preview animates**: the editor redraws the preview about 2.5 times a second at the effect's own pace while an effect theme
+  is showing and nothing is being edited (`theme_preview` takes an optional `phase`; the timer is in `themes.js`).
+
+**Verified (A2)**
+- `cargo test --release --lib -- --test-threads=4`: 242 passed. New: app-level test with the fake screen (record, store, version carries
+  the key, not stale, live-only change keeps it, effect change makes it stale and `effect_stored` false, store again makes a second
+  version, same effect reuses it, switching to the picture is stale, one recording kept); recording and stopping a recording; frame counts;
+  preview at a phase; hand-over fade for a stored effect; `Params::key`-driven reuse.
+- **Real conversion** (`cargo test --release --lib the_converted_loop_joins_up -- --ignored --nocapture`): every effect recorded at speed 2
+  (90 frames), converted with the real engine and an 8 MB budget: 90 frames out, size at or under the budget (aurora 7.9 MB,
+  plasma 7.5 MB, drift 2.5 MB, clouds 7.9 MB), and the step from the last frame back to the first is no bigger than the steps inside the clip
+  (aurora seam 2.3 vs steps up to 2.8, plasma 3.7 vs 4.7, drift 0.4 vs 0.5, clouds 7.7 vs 7.9).
+- JS checked with `node --check`; the editor was not run in the real app.
+
+**Not verified (A2)**
+- Storing an effect to the real screen (the PM does the device check); how the 18 fps stored loop looks next to the 60 fps live version on
+  the panel, and the cross-fade at hand-over on hardware.
+- The animated editor preview in the real app (timing, flicker); the Embedded banners in the real UI.
+- Default speed 1 gives a 180-frame loop; whether the real budget makes the app speed those loops up depends on the user's screen
+  measurements (the conversion loop handles it, tested only with the 8 MB case above).
+

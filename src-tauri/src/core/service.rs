@@ -106,6 +106,7 @@ impl App {
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
             "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(), "weather": s.weather_value(),
+            "screenChanged": self.screen_changed_value(),
             "budget": num(b.loop_bytes), "total": num(b.total), "budgetMeasured": b.measured, "capacityAt": b.capacity_at,
             "uploadRate": s.upload_rate().map(num).unwrap_or(json!(50000)),
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
@@ -124,6 +125,9 @@ impl App {
         let guides = body.get("screenGuides").filter(|g| g.is_object()).map(|g| super::settings::guides_value(&crate::live::theme::Guides::from_value(g)));
         let snap = body.get("editor").and_then(|e| e["snap"].as_bool());
         let w_unit = body.get("weather").and_then(|w| w["unit"].as_str()).filter(|u| *u == "C" || *u == "F").map(String::from);
+        if body.get("screenChanged").and_then(Value::as_str) == Some("accept") {
+            self.accept_screen_change();
+        }
         let fit_patch = body.get("screenFit").filter(|f| f.is_object()).cloned();
         self.settings.update(|s| {
             if let Some(r) = radius {
@@ -332,7 +336,12 @@ impl App {
 
     fn encode_req(&self, oid: &str, o: &Value, st: &Value, ctx: &super::library::Ctx) -> CoreResult<EncodeReq> {
         let src = self.lib.source_path(o).ok_or_else(|| CoreError::new("The original file is missing."))?;
-        Ok(EncodeReq {
+        Ok(self.encode_req_from(oid, src, probe_of(o), st, ctx))
+    }
+
+    /// The conversion request for a given source file (the original's, or an effect theme's recorded loop).
+    fn encode_req_from(&self, oid: &str, src: PathBuf, info: ProbeInfo, st: &Value, ctx: &super::library::Ctx) -> EncodeReq {
+        EncodeReq {
             file: src,
             dir: self.lib.o_dir(oid),
             start: st["start"].as_f64().unwrap_or(0.0),
@@ -345,9 +354,9 @@ impl App {
             blend: st["blend"].as_f64().unwrap_or(0.0),
             budget_bytes: ctx.budget.max(0.0) as u64,
             max_seconds: ctx.max_seconds,
-            info: probe_of(o),
+            info,
             overlay: None,
-        })
+        }
     }
 
     /// The size meter: superseded requests for the same clip return `{ stale: true }`.
@@ -575,16 +584,30 @@ impl App {
     fn run_version(&self, tctx: &super::scheduler::TaskCtx, vid: &str) -> CoreResult<Value> {
         let (oid, v) = self.lib.find_version(vid).ok_or_else(|| CoreError::new("This version was deleted."))?;
         let o = self.lib.read_original(&oid).ok_or_else(|| CoreError::new("This version was deleted."))?;
-        if self.lib.source_path(&o).is_none() {
+        // an effect theme's version is converted from the recorded loop clip, not from the original's file
+        let eff_file = v["effect"]["file"].as_str().map(PathBuf::from);
+        if eff_file.is_none() && self.lib.source_path(&o).is_none() {
             self.lib.patch_version(vid, &json!({ "status": "error", "error": "The original file is missing." }))?;
             return Err(CoreError::new("The original file is missing."));
+        }
+        if let Some(f) = eff_file.as_ref().filter(|f| !f.is_file()) {
+            let _ = f;
+            let msg = "The recorded effect clip is missing. Update Embedded to record it again.";
+            self.lib.patch_version(vid, &json!({ "status": "error", "error": msg }))?;
+            return Err(CoreError::new(msg));
         }
         let ctx = self.lib.context();
         self.lib.patch_version(vid, &json!({ "status": "converting", "error": null }))?;
         let st = effective_settings(&v);
         let mut c2 = ctx.clone();
         c2.mask = v.get("notch").cloned().unwrap_or(ctx.mask.clone());
-        let mut req = self.encode_req(&oid, &o, &st, &c2)?;
+        let mut req = match eff_file {
+            Some(f) => {
+                let info = self.media.probe(tctx, &f)?;
+                self.encode_req_from(&oid, f, info, &st, &c2)
+            }
+            None => self.encode_req(&oid, &o, &st, &c2)?,
+        };
         if let Some(f) = v["overlay"]["file"].as_str() {
             if !std::path::Path::new(f).is_file() {
                 let msg = "The text and pictures for this base are missing. Update Embedded to make them.";
@@ -766,9 +789,11 @@ impl App {
             self.settings.update(|s| s["uploadRate"] = num(rate))?;
         }
         // Measured capacity from the final check (free blocks + what our two clips now occupy).
-        if let Some(info) = r.get("finalInfo").filter(|i| i.is_object()) {
+        let final_info = r.get("finalInfo").filter(|i| i.is_object());
+        if let Some(info) = final_info {
             self.save_capacity(info);
         }
+        self.rebase_screen(final_info); // what the screen reports now is what we stored: the baseline for the outside-change check
         self.lib.bump();
         let mut out = r.as_object().cloned().unwrap_or_default();
         out.insert("versionId".into(), json!(vid));
@@ -844,6 +869,7 @@ impl App {
             app.device.check(&mut |p, m| ctx.progress(p, m))
         })?;
         *self.last_info.lock().unwrap() = Some(info.clone());
+        self.note_screen_info(&info);
         let cap = self.save_capacity(&info);
         info["_capacity"] = cap.map(num).unwrap_or(Value::Null);
         Ok(info)

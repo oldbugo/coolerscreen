@@ -64,6 +64,12 @@ fn preview_background(t: &ThemeLive) -> Option<Arc<Vec<u8>>> {
 /// No notch mask is drawn (the app overlays its own). Takes well under 150 ms at 1280x576 once the background's first frame
 /// is cached (the first call per clip runs ffmpeg once, 100-300 ms).
 pub fn render_preview(t: &ThemeLive, w: u32, h: u32, with_live: bool) -> Result<Vec<u8>, String> {
+    render_preview_at(t, w, h, with_live, None)
+}
+
+/// `render_preview` with the loop phase an effect background is drawn at (None = the usual still moment); the editor steps it to
+/// animate the effect.
+pub fn render_preview_at(t: &ThemeLive, w: u32, h: u32, with_live: bool, phase: Option<f64>) -> Result<Vec<u8>, String> {
     let (w, h) = (w.clamp(16, 4096), h.clamp(16, 4096));
     let with_live = with_live && t.theme.live_layer;
     let mut theme = t.clone();
@@ -74,7 +80,7 @@ pub fn render_preview(t: &ThemeLive, w: u32, h: u32, with_live: bool) -> Result<
     r.set_sample_mode(true);
     r.set_theme(theme);
     if t.theme.effect().is_some() {
-        r.set_effect_phase(Some(PREVIEW_PHASE)); // the effect draws itself: no first frame to decode
+        r.set_effect_phase(Some(phase.filter(|p| p.is_finite()).unwrap_or(PREVIEW_PHASE))); // the effect draws itself: no first frame to decode
     } else {
         r.set_still_background(preview_background(t));
     }

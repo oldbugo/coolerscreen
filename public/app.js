@@ -139,6 +139,12 @@ function renderBanners() {
     el('button', { class: 'btn primary', text: 'Restart screen', onclick: runRestart }));
   if (st === 'busy') add('warn', S.screen.error || 'Something else is using the screen.',
     el('button', { class: 'btn secondary', text: 'Try again', onclick: () => checkScreen() }));
+  const sc = S.app && S.app.screenChanged;
+  if (sc) {
+    const mb = b => (b / 1e6).toFixed(1) + ' MB';
+    add('warn', `The screen changed since CoolerScreen last stored Embedded (free space ${mb(sc.wasFree)} then, ${mb(sc.nowFree)} now). Another program may have written to it.`,
+      el('button', { class: 'btn secondary', text: 'It’s fine', title: 'Treat what is on the screen now as correct', onclick: async () => { try { S.app = await call('settings_update', { screenChanged: 'accept' }); } catch (e) { toast(e.message, true); } renderBanners(); } }));
+  }
   const os = S.app && S.app.onScreen;
   if (os && os.incomplete && !S.jobs.some(j => j.kind === 'send' && (j.status === 'running' || j.status === 'waiting'))) {
     add('danger', `Embedded (“${os.originalName} · ${os.label}”) didn't finish storing; the screen may show a broken picture.`,
@@ -180,7 +186,7 @@ async function checkScreen(opts) {
     const info = await call('device_check');
     S.screen = { state: info._needsSetup ? 'setup' : 'ready', info, error: null };
     if (info._restarted) toast('The screen wasn\'t answering, so CoolerScreen restarted it. It is fine now.', false, 8000);
-    if (info._capacity) loadApp();
+    loadApp(); // the check may have flagged a change outside the app, or measured the capacity
   } catch (e) {
     if (e.status === 409) S.screen = { state: 'updating', info: null, error: null, retry: true };
     else S.screen = { state: e.failedUsb ? 'failedUsb' : e.code === 'notFound' ? 'notFound' : e.code === 'busy' ? 'busy' : e.code === 'noReply' ? 'noReply' : 'error', info: null, error: e.message };

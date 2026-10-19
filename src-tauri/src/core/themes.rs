@@ -182,6 +182,10 @@ impl App {
         // Is this theme's base the picture the screen holds (Embedded)? Only then may live hand over to / idle on the loop.
         let standby = self.settings.load().slot("standby").and_then(|s| s["versionId"].as_str().map(String::from));
         tl.not_embedded = theme.base_version_id.is_some() && theme.base_version_id != standby;
+        // an effect theme whose stored loop is a recording of exactly this effect: live may hand over to it (cross-fade onto its first frame)
+        tl.effect_stored = theme.effect().is_some_and(|p| {
+            !tl.not_embedded && theme.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).is_some_and(|(_, r)| r["effect"]["key"].as_str() == Some(p.key().as_str()))
+        });
         tl.theme.corners = Some(self.corner_radius_of(&theme) as f32); // the engine gets the radius in effect (theme or default)
         let o = self.lib.read_original(&owner);
         tl.fallback_video = o.as_ref().filter(|o| !truthy(o.get("isImage"))).and_then(|o| self.lib.source_path(o));
@@ -245,7 +249,9 @@ impl App {
         // "Stale" = the picture inputs differ from the stored base: screen fit with shift, notch, corner radius, baked items (a different base is `unstored`). Live-only things (widgets and props, live layer, hand-over, guides, gap, weather) never count.
         let fit_key = self.lib.context().notch_key;
         let radius = self.corner_radius_of(&t);
-        let stale = same_base && !unstored && base.as_ref().is_some_and(|(_, v)| v["overlay"]["key"].as_str().map(String::from) != key || (version_radius(v) - radius).abs() > 0.5 || super::mask::base_key(v["notchKey"].as_str()) != fit_key);
+        // 4.0: an effect theme's Embedded is a recording of the effect; a changed effect (or a recording of another kind) makes it stale.
+        let eff_now = t.effect().map(|p| p.key());
+        let stale = same_base && !unstored && base.as_ref().is_some_and(|(_, v)| v["effect"]["key"].as_str().map(String::from) != eff_now || v["overlay"]["key"].as_str().map(String::from) != key || (version_radius(v) - radius).abs() > 0.5 || super::mask::base_key(v["notchKey"].as_str()) != fit_key);
         let owner = base.as_ref().and_then(|(boid, _)| self.lib.read_original(boid).map(|bo| json!({ "originalId": boid, "name": bo["name"] })));
         let kinds: Vec<&str> = t.widgets.iter().map(|w| w.kind.as_str()).collect();
         Ok(json!({
@@ -332,14 +338,14 @@ impl App {
     }
 
     /// One rendered frame of the theme for the editor: `theme` is the unsaved edit (default: the saved one).
-    pub fn theme_preview(&self, oid: &str, theme: Option<&Value>, with_live: bool, w: u32, h: u32) -> CoreResult<Value> {
+    pub fn theme_preview(&self, oid: &str, theme: Option<&Value>, with_live: bool, w: u32, h: u32, phase: Option<f64>) -> CoreResult<Value> {
         self.lib.read_original(oid).ok_or_else(gone)?;
         let t = match theme.filter(|t| t.is_object()) {
             Some(v) => self.clean_theme(oid, v)?,
             None => self.load_theme(oid),
         };
         let (w, h) = (w.clamp(160, 2400), h.clamp(72, 1080));
-        let png = crate::live::preview::render_preview(&self.theme_live_of(oid, t), w, h, with_live).map_err(CoreError::new)?;
+        let png = crate::live::preview::render_preview_at(&self.theme_live_of(oid, t), w, h, with_live, phase).map_err(CoreError::new)?;
         let name = if with_live { "theme-preview.png" } else { "theme-preview-base.png" };
         write_atomic(&self.theme_dir(oid).join(name), &png)?;
         Ok(json!({ "url": self.lib.url(&format!("/media/o/{oid}/{name}?t={}", super::scheduler::now_ms())), "withLive": with_live, "w": w, "h": h }))
@@ -523,6 +529,84 @@ impl App {
         }
     }
 
+    /// Wait for a freshly created version (or the existing one a duplicate points at) and return its id; a stop or a failure
+    /// removes a half-made version.
+    fn finish_base_version(&self, ctx: &TaskCtx, src_oid: &str, created: CoreResult<Value>, span: (f64, f64)) -> CoreResult<String> {
+        match created {
+            Ok(v) => {
+                let vid = v["id"].as_str().unwrap_or("").to_string();
+                let h = self.version_handle(src_oid, &v);
+                if let Err(e) = self.wait_sub(ctx, &h, span, 1, "Preparing the picture") {
+                    self.lib.delete_version(&vid); // stopped or failed half-way: no leftover half-made version
+                    return Err(e);
+                }
+                Ok(vid)
+            }
+            Err(e) if e.code_is("duplicate") => {
+                let vid = e.extra["versionId"].as_str().unwrap_or("").to_string();
+                self.wait_version(ctx, &vid)?;
+                Ok(vid)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The base of an effect theme: record one loop of the effect (cached by what the effect looks like), then convert it like any
+    /// clip. When the loop would not fit the screen (too long, or too big even at the lowest quality) it is recorded played faster
+    /// (1.5x, 2x, ... of the live speed) until it fits; the live effect keeps its own speed.
+    fn run_effect_base(&self, ctx: &TaskCtx, oid: &str, p: &crate::live::effects::Params, mut body: Value, reuse: Option<String>) -> CoreResult<String> {
+        use crate::live::effects::record;
+        if let Some(r) = reuse {
+            self.wait_version(ctx, &r)?;
+            return Ok(r);
+        }
+        let max_s = self.lib.context().max_seconds;
+        let dir = self.theme_dir(oid).join("effect");
+        let key = p.key();
+        let speeds = [1.0f32, 1.5, 2.0, 3.0, 4.0, 6.0];
+        let mut attempt = 0;
+        loop {
+            let m = speeds[attempt];
+            let frames = record::loop_frames(p, m);
+            let secs = record::loop_seconds(frames);
+            if secs > max_s && attempt + 1 < speeds.len() {
+                attempt += 1;
+                continue;
+            }
+            let file = dir.join(format!("loop-{key}-{frames}.mkv"));
+            if !file.is_file() {
+                let span = BASE_END * 0.3;
+                let r = record::render_loop(p, frames, &file, &mut |f| {
+                    ctx.progress(span * f as f64, "Step 1 of 2: Recording the effect");
+                    !ctx.is_cancelled()
+                });
+                if let Err(e) = r {
+                    ctx.check()?;
+                    return Err(CoreError::new(format!("The effect could not be recorded: {e}")));
+                }
+            }
+            ctx.check()?;
+            body["effect"] = json!({ "key": key, "file": file.to_string_lossy(), "length": secs });
+            let created = self.lib.create_version(oid, &body);
+            let vid = self.finish_base_version(ctx, oid, created, (BASE_END * 0.3, BASE_END))?;
+            let too_big = self.lib.find_version(&vid).is_some_and(|(_, v)| self.over_budget(&v));
+            if too_big && attempt + 1 < speeds.len() {
+                self.lib.delete_version(&vid);
+                attempt += 1;
+                continue;
+            }
+            // older recordings of this theme are not needed any more
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.filter_map(Result::ok) {
+                    if e.path() != file {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+            return Ok(vid);
+        }
+    }
+
     fn run_apply(&self, ctx: &TaskCtx, oid: &str) -> CoreResult<Value> {
         let o = self.lib.read_original(oid).ok_or_else(gone)?;
         let t = self.load_theme(oid);
@@ -532,7 +616,11 @@ impl App {
         let want_key = overlay.as_ref().and_then(|ov| ov["key"].as_str().map(String::from));
         // A base was chosen already (maybe from another clip): keep its picture settings; it is re-made only when the baked
         // items differ. Otherwise the base comes from this clip's own tuning.
-        let existing = t.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).filter(|(_, v)| v["status"] == "ready" && !self.over_budget(v));
+        // 4.0: an effect theme's base is a recording of the effect: a stored picture of another kind is not its base.
+        let effect = t.effect();
+        let eff_key = effect.as_ref().map(|p| p.key());
+        let ver_eff = |v: &Value| v["effect"]["key"].as_str().map(String::from);
+        let existing = t.base_version_id.as_deref().and_then(|v| self.lib.find_version(v)).filter(|(_, v)| v["status"] == "ready" && !self.over_budget(v) && ver_eff(v) == eff_key);
         let (src_oid, mut body) = match &existing {
             Some((boid, bv)) => {
                 let e = super::library::effective_settings(bv);
@@ -554,25 +642,13 @@ impl App {
         let radius = self.corner_radius_of(&t);
         body["corners"] = json!({ "on": radius > 0.0, "r": radius });
         let fit_key = self.lib.context().notch_key;
-        let reuse = existing.as_ref().filter(|(_, bv)| bv["overlay"]["key"].as_str().map(String::from) == want_key && (version_radius(bv) - radius).abs() <= 0.5 && super::mask::base_key(bv["notchKey"].as_str()) == fit_key).map(|(_, bv)| bv["id"].as_str().unwrap_or("").to_string());
-        let created = if reuse.is_some() { Err(CoreError::coded("duplicate", "reuse").with("versionId", json!(reuse))) } else { self.lib.create_version(&src_oid, &body) };
-        let oid_for_version = src_oid.as_str();
-        let vid = match created {
-            Ok(v) => {
-                let vid = v["id"].as_str().unwrap_or("").to_string();
-                let h = self.version_handle(oid_for_version, &v);
-                if let Err(e) = self.wait_sub(ctx, &h, (0.0, BASE_END), 1, "Preparing the picture") {
-                    self.lib.delete_version(&vid); // stopped or failed half-way: no leftover half-made version
-                    return Err(e);
-                }
-                vid
+        let reuse = existing.as_ref().filter(|(_, bv)| bv["overlay"]["key"].as_str().map(String::from) == want_key && ver_eff(bv) == eff_key && (version_radius(bv) - radius).abs() <= 0.5 && super::mask::base_key(bv["notchKey"].as_str()) == fit_key).map(|(_, bv)| bv["id"].as_str().unwrap_or("").to_string());
+        let vid = match &effect {
+            None => {
+                let created = if reuse.is_some() { Err(CoreError::coded("duplicate", "reuse").with("versionId", json!(reuse))) } else { self.lib.create_version(&src_oid, &body) };
+                self.finish_base_version(ctx, &src_oid, created, (0.0, BASE_END))?
             }
-            Err(e) if e.code_is("duplicate") => {
-                let vid = e.extra["versionId"].as_str().unwrap_or("").to_string();
-                self.wait_version(ctx, &vid)?;
-                vid
-            }
-            Err(e) => return Err(e),
+            Some(p) => self.run_effect_base(ctx, oid, p, body, reuse)?,
         };
         ctx.check()?;
         // 2. send it to the loop slot (live pauses while the screen is written)

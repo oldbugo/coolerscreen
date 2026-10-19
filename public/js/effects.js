@@ -15,6 +15,9 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 /** The effect of a theme, or null when its background is the picture. */
 export const effectOf = t => (t.background && t.background.kind === 'effect' && EFFECTS[t.background.effect] ? t.background : null);
 
+/** The live speed of an effect background (its own setting or the effect's default). */
+export const effectSpeed = b => (Number.isFinite(b.speed) ? b.speed : (EFFECTS[b.effect] || EFFECTS.aurora).speed);
+
 /** Short text for My themes cards and lists. */
 export const effectName = t => { const b = effectOf(t); return b ? EFFECTS[b.effect].name : null; };
 
@@ -63,7 +66,7 @@ export function backgroundSection(api) {
   }));
   kids.push(field('Colours', sw, 'bgCol0'));
   const secs = 10 / val('speed');
-  kids.push(el('p', { class: 'muted small', text: `One loop lasts ${secs < 10 ? secs.toFixed(1) : Math.round(secs)} s.` }),
+  kids.push(el('p', { class: 'muted small', text: `One loop lasts ${secs < 10 ? secs.toFixed(1) : Math.round(secs)} s. Embedded keeps a recording of one loop, so changing the effect means updating Embedded.` }),
     el('div', { class: 'row' }, el('button', { type: 'button', class: 'btn ghost small-btn', text: 'Reset', title: 'Back to this effect’s own settings', onclick: () => { t.background = { kind: 'effect', effect: cur.effect }; api.edited(); api.repaint(); } })));
   return kids;
 }

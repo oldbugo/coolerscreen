@@ -1291,3 +1291,94 @@ fn only_picture_inputs_make_the_stored_base_stale() {
     app.theme_set(&oid, &json!({ "widgets": [{ "id": "t", "type": "text", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.2, "onBase": false, "props": { "text": "Baked" } }] })).unwrap();
     assert!(!stale(&app), "the same item, live only");
 }
+
+/// C2: the screen's free space is remembered when the app stored something; a clearly different value at a later check means
+/// another program wrote to the screen. Only the read-only info answer is used.
+#[test]
+fn a_check_flags_screen_content_changed_outside_the_app() {
+    let (_d, app, _rec, _g) = setup();
+    let flagged = |app: &App| app.app_state()["screenChanged"].clone();
+    // first check: nothing to compare with yet, the answer becomes the baseline
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // the same answer again, and a wobble inside the tolerance: nothing
+    app.device_check().unwrap();
+    app.device.fake_set_free(4880 - 40);
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null(), "{}", flagged(&app));
+    // another program stored a big file: free space dropped a lot
+    app.device.fake_set_free(300);
+    app.device_check().unwrap();
+    let c = flagged(&app);
+    assert_eq!((c["wasFree"].as_f64().unwrap(), c["nowFree"].as_f64().unwrap()), (4880.0 * 512.0, 300.0 * 512.0));
+    // checking again keeps the same open difference (the "was" stays what we stored)
+    app.device.fake_set_free(200);
+    app.device_check().unwrap();
+    let c2 = flagged(&app);
+    assert_eq!((c2["wasFree"].as_f64().unwrap(), c2["nowFree"].as_f64().unwrap()), (4880.0 * 512.0, 200.0 * 512.0));
+    assert_eq!(c2["at"], c["at"]);
+    // "It's fine": the screen as it is now becomes the baseline
+    app.settings_update(&json!({ "screenChanged": "accept" })).unwrap();
+    assert!(flagged(&app).is_null());
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // flagged again, then the app stores something itself: the final check of the store is the new baseline
+    app.device.fake_set_free(4880);
+    let info = app.device_check().unwrap();
+    assert!(!flagged(&app).is_null());
+    app.rebase_screen(Some(&info));
+    assert!(flagged(&app).is_null());
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // a store whose final check failed drops the baseline; the next check starts over without a false alarm
+    app.device.fake_set_free(100);
+    app.rebase_screen(None);
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // the settings file keeps both keys only while they mean something
+    let raw = std::fs::read_to_string(app.settings.file()).unwrap();
+    assert!(raw.contains("screenBaseline") && !raw.contains("screenChanged"));
+}
+
+#[test]
+fn an_effect_theme_stores_a_recorded_loop_and_goes_stale_when_the_effect_changes() {
+    if !crate::media::ffmpeg::locate().exists() {
+        return; // the loop is recorded through ffmpeg
+    }
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Effect theme.mp4");
+    let fx = |color: &str| json!({ "background": { "kind": "effect", "effect": "drift", "speed": 3.0, "colors": [color, "#ffffff"] } });
+    let run = |app: &App| {
+        let r = app.theme_apply(&oid).unwrap();
+        let j = wait_job(app, r["jobId"].as_str().unwrap());
+        assert_eq!(j["state"], "done", "{j}");
+        j["result"]["versionId"].as_str().unwrap().to_string()
+    };
+    app.theme_set(&oid, &fx("#7fd4ff")).unwrap();
+    let v1 = run(&app);
+    let (_, ver) = app.lib.find_version(&v1).unwrap();
+    assert!(ver["effect"]["key"].is_string(), "the version remembers which effect it records: {ver}");
+    // the recording is 3.33 s at the screen's 18 fps = 60 frames, the whole loop
+    assert_eq!(ver["settings"]["length"].as_f64().unwrap().round(), 3.0);
+    let v = app.theme_get(&oid).unwrap();
+    assert_eq!(v["baseVersionId"], json!(v1));
+    assert_eq!(v["baseStale"], json!(false), "just stored");
+    assert!(app.theme_live_of(&oid, app.load_theme(&oid)).effect_stored, "live may hand over to it");
+    // a live-only change keeps it; a changed effect makes Embedded stale and the live engine stops handing over to the old loop
+    assert_eq!(app.theme_set(&oid, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3 }], "background": fx("#7fd4ff")["background"] })).unwrap()["baseStale"], json!(false));
+    let stale = app.theme_set(&oid, &fx("#ff6b6b")).unwrap();
+    assert_eq!(stale["baseStale"], json!(true));
+    assert!(!app.theme_live_of(&oid, app.load_theme(&oid)).effect_stored);
+    // storing again makes a new loop; storing the same effect again reuses it
+    let v2 = run(&app);
+    assert_ne!(v1, v2);
+    assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(false));
+    assert_eq!(run(&app), v2);
+    assert_eq!(app.lib.versions(&oid).len(), 2);
+    // back to the picture: the stored loop is not its picture any more
+    let back = app.theme_set(&oid, &json!({})).unwrap();
+    assert_eq!(back["baseStale"], json!(true));
+    // an old loop recording is cleaned up once a new one exists
+    let n = std::fs::read_dir(app.theme_dir(&oid).join("effect")).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(n, 1, "only the current recording is kept");
+}
