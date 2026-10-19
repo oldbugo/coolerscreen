@@ -39,7 +39,8 @@ and B follow `docs/v4/ui-style-guide.md` for any new UI as soon as it exists (th
   `COOLERSCREEN_HOME=<a folder in your scratchpad>`, `COOLERSCREEN_TEST_QUIET=1`. Nothing may appear on, focus or go
   fullscreen on the user's desktop. `COOLERSCREEN_DUMP_FRAMES` writes live frames to disk for checking pictures.
   **Test instances must be DEBUG builds** (2026-10-19 incident): `COOLERSCREEN_MULTI` only works in debug builds; a
-  release build hands its launch to the user's running app and can raise its window.
+  release build hands its launch to the user's running app and can raise its window. A debug build WITHOUT
+  `COOLERSCREEN_MULTI=1` does the same (second incident, 2026-10-19 14:17); 4.9.1 adds an in-app guard.
 - **Builds:** use your own `CARGO_TARGET_DIR` (e.g. `%TEMP%\cs-target-<stream>`). Tests:
   `cargo test --release --lib -- --test-threads=4` under a timeout. Run long builds in the background.
 - **Do not edit:** `CHANGELOG.md`, the version in `Cargo.toml` / `tauri.conf.json` / `package.json`, `CLAUDE.md`,
