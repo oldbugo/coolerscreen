@@ -373,3 +373,19 @@ Three more types, all local (no network); code in `live/progress.rs`, `live/sunm
 - `todo`: a list with tick boxes. `title` string|null, `items` `[{ "text": "...", "done": false }]` (0-8, text up to 60 chars; a missing list = empty),
   `hideDone` bool (false; done rows are otherwise dimmed and struck through), `color` ("#ffffff"), `accent` ("#5ac8ff"). The ticks are
   toggled in the editor's Properties (the screen has no touch).
+
+
+### 4.0 W2 widgets (added 2026-10-19; contract version assigned by the PM)
+
+Two widgets that use the network, only while the item exists and is drawn (the loader ends ~30 s after the last draw), and only a GET of the
+link the user pasted (nothing else is sent). Links: `http://` or `https://`, no `user:pass@`, at most 500 characters; anything else is
+dropped by the app. Redirects: at most 3, never https to http. Code: `live/headlines.rs`, `live/webpicture.rs`, `render/*.rs`, `public/js/w-*.js`.
+
+- `headlines`: the latest entries of an RSS 2.0 / RSS 1.0 / Atom feed. `source` (the feed link; empty = nothing chosen), `count` 3-5 (4),
+  `showSource` bool (true: "Source - 2 h ago" under each title), `color` ("#ffffff"). Refreshed about every 15 minutes (a failed
+  fetch retries after 5), 2 MB cap, titles cleaned of HTML and entities, newest first when every entry has a date. A failure keeps the old
+  titles and shows the reason in amber.
+- `webpicture`: one picture from a link. `source`, `minutes` 1-1440 (15; minimum 1), `fit` "contain"|"cover" ("contain"), `opacity` 0-1 (1).
+  Only real pictures are accepted (checked by their first bytes, not the server's word): PNG, JPEG, GIF (first frame), WebP, BMP; 8 MB and
+  6000 px / 36 megapixel limits, shown at most 1680 px wide. Uses the per-item `radius` (clipped only when the item has its own radius).
+  A failed refresh keeps the old picture with an "(old picture)" note.

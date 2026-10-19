@@ -221,3 +221,21 @@ Verification: `cargo test --release --lib -- --test-threads=4`: 305 passed, 0 fa
 into theme.json, Progress and Sun-and-moon panels shown with the corner-radius row above the Delete bar, a real live frame with real values
 (`B-pictures/w1-live-frame.png`: day 85 %, sunrise 06:09 / sunset 19:12 for Sydney today, moon first quarter 57 % lit).
 Not verified: Windows week-start on a non-Monday locale; polar cards drawn; sun times when the PC zone differs from the city; real screen.
+
+
+## W2 (2026-10-19): headlines and web picture (opt-in network)
+
+Branch `claude/recursing-matsumoto-31e4c5`, main 4.14.0 merged. Same structure as W1 (hook-only skeleton, two Sonnet workers in worktrees, I merged and checked).
+Contract: "4.0 W2 widgets". Both follow the Agenda pattern: a demand-driven loader per link, never on the render thread, no network in the
+editor preview (fixed sample content), caps on size, no other request than the GET of the user's link.
+- **Headlines** (Info): RSS 2.0/1.0 + Atom, own tolerant scanner (no new crate), entities/CDATA/HTML in titles, RFC 2822/3339 dates, ages, 3-5 rows,
+  two-line wrapping when tall.
+- **Web picture** (Media): contain/cover, opacity, minutes (min 1), magic-byte sniffing, decode limits before allocation, ffmpeg for JPEG/WebP/BMP
+  (same route as the picture item), corner radius through the item's `radius`.
+Choices: http links are accepted (the user typed them); the optional feed-title header line was not built (the source name is in each row's small line).
+Verification: `cargo test --release --lib -- --test-threads=4`: 330 passed, 0 failed, 19 ignored (all W2 tests offline). Real loaders run end to end in a quiet DEBUG
+instance (port 9755) against a throwaway local web server (127.0.0.1:8931, a hand-made RSS file and a PNG): the editor accepted both links, the server log shows
+only `GET /feed.xml` and `GET /pic.png`, and the live frame shows the four headlines with source and ages and the picture with a 60 px corner radius
+(`B-pictures/w2-live-frame.png`).
+Not verified: a real internet feed/picture (https, redirects, timeouts, gzip); JPEG/WebP/BMP through ffmpeg on a real link (the worker's JPEG test passes silently
+if ffmpeg is absent here); non-Latin feeds; EXIF-rotated JPEGs; the palette icons are still the generic glyph; real screen.

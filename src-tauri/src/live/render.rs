@@ -21,6 +21,8 @@ mod more;
 mod progress;
 mod sunmoon;
 mod todo;
+mod headlines;
+mod webpicture;
 mod sensors;
 mod widgets;
 pub(crate) use widgets::resize_exact;

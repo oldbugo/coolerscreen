@@ -24,6 +24,8 @@ pub mod pipeline;
 pub mod progress;
 pub mod sunmoon;
 pub mod todo;
+pub mod headlines;
+pub mod webpicture;
 pub mod preview;
 pub mod render;
 pub mod sensors;
