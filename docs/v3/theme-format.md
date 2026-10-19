@@ -375,7 +375,7 @@ Three more types, all local (no network); code in `live/progress.rs`, `live/sunm
   toggled in the editor's Properties (the screen has no touch).
 
 
-### 4.0 W2 widgets (added 2026-10-19; contract version assigned by the PM)
+## v1.15 (4.15.0, stream B W2): headlines, web picture
 
 Two widgets that use the network, only while the item exists and is drawn (the loader ends ~30 s after the last draw), and only a GET of the
 link the user pasted (nothing else is sent). Links: `http://` or `https://`, no `user:pass@`, at most 500 characters; anything else is

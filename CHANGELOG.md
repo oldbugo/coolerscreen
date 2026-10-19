@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.15.0 - 2026-10-19 (stream B: headlines and web picture)
+
+- **Headlines:** the latest 3 to 5 titles from an RSS or Atom link you paste, with the source and how old each one is;
+  fetched about every 15 minutes, only while the widget is on a theme.
+- **Web picture:** a picture from a link (weather radar, webcam, a photo of the day), refreshed every N minutes, fit or
+  fill, with the item's corner radius; says clearly when it cannot load.
+- Both only download your own link (one plain request, size and time limits, never https to http); nothing else is sent.
+- Theme contract v1.15.
+
 ## 4.14.0 - 2026-10-19 (stream B: three new widgets)
 
 - **Progress:** day, week, month and year progress (pick any), with a big percent and a bar that grows sideways; the
