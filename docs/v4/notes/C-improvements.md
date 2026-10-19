@@ -92,3 +92,56 @@ User request 2026-10-19 (after 4.7.1). What changed:
   theme, Live on/off) with no page errors; screenshot of the selection bar. Not verified: on the real screen (first frame time,
   instant switch back), Browse in the running app (no sources enabled in my scratch home; only the backend and the picture
   renderer are tested), the window-close and idle-timeout paths in a real window, and the 2-minute page timer.
+
+## C4: `CoolerScreen.exe --quit` (4.9.1)
+
+What it is: a clean way for the installer workflow to quit the running app (tools/README.md has the exit codes).
+`--quit` is handled at the very top of `main()` (before Tauri or the single-instance plugin start), so it can return its own exit
+code, never creates a window and never starts an app. Exit codes: 0 quit, 1 asked but still running after 20 s, 2 refused (a visible
+job is queued or running: upload, conversion, store, recording; nothing done), 3 no running instance.
+
+How: the running app owns a named event `Local\CoolerScreenQuit-<hash of its app folder>` (a thread blocked on it: no polling, nothing
+runs until signalled). Because the name follows the app folder, an instance with another COOLERSCREEN_HOME (every test instance)
+can never be reached by, or answer for, the installed app. `--quit` signals it and reads `quit.result` ("ok <pid>" or "busy") in
+the app folder, then waits for that pid to end. The app then runs the existing `quit_app` (same as tray Quit: `live.stop()`
+hand-back, exit watchdog 3 s). device.log gets "quit requested (--quit): the tray Quit path" or "...a job is running: refused".
+
+**PM install recipe:**
+1. `& CoolerScreen.exe --quit` (the installed exe, normal app folder); `$LASTEXITCODE`: 0 = quit, go on; 3 = not running, go on;
+   2 = a job is running: wait and retry (do not force); 1 = still running after 20 s: look before forcing.
+2. Run the installer silently (`/S`) and wait for it to end.
+3. `CoolerScreen.exe --background` (quiet start).
+(`Start-Process -Wait -PassThru` gives the code for a GUI-subsystem exe; plain `& exe` does not wait.)
+
+Plain WM_CLOSE (taskkill without /F): not changed. With a window it already goes through the close handler (hides to the tray, or
+destroys the window with Live on); with no window there is nothing to receive it, and `taskkill` reports it could not close the
+process. That is why `--quit` exists; I did not add a hidden helper window just for it.
+
+Verified with quiet DEBUG instances under a scratch COOLERSCREEN_HOME, fake device (script in my scratchpad `quittest.ps1`):
+1. no instance: exit 3. 2. while a store job ran: exit 2, the app kept running and the job finished. 3. when idle: exit 0 after
+1.0 s, the process was gone and device.log shows "quit requested (--quit): the tray Quit path" then "live: stop". 4. again: 3. The
+user's installed app was not touched by `--quit` (different folder, different event).
+Not verified: against a release build (by design, never against the user's), the 20 s "still running" path, a real USB stop.
+
+**My mistake to know about:** my first test launch of a debug instance forgot `COOLERSCREEN_MULTI=1`, so the single-instance
+plugin forwarded that launch to the user's running 4.9.0 (pid 7356) and its callback (`show_main`) probably brought its window up
+once (around 14:17-14:18 local). I did not touch the app otherwise; the test instances now always set MULTI. Worth knowing for
+the user's fullscreen use: any debug instance launched without MULTI forwards to the installed app. (`--quit` itself never
+starts Tauri, so it can not forward.)
+
+### C4 update: the single-instance lock is scoped (guard against forwarding to the installed app)
+
+`src-tauri/src/instance_id.rs`: the single-instance identifier (the plugin names its mutex and window class after it) is the plain
+`com.oldbugo.coolerscreen` ONLY for a release build with the default app folder, as before (a second Start-menu launch still brings up
+the running window). A debug build, or any build run with COOLERSCREEN_HOME, gets `<identifier>.<debug|release>-<hash of the folder>`
+(case, slashes and a trailing slash do not matter), so it can never forward a launch to, or accept one from, the installed app, even
+without COOLERSCREEN_MULTI (which still skips the plugin in debug builds as before). `main.rs` sets it on the Tauri context before
+the build (`context.config_mut().identifier`); device.log's second line now shows "single-instance id: ...". The `--quit` event uses
+the same scope, so a debug build never answers for a release one either.
+Proof: unit tests (`instance_id::tests`): only (release, default folder) equals the installed identifier; debug, or any folder
+(even "", "default", the real %APPDATA% path) never does; same kind+folder join, different folder or kind do not. Debug instances
+(never touching the installed app): id logged `...debug-8689...`; two instances under the same scratch HOME without MULTI: the second
+exited at once (joined), the first stayed up; a third under another HOME stayed up (did not join) with a different id; the installed
+app (pid 7356) was not touched. `--quit` tests re-run: 3 / 2 / 0 / 3 as before.
+Side effect: debug/scratch instances now also have another Tauri identifier, which is only where WebView2 would put its data when
+WEBVIEW2_USER_DATA_FOLDER is not set (the test scripts set it).

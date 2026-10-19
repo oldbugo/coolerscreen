@@ -926,6 +926,11 @@ impl App {
         self.sched.wait_idle(Duration::from_secs(1), true);
     }
 
+    /// `CoolerScreen.exe --quit` refuses while a job is running.
+    pub fn busy_for_quit(&self) -> bool {
+        self.sched.any_visible_job()
+    }
+
     /// True while something is being written to the screen (close guard).
     pub fn uploading(&self) -> bool {
         self.sched.running_kind(&["send", "setup"])

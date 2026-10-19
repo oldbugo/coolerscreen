@@ -4,7 +4,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod live_app;
+mod instance_id;
 mod live_measure;
+mod quit_cmd;
 mod window;
 
 use cs_core::core::commands::{self as cc, Core, EventRelay, TauriEvents};
@@ -18,6 +20,10 @@ use tauri::{Manager, RunEvent};
 struct Media(#[allow(dead_code)] Mutex<Option<MediaServer>>);
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `--quit`: ask the running app (same app folder) to quit like the tray's Quit; never shows a window or starts an app.
+    if args.iter().any(|a| a == "--quit") {
+        std::process::exit(quit_cmd::run_quit());
+    }
     let measure = live_measure::parse(&args);
     // `--tray` (the Windows start-up entry): no window, live on, icon in the tray.
     let tray_only = args.iter().any(|a| a == cs_core::core::autostart::TRAY_FLAG);
@@ -44,6 +50,11 @@ fn main() {
             }
         }));
     }
+    // The single-instance lock is named after the app identifier: debug builds and instances with their own app folder get their
+    // own identifier, so they can never forward a launch to (or take one from) the installed app. See instance_id.rs.
+    let mut context = tauri::generate_context!();
+    let id = instance_id::identifier(&context.config().identifier, cfg!(debug_assertions), instance_id::env_home().as_deref());
+    context.config_mut().identifier = id;
     let app = builder
         .manage(Core(core.clone()))
         .manage(Media(Mutex::new(None)))
@@ -110,6 +121,7 @@ fn main() {
         ])
         .setup(move |app| {
             cs_core::device::log(&cs_core::core::buildinfo::startup_line(env!("CARGO_PKG_VERSION")));
+            cs_core::device::log(&format!("single-instance id: {}", app.config().identifier));
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));
             // One-time driver scripts are bundled as resources (installed build); development keeps the repo's.
             if let Ok(res) = app.path().resource_dir() {
@@ -123,6 +135,11 @@ fn main() {
                 }
             } else if !tray_only {
                 live_app::create_window(app.handle(), true)?;
+            }
+            // `CoolerScreen.exe --quit` from an installer or script reaches this app through a named event
+            {
+                let (h1, h2) = (app.handle().clone(), app.handle().clone());
+                quit_cmd::listen(move || h1.state::<Core>().0.busy_for_quit(), move || live_app::quit_app(&h2));
             }
             let c = app.state::<Core>().0.clone();
             let resolver_app = c.clone();
@@ -186,7 +203,7 @@ fn main() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building CoolerScreen");
 
     app.run(|app, event| match event {

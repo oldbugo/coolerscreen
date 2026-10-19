@@ -783,6 +783,11 @@ impl Scheduler {
         Shared::device_active(&self.0.inner.lock().unwrap())
     }
 
+    /// Any job the user can see is queued or running (upload, conversion, store, recording): not a moment to quit from a script.
+    pub fn any_visible_job(&self) -> bool {
+        self.0.inner.lock().unwrap().entries.values().any(|e| e.spec.visible)
+    }
+
     /// True while a visible job of one of these kinds is running (close guard).
     pub fn running_kind(&self, kinds: &[&str]) -> bool {
         let g = self.0.inner.lock().unwrap();
