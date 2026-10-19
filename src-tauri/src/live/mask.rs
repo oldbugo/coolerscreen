@@ -142,6 +142,11 @@ impl Mask {
         }
     }
 
+    /// The rounded-corner radius in canvas px (None = square corners).
+    pub fn corner_radius(&self) -> Option<f32> {
+        self.corners
+    }
+
     /// The effective corner radius: a theme override (px on 2400x1080, 0 = none) wins over the settings default.
     pub fn with_corner_override(mut self, theme_px: Option<f32>) -> Mask {
         if let Some(v) = theme_px {

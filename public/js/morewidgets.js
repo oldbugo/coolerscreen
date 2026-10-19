@@ -62,6 +62,28 @@ export const WORDS = [['time', 'Time (24-hour)'], ['time12', 'Time (12-hour)'], 
   ['vram', 'GPU memory'], ['ram', 'RAM used'], ['down', 'Download speed'], ['up', 'Upload speed'], ['diskread', 'Disk read speed'], ['diskwrite', 'Disk write speed'],
   ['uptime', 'Uptime'], ['volume', 'Volume']];
 
+/** The card radius an item has without its own value (matches the engine's built-in card), px on the 2400 canvas. */
+const BUILT_IN_RADIUS = 40;
+
+/**
+ * "Corner radius" for ANY item (4.0 E2): empty = follows the theme's corner radius (or the built-in card radius when the theme has
+ * none); a number is this item's own radius in px on the 2400 canvas; the reset arrow removes it. Same pattern as the theme's
+ * corner field. Returns the element to append to the item's Properties. `c`: { el, field, numInput, edited, themeRadius }.
+ */
+export function cornerRow(w, c) {
+  const { el } = c;
+  const dflt = () => { const t = c.themeRadius ? c.themeRadius() : 0; return t > 0 ? t : BUILT_IN_RADIUS; };
+  const note = el('span', { class: 'muted small', text: w.radius == null ? 'Theme default' : '' });
+  const reset = el('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Reset to the theme default', title: 'Reset to the theme default', id: 'pRadiusReset', disabled: w.radius == null });
+  reset.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M20 11a8 8 0 0 0-14.3-4.5M4 4v4h4M4 13a8 8 0 0 0 14.3 4.5M20 20v-4h-4"/></svg>';
+  const num = c.numInput('pRadius', w.radius ?? dflt(), { min: 0, max: 400, onchange: v => {
+    if (v == null) { num.value = w.radius ?? dflt(); return; }
+    w.radius = clamp(Math.round(v), 0, 400); reset.disabled = false; note.textContent = ''; c.edited();
+  } });
+  reset.onclick = () => { delete w.radius; num.value = dflt(); reset.disabled = true; note.textContent = 'Theme default'; c.edited(); };
+  return el('div', { class: 'field' }, el('label', { for: 'pRadius', text: 'Corner radius' }), el('div', { class: 'inline-ctl' }, num, reset), note);
+}
+
 /** Windows time-zone ids with the usual city (id, city). */
 export const ZONES = [
   ['', 'This PC'],

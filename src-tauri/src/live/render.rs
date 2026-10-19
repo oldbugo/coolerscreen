@@ -259,6 +259,8 @@ pub struct Renderer {
     bg_is_base: bool,
     /// Preview: fixed music state (no fade animation).
     sample: bool,
+    /// The corner radius (engine px) of the item being drawn: its own, else the theme's; None = the card's built-in radius.
+    item_radius: Option<f32>,
     /// Calibration overlay (screen guides) drawn over every frame while Some; `cal_gen` changes with it.
     calib: Option<Guides>,
     cal_gen: u64,
@@ -333,6 +335,7 @@ impl Renderer {
             first: Arc::new(Mutex::new(None)),
             bg_is_base: false,
             sample: false,
+            item_radius: None,
             calib: None,
             cal_gen: 0,
             fps_overlay: None,
@@ -785,10 +788,51 @@ impl Renderer {
         }
     }
 
+    /// The corner radius of a card of box `b`: the item's own or the theme's, else `dflt` (the card's built-in radius); at most
+    /// half the short side.
+    pub(super) fn card_radius(&self, b: Rect, dflt: f32) -> f32 {
+        self.item_radius.unwrap_or(dflt).clamp(0.0, b.w.min(b.h) / 2.0)
+    }
+
+    /// Round the corners of what is drawn inside `b` (a picture): pixels outside the rounded rectangle fade to transparent.
+    fn clip_rounded(&mut self, b: Rect, r: f32) {
+        let r = r.clamp(0.0, b.w.min(b.h) / 2.0);
+        if r < 0.5 {
+            return;
+        }
+        let (cw, ch) = (self.cw as i32, self.ch as i32);
+        let (x0, y0, x1, y1) = (b.x as i32, b.y as i32, (b.x + b.w) as i32, (b.y + b.h) as i32);
+        let ri = r.ceil() as i32;
+        let d = self.layer.data_mut();
+        // (arc centre x, y, left?, top?, corner square origin)
+        let corners = [(x0 as f32 + r, y0 as f32 + r, true, true, x0, y0), (x1 as f32 - r, y0 as f32 + r, false, true, x1 - ri, y0), (x0 as f32 + r, y1 as f32 - r, true, false, x0, y1 - ri), (x1 as f32 - r, y1 as f32 - r, false, false, x1 - ri, y1 - ri)];
+        for (cx, cy, left, top, sx, sy) in corners {
+            for y in sy.max(0)..(sy + ri).min(ch) {
+                for x in sx.max(0)..(sx + ri).min(cw) {
+                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    // only the quarter next to the outer corner lies outside the arc
+                    if (if left { px >= cx } else { px <= cx }) || (if top { py >= cy } else { py <= cy }) {
+                        continue;
+                    }
+                    let (dx, dy) = (px - cx, py - cy);
+                    let cov = (r - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
+                    if cov < 1.0 {
+                        let i = (y as usize * self.cw + x as usize) * 4;
+                        for c in 0..4 {
+                            d[i + c] = (d[i + c] as f32 * cov) as u8;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Draw one widget into the layer (and note how long it took).
     fn draw_one(&mut self, w: &Widget, now: &LocalTime, s: &Sensors, np: Option<&NowPlaying>) {
         let r = widget_rect(w, self.cw, self.ch);
         let tw0 = Instant::now();
+        // 4.0 E2: the item's own radius (canvas px) wins; else the theme's corner radius when it has one
+        self.item_radius = w.radius.map(|px| px * self.cw as f32 / 2400.0).or_else(|| self.mask.corner_radius().map(|c| c * self.cw as f32 / LW as f32));
         match w.kind.as_str() {
             "clock" => self.draw_clock(r, &w.clock(), now),
             "music" => self.draw_music(r, &w.music(), np),
@@ -803,6 +847,10 @@ impl Renderer {
             "info" => self.draw_info(r, &w.info()),
             _ => self.draw_more(r, w, now), // the 4.0 widget types (render/more.rs)
         }
+        if let (Some(px), "image" | "slideshow") = (w.radius, w.kind.as_str()) {
+            self.clip_rounded(r, px * self.cw as f32 / 2400.0);
+        }
+        self.item_radius = None;
         self.widget_us.entry(w.id.clone()).or_insert_with(|| (w.kind.clone(), 0)).1 += tw0.elapsed().as_micros() as u64;
     }
 

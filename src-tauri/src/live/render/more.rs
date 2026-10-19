@@ -25,7 +25,8 @@ fn size_text(gb: f32) -> String {
 impl Renderer {
     fn mcard(&mut self, b: Rect) -> Rect {
         let sc = (self.cw as f32 / 1680.0).max(0.1);
-        round_rect(&mut self.layer, b.x, b.y, b.w, b.h, (28.0 * sc).min(b.w.min(b.h) / 5.0), [0, 0, 0, 96]);
+        let rad = self.card_radius(b, (28.0 * sc).min(b.w.min(b.h) / 5.0));
+        round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, [0, 0, 0, 96]);
         let pad = (b.w.min(b.h) * 0.06).max(6.0);
         Rect { x: b.x + pad, y: b.y + pad, w: (b.w - 2.0 * pad).max(1.0), h: (b.h - 2.0 * pad).max(1.0) }
     }
@@ -842,5 +843,39 @@ mod tests {
             x.h = 0.02;
         });
         crate::live::render_preview(&tiny, 320, 144, true).unwrap();
+    }
+
+    #[test]
+    fn item_radius_rounds_cards_and_clips_pictures() {
+        let px = |png: &[u8], x: u32, y: u32| {
+            let pm = tiny_skia::Pixmap::decode_png(png).unwrap();
+            let c = pm.pixel(x, y).unwrap();
+            (c.red(), c.green(), c.blue())
+        };
+        let mk = |r: Option<f32>| {
+            let mut t = theme(&[("volume", 0.1, 0.1, 0.5, 0.5, json!({}))]);
+            t.theme.widgets[0].radius = r;
+            crate::live::render_preview(&t, 480, 216, true).unwrap()
+        };
+        // box = x 48..288, y 21..129 on this 480x216 preview; look 3 px inside the top-left corner and at the centre
+        let (square, round) = (mk(Some(0.0)), mk(Some(300.0)));
+        assert_ne!(px(&square, 51, 24), px(&round, 51, 24), "a big radius leaves the corner undarkened, radius 0 keeps it");
+        assert_eq!(px(&square, 168, 75), px(&round, 168, 75), "the centre is the same");
+        // no radius and no theme radius: the card's built-in look (same as before this field existed)
+        let plain = mk(None);
+        assert_eq!(px(&plain, 168, 75), px(&square, 168, 75));
+        // a picture is clipped only when the item has its own radius
+        let dir = tempfile::tempdir().unwrap();
+        let mut img = tiny_skia::Pixmap::new(8, 8).unwrap();
+        img.fill(tiny_skia::Color::from_rgba8(255, 0, 0, 255));
+        img.save_png(dir.path().join("a.png")).unwrap();
+        let mut t = crate::live::theme::ThemeLive::new(crate::live::theme::Theme::default(), dir.path().to_path_buf());
+        t.theme.widgets.push(Widget { id: "i".into(), kind: "image".into(), x: 0.0, y: 0.0, w: 1.0, h: 1.0, props: json!({ "file": "a.png", "fit": "cover" }), ..Widget::default() });
+        let sq = crate::live::render_preview(&t, 240, 108, true).unwrap();
+        t.theme.widgets[0].radius = Some(200.0);
+        let rd = crate::live::render_preview(&t, 240, 108, true).unwrap();
+        assert_eq!(px(&sq, 1, 1).0, 255, "square corner is the picture");
+        assert!(px(&rd, 1, 1).0 < 200, "rounded corner shows the background");
+        assert_eq!(px(&sq, 120, 54), px(&rd, 120, 54));
     }
 }

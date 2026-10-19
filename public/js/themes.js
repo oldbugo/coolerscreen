@@ -808,6 +808,7 @@ export function createThemes(ctx) {
       }, 'Drawn into the picture on the screen, so it stays when the app is closed. Changing it means updating Embedded.'));
     }
     const hit = Ly.bandHit(w, guidesNow());
+    u.props.append(Wd.cornerRow(w, { el, field, numInput, edited, themeRadius: radius })); // per-item corner radius (morewidgets.js)
     if (hit && E.guides) u.props.append(el('p', { class: 'warn-text small', text: `⚠ Overlaps ${hit}` }));
     u.props.append(el('hr', { class: 'sep' }), el('h3', { text: 'Position and size' }));
     const grid = el('div', { class: 'props-grid' });
