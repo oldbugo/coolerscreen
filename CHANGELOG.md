@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.7.1 - 2026-10-19 (stream D: UI polish)
+
+- The new widget panels and the effects Background section now use the same switches, buttons and fields as the rest
+  of the app, and every widget kind has its own icon in the palette and the layers list.
+
 ## 4.7.0 - 2026-10-19 (stream A: five more effects)
 
 - **New live effects (nine in all):** **Warp** (a starfield streaming sideways), **Waves** (layers of sea and hills at
