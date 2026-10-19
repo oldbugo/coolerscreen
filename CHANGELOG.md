@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.5.0 - 2026-10-19 (stream B: more widgets, second batch)
+
+- **CPU temperature** (also CPU power, CPU fan and board temperature): read from HWiNFO (Shared Memory Support on) or
+  LibreHardwareMonitor (Remote Web Server on) if you already run one. CoolerScreen never installs, starts or elevates
+  them; without one the value stays a dash and the editor says how to turn a source on. Not yet tried with a real
+  HWiNFO or LibreHardwareMonitor.
+- **Disk read / write speed** as sensor and meter readings; **network totals** since start-up (a switch on Down + up).
+- **Live text:** the Text widget can show live words like {time}, {cpu}, {cputemp} or {down}.
+- **Volume:** the master volume level, with "Muted" when muted (read only).
+- **Ping:** one ping a second to a host you type (default 1.1.1.1), as a number or graph; only while the widget is shown.
+- **Agenda:** the next events from a calendar link (https/webcal) or an .ics file, with repeats and "Now".
+- Theme contract v1.12.
+
 ## 4.4.0 - 2026-10-19 (stream A: live effects, Embedded face)
 
 - **Effect themes can be stored as Embedded:** "Store as Embedded", "Update Embedded" and "Use and store as Embedded"
