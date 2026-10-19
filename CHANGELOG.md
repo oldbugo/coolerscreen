@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.3.0 - 2026-10-19 (stream C: small improvements, second batch)
+
+- **Screen changed outside the app:** after a check, if the screen's free space is clearly different from when
+  CoolerScreen last stored something, a banner says another program may have written to it, with an "It's fine" button.
+  Storing again clears it. Read-only: nothing extra is sent to the screen.
+
 ## 4.2.0 - 2026-10-19 (stream B: more widgets, first batch)
 
 Six new widgets, added from the editor palette (World clocks and Timer under Time, the rest under Sensors):
