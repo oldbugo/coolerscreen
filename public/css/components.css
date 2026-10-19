@@ -77,3 +77,11 @@ svg.ico { display: block; flex: none; }
 .drawer-body section h3 { margin-bottom: var(--s3); }
 .drawer-body .field select { min-width: 200px; }
 .drawer-body .src-row:first-of-type { border-top: 0; }
+
+/* ---------- overlays: the backdrop leaves the window's title strip clickable (drag, window buttons) but dims it too ---------- */
+.backdrop::before, .drawer-back::before, .apply-back::before {
+  content: ""; position: fixed; left: 0; right: 0; top: 0; height: var(--cs-bar-h, 0px); background: var(--overlay); pointer-events: none;
+}
+.apply-back::before { background: var(--overlay-strong); }
+.g-chips:empty { display: none; }
+.src-chips:empty { display: none; }

@@ -138,7 +138,7 @@ export function createThemes(ctx) {
     root.textContent = '';
     root.append(el('div', { class: 'ed-empty' },
       el('h1', { id: 'screenTitle', text: 'No live theme' }),
-      el('p', { class: 'muted', text: `${text} Pick one in My themes; this page then edits what is drawn on top of it.` }),
+      el('p', { class: 'muted', text: S.originals.length ? `${text} Pick one in My themes; this page then edits what is drawn on top of it.` : 'Add a theme in My themes or get one in Browse. This page then edits what is drawn on top of it.' }),
       el('div', { class: 'row' },
         el('button', { class: 'btn primary big', text: 'Go to My themes', onclick: () => ctx.goHome('mine') }),
         el('button', { class: 'btn secondary big', text: 'Browse', onclick: () => ctx.goHome('browse') }))));
@@ -228,7 +228,7 @@ export function createThemes(ctx) {
   function paintTitle() {
     const u = E.ui;
     u.title.textContent = E.info.name;
-    u.sub.textContent = S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? 'live layer is off' : widgets().some(w => !hiddenNow(w) && !w.onBase) ? 'live' : 'no live items') : 'Live is off · the screen shows Embedded';
+    u.sub.textContent = S.app?.live?.settings?.inApp ? (E.theme.liveLayer === false ? 'Live layer is off' : widgets().some(w => !hiddenNow(w) && !w.onBase) ? 'Live' : 'No live items') : 'Live is off · the screen shows Embedded';
   }
   function paintSave() {
     const u = E.ui;
