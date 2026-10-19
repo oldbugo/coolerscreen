@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.7.0 - 2026-10-19 (stream A: five more effects)
+
+- **New live effects (nine in all):** **Warp** (a starfield streaming sideways), **Waves** (layers of sea and hills at
+  sunset), **Lava** (a lava lamp), **Retro** (a synthwave sun, mountains and sliding grid) and **Pulse**, which
+  reacts to the sound your PC plays. Pulse listens only while it is the live background; its Embedded copy is a
+  demo loop, not reactive.
+- Each effect costs about 3.4 to 4.8% of the PC's CPU at 60 fps (measured on a busy PC), and all of them fit the
+  screen's storage as Embedded loops.
+
 ## 4.6.0 - 2026-10-19 (stream D: UI revision)
 
 The look is tidied up everywhere; every flow, button action and setting works as before.
