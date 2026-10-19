@@ -115,3 +115,40 @@ screen fit, corners, notch, `onBase` text and pictures and the "best that fits" 
 - Default speed 1 gives a 180-frame loop; whether the real budget makes the app speed those loops up depends on the user's screen
   measurements (the conversion loop handles it, tested only with the 8 MB case above).
 
+## A3: five more effects (nine in all)
+
+New (`src-tauri/src/live/effects/`, same rules: sideways or fade only, exactly periodic, settings speed/amount/size/brightness/colours,
+`RENDER_VERSION` unchanged because the old effects draw as before; adding kinds changes no stored key):
+- **Warp** (`warp.rs`): starfield streaming right to left; near stars thick and fast, far ones fine and slow; each crossing gets a new height.
+- **Waves** (`waves.rs`): five layers of sea/hills in a sunset, each a pair of sine waves sliding sideways (far slow, near fast, alternating
+  direction), haze into the sky. Colours: sky, horizon, far water, near water.
+- **Lava** (`lava.rs`): metaballs that sway sideways (heights fixed) and merge and part; colours: background, rim, body, core.
+- **Retro** (`retro.rs`): synthwave: striped sun, mountains, stars; the grid has fixed horizontal lines and vertical lines in perspective that
+  slide sideways, one spacing per loop. Far lines fade rather than shimmer.
+- **Pulse** (`pulse.rs`): the one **sound-reactive** effect. Columns of coloured light driven by the existing 64-band loopback levels
+  (`audio::audio().levels()`, the visualizer's capture; it starts only while Pulse is the live background and stops itself 4 s after the last
+  ask, so nothing runs in the background otherwise). Loudness changes brightness only. Without audio (editor preview, and the recording)
+  it shows a periodic synthetic "music", so **the Embedded copy of Pulse is a demo loop, not reactive**; the editor text says so. Like every
+  effect it is only on when the user picks it (nothing is the default). `Effect` got `wants_audio` and `audio` (default no-ops).
+UI: `public/js/effects.js` only (table entries, colour swatches have names as tooltips: e.g. "Sky", "Horizon").
+
+**CPU (A3, whole engine at 60 fps, same method as A1, busy PC):** aurora 4.1%, plasma 4.8%, drift 3.7%, clouds 4.7%, warp 3.6%,
+waves 4.4%, lava 4.5%, retro 4.3%, pulse 3.4% (idle gradient 0.55%); the effect itself costs 0.3 to 2.8 ms a frame, the JPEG encode about 8 ms.
+All are under 5%; none is flagged. Retro frames are larger (132 KB at q73, fine grid lines) but under the 200 KB cap.
+
+**Real conversion of every effect** (speed 2, 90 frames, 8 MB budget, the real engine): all nine fit (retro 7.8 MB at quality 78, lava 6.6 MB,
+warp 5.1 MB, waves 5.8 MB, pulse 7.6 MB) and every seam (last frame to first) is no bigger than the steps inside the clip.
+
+**Tests:** 244 passed (every effect is opaque, not black, exactly periodic, stays in its rectangle, moves; pulse follows its levels and is the
+only audio effect). Pictures of all nine looked at (`COOLERSCREEN_EFFECT_DUMP`).
+
+**Web / scene import (not built, decision):** worth doing later only as a separate, opt-in feature. A web page needs a browser engine running
+beside the app (WebView2 off-screen, a second renderer process kept alive, GPU use, no way to make the animation periodic for the Embedded
+loop, and arbitrary page code to trust), which breaks "nothing hidden in the background" and the periodic rule; Wallpaper Engine scene files
+need their own renderer (shaders, particle systems, assets under licence). The cheaper route to the same look is more generated effects, or
+importing a Shadertoy-style shader written to our rules (sideways, periodic) once a GPU path exists. I would not start it before the user
+asks for a specific wallpaper they want.
+
+**Not verified (A3):** how any of the nine look on the real panel; the live audio path of Pulse with real sound (tested only by feeding levels
+in a test; capture itself is the visualizer's existing code, which is also untested with real audio per the 3.0 notes).
+

@@ -15,9 +15,14 @@ use serde_json::Value;
 pub mod aurora;
 pub mod clouds;
 pub mod drift;
+pub mod lava;
 pub mod plasma;
+pub mod pulse;
 pub mod record;
+pub mod retro;
 pub mod util;
+pub mod warp;
+pub mod waves;
 
 use util::Span;
 
@@ -30,16 +35,27 @@ pub enum Kind {
     Plasma,
     Drift,
     Clouds,
+    Warp,
+    Waves,
+    Lava,
+    Retro,
+    /// Sound-reactive (listens to what the PC plays while it is the live background).
+    Pulse,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Aurora, Kind::Plasma, Kind::Drift, Kind::Clouds];
+    pub const ALL: [Kind; 9] = [Kind::Aurora, Kind::Plasma, Kind::Drift, Kind::Clouds, Kind::Warp, Kind::Waves, Kind::Lava, Kind::Retro, Kind::Pulse];
     pub fn name(self) -> &'static str {
         match self {
             Kind::Aurora => "aurora",
             Kind::Plasma => "plasma",
             Kind::Drift => "drift",
             Kind::Clouds => "clouds",
+            Kind::Warp => "warp",
+            Kind::Waves => "waves",
+            Kind::Lava => "lava",
+            Kind::Retro => "retro",
+            Kind::Pulse => "pulse",
         }
     }
     pub fn parse(s: &str) -> Option<Kind> {
@@ -52,6 +68,11 @@ impl Kind {
             Kind::Aurora => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.85, colors: c(&["#2cf5a0", "#3a7bff", "#b24bff"]), seed: 1 },
             Kind::Plasma => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.85, colors: c(&["#1b0f4a", "#c13a8f", "#ff9a3c", "#3a1d7a"]), seed: 1 },
             Kind::Drift => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.9, colors: c(&["#7fd4ff", "#ffffff", "#a58bff"]), seed: 1 },
+            Kind::Warp => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.9, colors: c(&["#9fd0ff", "#ffffff", "#ffb36b"]), seed: 1 },
+            Kind::Waves => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.95, colors: c(&["#10163a", "#ff8a5c", "#2b4a8f", "#0b1d3d"]), seed: 1 },
+            Kind::Lava => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.95, colors: c(&["#1a0626", "#ff4d6d", "#ffb36b", "#fff1c9"]), seed: 1 },
+            Kind::Retro => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.9, colors: c(&["#14052e", "#ff2e93", "#ffd23f", "#2de2e6"]), seed: 1 },
+            Kind::Pulse => Params { kind: self, speed: 1.0, density: 0.5, scale: 0.5, brightness: 0.9, colors: c(&["#ff3d81", "#7a5cff", "#2de2e6"]), seed: 1 },
             Kind::Clouds => Params { kind: self, speed: 0.5, density: 0.5, scale: 0.5, brightness: 0.9, colors: c(&["#0b1030", "#3b2f8f", "#d3689b", "#ffd9a8"]), seed: 1 },
         }
     }
@@ -162,6 +183,12 @@ impl Background {
 /// What every effect implements. `draw` fills `sp` on `data` (RGBA, opaque, canvas width `sp.cw`) for loop phase `phi`.
 pub trait Effect: Send {
     fn draw(&mut self, phi: f64, sp: &Span, data: &mut [u8]);
+    /// The effect listens to the PC's audio (only the sound-reactive one).
+    fn wants_audio(&self) -> bool {
+        false
+    }
+    /// The latest loudness bands (0..1, 64 of them) for the next `draw`; without them an audio effect shows a periodic stand-in.
+    fn audio(&mut self, _levels: &[f32]) {}
 }
 
 pub fn make(p: &Params) -> Box<dyn Effect> {
@@ -170,6 +197,11 @@ pub fn make(p: &Params) -> Box<dyn Effect> {
         Kind::Plasma => Box::new(plasma::Plasma::new(p.clone())),
         Kind::Drift => Box::new(drift::Drift::new(p.clone())),
         Kind::Clouds => Box::new(clouds::Clouds::new(p.clone())),
+        Kind::Warp => Box::new(warp::Warp::new(p.clone())),
+        Kind::Waves => Box::new(waves::Waves::new(p.clone())),
+        Kind::Lava => Box::new(lava::Lava::new(p.clone())),
+        Kind::Retro => Box::new(retro::Retro::new(p.clone())),
+        Kind::Pulse => Box::new(pulse::Pulse::new(p.clone())),
     }
 }
 
@@ -183,6 +215,12 @@ impl EffectBg {
     pub fn new(params: Params) -> EffectBg {
         let fx = make(&params);
         EffectBg { params, fx }
+    }
+    pub fn wants_audio(&self) -> bool {
+        self.fx.wants_audio()
+    }
+    pub fn feed_audio(&mut self, levels: &[f32]) {
+        self.fx.audio(levels);
     }
     /// Draw at loop phase `phi` (see the module doc) into the rectangle `rect` of the canvas.
     pub fn draw_phase(&mut self, phi: f64, data: &mut [u8], cw: usize, ch: usize, rect: (i64, i64, i64, i64)) {
@@ -286,6 +324,24 @@ mod effect_tests {
         }
     }
 
+    /// The sound-reactive effect follows the levels it is given: loud is brighter than quiet, and it is the only effect that listens.
+    #[test]
+    fn pulse_follows_the_audio_levels() {
+        assert_eq!(Kind::ALL.iter().filter(|k| make(&k.defaults()).wants_audio()).count(), 1);
+        let draw = |lv: f32| {
+            let mut e = EffectBg::new(Kind::Pulse.defaults());
+            assert!(e.wants_audio());
+            let mut d = vec![0u8; W * H * 4];
+            for _ in 0..12 {
+                e.feed_audio(&vec![lv; 64]);
+                e.draw_phase(0.3, &mut d, W, H, (0, 0, W as i64, H as i64));
+            }
+            d.chunks_exact(4).map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum::<u64>()
+        };
+        let (quiet, loud) = (draw(0.02), draw(0.9));
+        assert!(loud > quiet * 2, "loud {loud} vs quiet {quiet}");
+    }
+
     /// COOLERSCREEN_EFFECT_DUMP=<dir> writes a few frames of every effect as PNG, to look at.
     #[test]
     fn dump_frames_when_asked() {
@@ -345,8 +401,8 @@ mod measure {
     fn measure_live_cpu() {
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
         let secs: u64 = std::env::var("CS_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
-        for fps in [60u32, 30] {
-            for variant in ["none", "aurora", "plasma", "drift", "clouds", "aurora+widgets"] {
+        for fps in [60u32] {
+            for variant in ["none", "aurora", "plasma", "drift", "clouds", "warp", "waves", "lava", "retro", "pulse", "aurora+widgets"] {
                 let mut cfg = Config::default();
                 cfg.fps = fps;
                 cfg.music.enabled = false;
