@@ -290,3 +290,17 @@ process): not our case for the installed app.
 **Not verified:** a real NSIS installer run (a stub stood in), the new build starting after a real install, a real release build, the
 restart on the user's PC, install-when-idle.ps1 end to end (no installed app touched; the script was not run), and the busy case for
 `--restart` / `--update` / the button.
+
+## Flaky `broken_clip_holds_then_times_out_to_the_gradient` (follow-up)
+
+**Cause:** not the twin and not a bug in the pipeline's hold. The test starts the pipeline and then sets the broken-clip theme; the
+pipeline thread is already rendering, so under load it can render and send a frame or more of the *default* theme before the new
+theme arrives (the hold only applies once the broken clip is the background). My earlier fix measured "first send after the theme
+change" and so counted such a frame as a break of the hold (first send at 0 ms < 1.5 s). The twin only copies frames the sender took
+and cannot make the pipeline send earlier.
+**Hardening (same claim, measured where it can be):** after the theme change the test lets 1 s pass and takes the `sent` count as
+settled, then requires that it did not change until the first *gradient* frame appears (a frame drawn on the placeholder because
+the wait is over), that this first gradient frame came after at least 2 s (the wait is 3 s), and that frames are sent again after it.
+Not weakened: a pipeline that sent during the hold would still fail (sent would move before the first gradient frame). 16 of 16
+full-suite runs with two copies running at once passed; the version before this change failed 14 of 16 runs once I had first tightened it
+the wrong way (my first draft broke on the gradient frame before it was sent; fixed by waiting for the send).

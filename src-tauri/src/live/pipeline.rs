@@ -1027,14 +1027,33 @@ mod handover_tests {
         t.fallback_video = Some(bad);
         let t0 = Instant::now();
         p.set_theme(t);
-        // nothing is sent while the wait lasts; measured from the theme change (not a fixed sleep: a starved machine overshoots those)
-        while p.shared.stats.snap().sent == 0 && t0.elapsed() < Duration::from_secs(10) {
+        // The pipeline is already running when the theme arrives, so a few frames of the default theme may be sent first (more
+        // on a starved machine). What must hold is that, once the broken clip is the background, nothing is sent until the wait is
+        // over and the gradient frames begin: sent stays constant from a settled moment (1 s) until the first gradient frame.
+        while t0.elapsed() < Duration::from_secs(1) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        let first = t0.elapsed();
-        let s = p.shared.stats.snap();
-        assert!(first >= Duration::from_millis(1500), "held while waiting for a real frame: first send after {first:?}");
-        assert!(s.sent > 0 && s.gradient_frames > 0, "gradient allowed after the timeout (waited {first:?})");
+        let settled = p.shared.stats.snap().sent;
+        let mut last_sent_before_gradient = settled;
+        let mut first_gradient = None;
+        while t0.elapsed() < Duration::from_secs(12) {
+            let s = p.shared.stats.snap();
+            if s.gradient_frames > 0 {
+                first_gradient = Some(t0.elapsed());
+                break;
+            }
+            last_sent_before_gradient = s.sent;
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let first = first_gradient.expect("the gradient is used once the wait is over");
+        assert_eq!(last_sent_before_gradient, settled, "held while waiting for a real frame (nothing sent between 1 s and the first gradient frame at {first:?})");
+        assert!(first >= Duration::from_millis(2000), "the wait lasts (the first gradient frame came after {first:?})");
+        // (the gradient frame is counted when it is drawn, a moment before it is sent)
+        let t1 = Instant::now();
+        while p.shared.stats.snap().sent <= settled && t1.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(p.shared.stats.snap().sent > settled, "frames are sent again after the timeout");
         p.stop_fast(Ending::LoopClip);
     }
 }
