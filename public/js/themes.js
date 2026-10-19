@@ -8,6 +8,7 @@ import { styleNotch, styleCorners, makeCornersOverlay } from './frame.js';
 import { openDialog } from './dialog.js';
 import * as Ly from './layers.js';
 import * as Wd from './widgets.js';
+import { backgroundSection } from './effects.js';
 
 const MIN_BOX = 0.02;
 const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
@@ -282,7 +283,7 @@ export function createThemes(ctx) {
   }
 
   // ------------------------------------------------------------------ preview images
-  const baseSigOf = () => JSON.stringify([widgets().filter(w => w.onBase && !hiddenNow(w)), radius()]);
+  const baseSigOf = () => JSON.stringify([widgets().filter(w => w.onBase && !hiddenNow(w)), radius(), E.theme.background || null]);
   function schedulePreview(ms) { clearTimeout(E.pvT); E.pvT = setTimeout(refreshPreview, ms); }
   async function refreshPreview() {
     if (!E.ui || !E.oid) return;
@@ -843,6 +844,8 @@ export function createThemes(ctx) {
       field('Name', nameIn, 'thName'), err,
       el('p', { class: 'muted small', text: widgets().length ? 'Click a layer on the preview or in the list to change it.' : 'Add items from the left: drag them onto the preview, or click them.' }),
       el('div', { class: 'row' }, el('button', { class: 'btn secondary', text: 'Use the Standard layout', title: 'Clock, music and PC stats where they were before themes', onclick: usePreset })),
+      el('hr', { class: 'sep' }),
+      ...backgroundSection({ el, h: { field, range }, theme: t, edited, repaint: () => { paintProps(); } }),
       el('hr', { class: 'sep' }),
       el('div', { class: 'field' }, el('label', { for: 'thCorner', text: 'Corner radius' }), el('div', { class: 'inline-ctl' }, cornerNum, resetBtn)),
       field('Gap', gapNum, 'thGap'),

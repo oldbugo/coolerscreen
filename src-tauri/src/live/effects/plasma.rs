@@ -76,7 +76,7 @@ impl Effect for Plasma {
                     };
                     s += l.amp * wgt * sin_tau(l.k * u - tm[i] + self.warp[i][gy]);
                 }
-                let pos = 0.5 + 0.5 * s / total * 1.6;
+                let pos = 0.5 + 0.5 * s / total * 1.1;
                 let c = self.pal.at(pos * bands);
                 let o = (gy * gw + gx) * 3;
                 self.grid[o] = c[0] * gain;

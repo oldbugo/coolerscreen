@@ -95,7 +95,7 @@ impl Effect for Clouds {
                 let b = fb[row + b0] + (fb[row + b1] - fb[row + b0]) * bf;
                 let c = fc[row + gx];
                 let v = 0.46 * a + 0.34 * b + 0.2 * (c * fade + (1.0 - c) * (1.0 - fade));
-                let t = smoothstep(thr - 0.18, thr + 0.34, v);
+                let t = smoothstep(thr - 0.30, thr + 0.45, v);
                 let col = self.pal.at(t);
                 let o = (row + gx) * 3;
                 self.grid[o] = col[0] * gain;

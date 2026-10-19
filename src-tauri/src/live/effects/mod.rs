@@ -310,3 +310,64 @@ mod effect_tests {
         }
     }
 }
+
+/// Whole-engine CPU measurement (render + encode + send to a null sink + sampler), as a share of all logical cores.
+/// `cargo test --release --lib measure_live_cpu -- --ignored --nocapture` (COOLERSCREEN_FAKE_DEVICE is not needed: the null sink).
+#[cfg(test)]
+mod measure {
+    use crate::live::pipeline::{Pipeline, Sink};
+    use crate::live::{Config, Theme, ThemeLive};
+    use std::time::{Duration, Instant};
+
+    fn cpu_100ns() -> u64 {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let (mut c, mut e, mut k, mut u) = (z, z, z, z);
+        unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) };
+        let f = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
+        f(k) + f(u)
+    }
+
+    #[test]
+    #[ignore]
+    fn measure_live_cpu() {
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+        let secs: u64 = std::env::var("CS_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+        for fps in [60u32, 30] {
+            for variant in ["none", "aurora", "plasma", "drift", "clouds", "aurora+widgets"] {
+                let mut cfg = Config::default();
+                cfg.fps = fps;
+                cfg.music.enabled = false;
+                cfg.notch = "off".into();
+                let p = Pipeline::start(&cfg, Sink::Null);
+                let mut th = if variant.ends_with("widgets") { Theme::standard_preset() } else { Theme::default() };
+                let kind = variant.split('+').next().unwrap();
+                if kind != "none" {
+                    th.background = Some(super::Background { kind: "effect".into(), effect: kind.into(), ..Default::default() });
+                }
+                p.set_theme(ThemeLive::new(th, std::path::PathBuf::new()));
+                std::thread::sleep(Duration::from_millis(1500));
+                let (c0, t0, s0) = (cpu_100ns(), Instant::now(), p.shared.stats.snap());
+                std::thread::sleep(Duration::from_secs(secs));
+                let (c1, t1, s1) = (cpu_100ns(), Instant::now(), p.shared.stats.snap());
+                let wall = (t1 - t0).as_secs_f64();
+                let cpu = (c1 - c0) as f64 / 1e7;
+                let n = (s1.sent - s0.sent).max(1) as f64;
+                println!(
+                    "{fps} fps {variant:15} cpu {:.1}% of one core = {:.2}% of {cores} cores | frames/s sent {:.1} rendered {:.1} | render {:.2} ms rotate {:.2} ms encode {:.2} ms | {:.0} KB/frame q{}",
+                    100.0 * cpu / wall,
+                    100.0 * cpu / wall / cores,
+                    n / wall,
+                    (s1.rendered - s0.rendered) as f64 / wall,
+                    (s1.render_us - s0.render_us) as f64 / 1000.0 / (s1.rendered - s0.rendered).max(1) as f64,
+                    (s1.rotate_us - s0.rotate_us) as f64 / 1000.0 / n,
+                    (s1.encode_us - s0.encode_us) as f64 / 1000.0 / (s1.encoded - s0.encoded).max(1) as f64,
+                    (s1.sent_bytes - s0.sent_bytes) as f64 / 1000.0 / n,
+                    s1.quality
+                );
+                p.stop_fast(crate::live::session::Ending::LoopClip);
+            }
+        }
+    }
+}
