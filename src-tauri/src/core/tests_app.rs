@@ -1291,3 +1291,51 @@ fn only_picture_inputs_make_the_stored_base_stale() {
     app.theme_set(&oid, &json!({ "widgets": [{ "id": "t", "type": "text", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.2, "onBase": false, "props": { "text": "Baked" } }] })).unwrap();
     assert!(!stale(&app), "the same item, live only");
 }
+
+/// C2: the screen's free space is remembered when the app stored something; a clearly different value at a later check means
+/// another program wrote to the screen. Only the read-only info answer is used.
+#[test]
+fn a_check_flags_screen_content_changed_outside_the_app() {
+    let (_d, app, _rec, _g) = setup();
+    let flagged = |app: &App| app.app_state()["screenChanged"].clone();
+    // first check: nothing to compare with yet, the answer becomes the baseline
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // the same answer again, and a wobble inside the tolerance: nothing
+    app.device_check().unwrap();
+    app.device.fake_set_free(4880 - 40);
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null(), "{}", flagged(&app));
+    // another program stored a big file: free space dropped a lot
+    app.device.fake_set_free(300);
+    app.device_check().unwrap();
+    let c = flagged(&app);
+    assert_eq!((c["wasFree"].as_f64().unwrap(), c["nowFree"].as_f64().unwrap()), (4880.0 * 512.0, 300.0 * 512.0));
+    // checking again keeps the same open difference (the "was" stays what we stored)
+    app.device.fake_set_free(200);
+    app.device_check().unwrap();
+    let c2 = flagged(&app);
+    assert_eq!((c2["wasFree"].as_f64().unwrap(), c2["nowFree"].as_f64().unwrap()), (4880.0 * 512.0, 200.0 * 512.0));
+    assert_eq!(c2["at"], c["at"]);
+    // "It's fine": the screen as it is now becomes the baseline
+    app.settings_update(&json!({ "screenChanged": "accept" })).unwrap();
+    assert!(flagged(&app).is_null());
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // flagged again, then the app stores something itself: the final check of the store is the new baseline
+    app.device.fake_set_free(4880);
+    let info = app.device_check().unwrap();
+    assert!(!flagged(&app).is_null());
+    app.rebase_screen(Some(&info));
+    assert!(flagged(&app).is_null());
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // a store whose final check failed drops the baseline; the next check starts over without a false alarm
+    app.device.fake_set_free(100);
+    app.rebase_screen(None);
+    app.device_check().unwrap();
+    assert!(flagged(&app).is_null());
+    // the settings file keeps both keys only while they mean something
+    let raw = std::fs::read_to_string(app.settings.file()).unwrap();
+    assert!(raw.contains("screenBaseline") && !raw.contains("screenChanged"));
+}

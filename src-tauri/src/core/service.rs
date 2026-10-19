@@ -106,6 +106,7 @@ impl App {
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
             "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(), "weather": s.weather_value(),
+            "screenChanged": self.screen_changed_value(),
             "budget": num(b.loop_bytes), "total": num(b.total), "budgetMeasured": b.measured, "capacityAt": b.capacity_at,
             "uploadRate": s.upload_rate().map(num).unwrap_or(json!(50000)),
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
@@ -124,6 +125,9 @@ impl App {
         let guides = body.get("screenGuides").filter(|g| g.is_object()).map(|g| super::settings::guides_value(&crate::live::theme::Guides::from_value(g)));
         let snap = body.get("editor").and_then(|e| e["snap"].as_bool());
         let w_unit = body.get("weather").and_then(|w| w["unit"].as_str()).filter(|u| *u == "C" || *u == "F").map(String::from);
+        if body.get("screenChanged").and_then(Value::as_str) == Some("accept") {
+            self.accept_screen_change();
+        }
         let fit_patch = body.get("screenFit").filter(|f| f.is_object()).cloned();
         self.settings.update(|s| {
             if let Some(r) = radius {
@@ -766,9 +770,11 @@ impl App {
             self.settings.update(|s| s["uploadRate"] = num(rate))?;
         }
         // Measured capacity from the final check (free blocks + what our two clips now occupy).
-        if let Some(info) = r.get("finalInfo").filter(|i| i.is_object()) {
+        let final_info = r.get("finalInfo").filter(|i| i.is_object());
+        if let Some(info) = final_info {
             self.save_capacity(info);
         }
+        self.rebase_screen(final_info); // what the screen reports now is what we stored: the baseline for the outside-change check
         self.lib.bump();
         let mut out = r.as_object().cloned().unwrap_or_default();
         out.insert("versionId".into(), json!(vid));
@@ -844,6 +850,7 @@ impl App {
             app.device.check(&mut |p, m| ctx.progress(p, m))
         })?;
         *self.last_info.lock().unwrap() = Some(info.clone());
+        self.note_screen_info(&info);
         let cap = self.save_capacity(&info);
         info["_capacity"] = cap.map(num).unwrap_or(Value::Null);
         Ok(info)
