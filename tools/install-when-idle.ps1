@@ -50,5 +50,11 @@ if ($running.Count -gt 0) {
 
 $i = Start-Process $Setup -ArgumentList "/S" -WindowStyle Hidden -PassThru -Wait
 if ($i.ExitCode -ne 0) { "installer failed: $($i.ExitCode)"; exit 1 }
-"installed $((Get-Item $exe).VersionInfo.ProductVersion); CoolerScreen is closed: ask the user to reopen it from the Start menu"
-exit 0
+# The installer can return before every file is written (2026-10-19 it reported the old version): wait for the new exe.
+$want = [version](([IO.Path]::GetFileName($Setup)) -replace '^CoolerScreen_(\d+\.\d+\.\d+)_.*$', '$1')
+for ($k = 0; $k -lt 120; $k++) {
+    $now = [version]((Get-Item $exe).VersionInfo.ProductVersion -replace '[^0-9.].*$', '')
+    if ($now -ge $want) { "installed $now; CoolerScreen is closed: ask the user to reopen it from the Start menu"; exit 0 }
+    Start-Sleep -Milliseconds 500
+}
+"the installer finished but CoolerScreen.exe is still $now (wanted $want): check before telling the user"; exit 1
