@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.15.1 - 2026-10-19 (stream E: music fix)
+
+- **Play/pause sign fixed:** the music card showed a play triangle while playing, which read as reversed; it now shows
+  like a player's button (two bars while playing, a triangle while paused).
+- **Several players open:** the card follows the player Windows shows as current when it is playing, then any playing one.
+
 ## 4.15.0 - 2026-10-19 (stream B: headlines and web picture)
 
 - **Headlines:** the latest 3 to 5 titles from an RSS or Atom link you paste, with the source and how old each one is;
