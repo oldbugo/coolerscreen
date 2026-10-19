@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.17.1 - 2026-10-19 (stream C: test copies can never use the real screen)
+
+- Development (debug) builds of CoolerScreen, cs2 and cs-companion never open the real screen unless explicitly told to;
+  they say "(debug, fake screen)" in the window title and log. Your installed app is unchanged.
+
 ## 4.17.0 - 2026-10-19 (stream B: game FPS)
 
 - **Game FPS widget:** the game in front, its frame rate as a big number, optional 1% low and a frame-time graph. It reads
