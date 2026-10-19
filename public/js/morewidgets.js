@@ -14,8 +14,8 @@ const meterRows = () => ['cpu.load', 'ram.used', 'gpu.load', 'gpu.temp'].map(met
 export const ENTRIES = {
   meters: { type: 'meters', name: 'Meters', icon: '☷', props: () => ({ rows: meterRows(), unit: 'C', bars: true, rate: 1 }) },
   cores: { type: 'cores', name: 'CPU cores', icon: '▦', props: () => ({ style: 'bars', average: true, color: null, rate: 2 }) },
-  network: { type: 'network', name: 'Network', icon: '⇵', props: () => ({ graph: true, history: 60, downColor: '#5ad2a0', upColor: '#aa8cff', rate: 2 }) },
-  disks: { type: 'disks', name: 'Disks', icon: '▤', props: () => ({ drives: [], show: 'used', maxRows: 4 }) },
+  network: { type: 'network', name: 'Down + up', icon: '⇵', props: () => ({ graph: true, history: 60, downColor: '#5ad2a0', upColor: '#aa8cff', rate: 2 }) },
+  disks: { type: 'disks', name: 'All disks', icon: '▤', props: () => ({ drives: [], show: 'used', maxRows: 4 }) },
   worldclock: { type: 'worldclock', name: 'World clocks', icon: '◷', props: () => ({
     zones: [{ name: 'New York', tz: 'Eastern Standard Time' }, { name: 'London', tz: 'GMT Standard Time' }, { name: 'Tokyo', tz: 'Tokyo Standard Time' }], format: '24h', color: '#ffffff' }) },
   timer: { type: 'timer', name: 'Timer', icon: '⏲', props: () => ({ mode: 'stopwatch', running: false, startedAt: 0, elapsedMs: 0, duration: 300, workMin: 25, breakMin: 5, color: '#ffffff' }) },
@@ -24,7 +24,7 @@ export const ENTRIES = {
 /** [group name, entry keys] pairs added to the palette (widgets.js puts them into the existing groups). */
 export const PALETTE_ADD = { Time: ['worldclock', 'timer'], Sensors: ['meters', 'cores', 'network', 'disks'] };
 
-export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Network', disks: 'Disks', worldclock: 'World clocks', timer: 'Timer' };
+export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer' };
 
 /** Default box [w, h] as fractions of the 2400x1080 canvas. */
 export function defaultSize(type, p = {}) {
