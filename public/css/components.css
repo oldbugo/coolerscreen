@@ -64,3 +64,6 @@ input[type="checkbox"]:not([role="switch"]), input[type="radio"] { accent-color:
 /* ---------- icons (js/icons.js) ---------- */
 svg.ico { display: block; flex: none; }
 .wbox .wwarn svg, .stage svg.ico { filter: var(--icon-shadow-picture); }
+
+/* ---------- scrollbars: thin and dark everywhere ---------- */
+* { scrollbar-width: thin; scrollbar-color: var(--border-control) transparent; }

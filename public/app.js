@@ -2249,7 +2249,7 @@ function renderActivity() {
       setTimeout(renderActivity, 8000 - (now - outcome.finishedAt) + 50);
     }
   }
-  box.hidden = false;
+  box.hidden = !rows.length; // shown only while it has something to say (no empty strip at the bottom)
   box.append(...rows);
   for (const t of box.querySelectorAll('.txt')) t.title = t.textContent;
 }

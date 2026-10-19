@@ -71,7 +71,7 @@ await click('#detail .ctx-bar button', 'Back'); await wait(800);
 // Store as Embedded on a theme that is not Embedded (the fake screen takes the upload)
 await click('#navMine'); await wait(500);
 await js('document.querySelectorAll(".g-card.sel").forEach(e => e.click()); 1');
-await click('.g-card', 'Coast'); await click('.sel-bar button', 'Store as Embedded|Use and store'); await wait(1200);
+await click('.g-card', 'Coast'); await click('.sel-bar button', 'Store as Embedded|Use and store|Update Embedded'); await wait(1200);
 await shot('04-store-as-embedded-dialog');
 await wait(9000);
 await click('#navMine'); await js('document.querySelectorAll(".g-card.sel").forEach(e => e.click()); 1');

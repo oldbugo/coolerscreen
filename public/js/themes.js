@@ -172,8 +172,9 @@ export function createThemes(ctx) {
     u.btnUngroup.innerHTML = icon('ungroup');
     u.btnDelete = el('button', { class: 'iconbtn', title: 'Delete the selected layers (Delete)', 'aria-label': 'Delete the selected layers', onclick: () => doDelete() });
     u.btnDelete.innerHTML = icon('trash');
-    const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' },
-      el('h3', { text: 'Add' }), u.palette,
+    const left = el('aside', { class: 'ed-left', 'aria-label': 'Items' }, el('h3', { text: 'Add' }), u.palette);
+    // the layer list sits under the preview, where the free height is
+    const layersBox = el('section', { class: 'ed-layers', 'aria-label': 'Layers' },
       el('div', { class: 'layers-head' }, el('h3', { text: 'Layers' }), el('span', { class: 'grow' }), u.btnGroup, u.btnUngroup, u.btnDelete),
       u.layers, u.layersNone);
     // centre
@@ -215,7 +216,7 @@ export function createThemes(ctx) {
     u.baseBtn = el('button', { class: 'btn ghost', text: 'Picture…', title: 'Choose its picture: any clip, its loop, quality and versions', onclick: () => ctx.openBase(E.oid, E.info) });
     const center = el('section', { class: 'ed-center', 'aria-labelledby': 'screenTitle' },
       el('div', { class: 'ed-title' }, u.title, u.sub, el('span', { class: 'grow' }), u.saveState, u.baseBtn),
-      u.banner, u.bar, u.stageWrap);
+      u.banner, u.bar, u.stageWrap, layersBox);
     u.props = el('aside', { class: 'ed-right', 'aria-label': 'Properties' });
     root.append(el('div', { class: 'ed' }, left, center, u.props));
   }
