@@ -23,44 +23,43 @@ picture stored on the screen is called **Embedded**; fewer words; nothing new tu
 
 ## 2. Tokens
 
-Status: **now** = in `public/style.css` `:root` today; **D2** = added or changed in step 1 of the revision (in
-`public/css/tokens.css`). Until D2 lands, use the "now" tokens; never use a "D2" value as a literal.
+All tokens are in `public/css/tokens.css` (since D2). Use them by name; never copy a value as a literal.
 
 ### 2.1 Colour (dark only)
 
-| Token | Value | Use | Status |
-|---|---|---|---|
-| `--bg` | `#0f1115` | window background, stage surround | now |
-| `--surface-1` | `#161920` | panes, side columns, drawer, dialogs, cards | now |
-| `--surface-2` | `#1d2129` | inputs, rows, secondary buttons | now |
-| `--surface-3` | `#262b35` | hover, raised segment | now |
-| `--border` | `#2b313c` | decorative dividers only | now |
-| `--border-strong` | `#4a5262` | frames of previews and cards on hover | now |
-| `--border-control` | `#646d7f` | outlines of inputs, selects, secondary buttons, switch off track (3.1:1 on surface-2) | D2 |
-| `--text` | `#e8eaee` | primary text (14.6:1) | now |
-| `--text-muted` | `#9aa2b1` | labels, hints, secondary text (6.3:1) | now |
-| `--text-faint` | `#6f7787` → `#858d9e` | timestamps, group headings (4.8:1 after D2) | changed in D2 |
-| `--accent` | `#5aa9ff` | primary action, selection, focus, progress | now |
-| `--accent-ink` | `#04121f` | text on accent | now |
-| `--accent-soft` | `rgba(90,169,255,.14)` | selected fill, chips | now |
-| `--ok` / `--warn` / `--danger` | `#45c97a` / `#f0b43c` / `#ff6b6b` | status: live/success, attention, error/destructive | now |
-| `--ok-soft` / `--warn-soft` / `--danger-soft` | same hue, 14 % | banners, chips | now |
-| `--overlay` | `rgba(0,0,0,.55)` | dialog and drawer backdrop | D2 |
-| `--guide-zone` / `--guide-curve` / `--snap` | the current orange, blue, pink of guides and snap lines | editor overlays only | D2 |
+| Token | Value | Use |
+|---|---|---|
+| `--bg` | `#0f1115` | window background, stage surround |
+| `--surface-1` | `#161920` | panes, side columns, drawer, dialogs, cards |
+| `--surface-2` | `#1d2129` | inputs, rows, secondary buttons |
+| `--surface-3` | `#262b35` | hover, raised segment |
+| `--border` | `#2b313c` | decorative dividers only |
+| `--border-strong` | `#4a5262` | frames of previews and cards on hover |
+| `--border-control` | `#646d7f` | outlines of inputs, selects, secondary buttons, switch off track (3.1:1 on surface-2) |
+| `--text` | `#e8eaee` | primary text (14.6:1) |
+| `--text-muted` | `#9aa2b1` | labels, hints, secondary text (6.3:1) |
+| `--text-faint` | `#858d9e` | timestamps, group headings (4.8:1) |
+| `--accent` | `#5aa9ff` | primary action, selection, focus, progress |
+| `--accent-ink` | `#04121f` | text on accent |
+| `--accent-soft` | `rgba(90,169,255,.14)` | selected fill, chips |
+| `--ok` / `--warn` / `--danger` | `#45c97a` / `#f0b43c` / `#ff6b6b` | status: live/success, attention, error/destructive |
+| `--ok-soft` / `--warn-soft` / `--danger-soft` | same hue, 14 % | banners, chips |
+| `--overlay` | `rgba(0,0,0,.55)` | dialog and drawer backdrop |
+| `--guide-zone` / `--guide-curve` / `--snap` | the current orange, blue, pink of guides and snap lines | editor overlays only |
 
 Meaning is fixed: **accent** = "do this / selected / you are here"; **ok** = live and success; **warn** = needs attention
 (stale Embedded, setup); **danger** = errors and destructive buttons. Never use status colours for decoration.
 
 ### 2.2 Type (Segoe UI Variable, then Segoe UI, system-ui)
 
-| Token | Size / line | Weight | Use | Status |
-|---|---|---|---|---|
-| `--fs-display` | 22 / 28 | 600 | page titles (My themes, Browse) | D2 |
-| `--fs-title` | 20 / 28 | 600 | editor and Picture page title | now |
-| `--fs-h` | 15 / 22 | 600 | section headings (h3), dialog titles | now (dialogs move from 17 in D2) |
-| `--fs-body` | 14 / 20 | 400 | default text, buttons, inputs | now |
-| `--fs-small` | 13 / 18 | 400 | labels, hints, meta, chips' parent rows | now |
-| `--fs-tiny` | 12 / 16 | 500–600 | chips, group headings (uppercase), stage labels | now |
+| Token | Size / line | Weight | Use |
+|---|---|---|---|
+| `--fs-display` | 22 / 28 | 600 | page titles (My themes, Browse) |
+| `--fs-title` | 20 / 28 | 600 | editor and Picture page title |
+| `--fs-h` | 15 / 22 | 600 | section headings (h3), dialog titles |
+| `--fs-body` | 14 / 20 | 400 | default text, buttons, inputs |
+| `--fs-small` | 13 / 18 | 400 | labels, hints, meta, chips' parent rows |
+| `--fs-tiny` | 12 / 16 | 500–600 | chips, group headings (uppercase), stage labels |
 
 Minimum 12 px everywhere in the app UI (stage overlay labels included). Only 400 and 600 weights. Numbers that change use
 `font-variant-numeric: tabular-nums` (class `.num`).
@@ -69,7 +68,7 @@ Minimum 12 px everywhere in the app UI (stage overlay labels included). Only 400
 
 - **Spacing** (4 px base): `--s1` 4, `--s2` 8, `--s3` 12, `--s4` 16, `--s5` 24, `--s6` 32. Inside a panel: 16 padding,
   12 between fields, 24 + divider between sections. Never other gaps.
-- **Control heights** (D2 tokens): `--h-sm` 28 (inline, dense rows), `--h-md` 32 (default buttons, inputs, selects),
+- **Control heights:** `--h-sm` 28 (inline, dense rows), `--h-md` 32 (default buttons, inputs, selects),
   `--h-lg` 36 (the one main action of a page or bar). Icon-only buttons are square at the same heights.
 - **Radii:** `--r-sm` 6 (inputs, chips, small buttons, thumbnails), `--r-md` 10 (buttons, rows, panels), `--r-lg` 16
   (cards, dialogs, drawer), `--r-full` 999 (switches, pills; D2). The stage and screen previews keep `--r-sm` on purpose
@@ -77,17 +76,21 @@ Minimum 12 px everywhere in the app UI (stage overlay labels included). Only 400
 - **Elevation:** `--shadow` (`0 12px 40px rgba(0,0,0,.5)`) for dialogs, drawer, menus, popovers, toasts only.
 - **Motion:** 150 ms ease-out for hover/press/switch, 200 ms for dialogs and drawer; nothing moves under
   `prefers-reduced-motion`. No up-and-down animation of anything that represents the screen.
-- **Z-index (D2 tokens):** stage overlays 1–5, sticky bars 10, menus/popovers 30, drawer/dialog 50, toast 60, locked Apply
+- **Z-index:** stage overlays 1–5, sticky bars 10, menus/popovers 30, drawer/dialog 50, toast 60, locked Apply
   dialog 100.
 
 ## 3. Components
 
+CSS files (all loaded by `index.html`, in this order): `css/tokens.css` (tokens), `style.css` (older page rules, shrinking),
+`css/components.css` (switch, buttons, icons, overlays, Settings index), `css/editor.css` (On screen layout, palette,
+Properties), `css/picture.css` (the Picture page). A stream that needs its own CSS adds its own file after these.
+
 | Component | Use | Rules |
 |---|---|---|
-| **Button** `.btn` + `primary` / `secondary` / `ghost` / `danger` | actions | 32 px (`big` = 36 for the one main action). One primary per region. Danger only for destructive actions, and those confirm in a dialog. No `outline` variant (removed in D2). |
+| **Button** `.btn` (+ `primary` / `ghost` / `danger`; `.btn` alone and `secondary` look the same) | actions | 32 px (`big` = 36 for the one main action, `small-btn` = 28). One primary per region. Danger only for destructive actions, and those confirm in a dialog. |
 | **Icon button** `.iconbtn` | tools without room for text (close, more, layer tools, reset) | Square 32 (28 in dense rows), `aria-label` and `title` required, SVG icon 16 px. |
-| **Link** `.linkbtn` (D2: `.link`) | an action inside a sentence ("Turn on", "Update Embedded") | accent text, underline, no padding. Use a ghost button when it stands alone. |
-| **Switch** `input[type=checkbox][role=switch]` | any setting that is on or off | Label on the left, switch on the right (`swRow`). Never a plain checkbox for on/off. In D2 all switches get one look (track 36x20, off track `--border-control`). |
+| **Link** `.linkbtn` (or `.btn.inline-btn`) | an action inside a sentence ("Turn on", "Update Embedded") | accent text, underline, no padding. Use a ghost button when it stands alone. |
+| **Switch** `input[type=checkbox][role=switch]` | any setting that is on or off | Label on the left, switch on the right (`swRow`), or switch then text in a toolbar (`label.sw-inline`). Never a plain checkbox for on/off. Every `role="switch"` checkbox is drawn as the switch automatically. |
 | **Checkbox** | choosing several items from a list (e.g. Stats panel items) | Label right of the box. |
 | **Segmented control** `.seg` | 2–4 mutually exclusive views or modes | Buttons with `aria-pressed`; selected = raised `--surface-3`. |
 | **Picture choices** `.styles` / `.sty` | choosing a visual style | 3 per row, SVG picture + one-word label, `aria-pressed`. |
@@ -96,14 +99,14 @@ Minimum 12 px everywhere in the app UI (stage overlay labels included). Only 400
 | **Slider** `range()` | continuous values with immediate preview | Always with a value readout on the right (`range()` adds it). |
 | **Colour** `colour()` | colours | Swatch 44x32; optional reset icon button "Automatic". |
 | **Card** `.g-card` | themes and Browse items | `--surface-1`, `--r-lg`, picture 20:9 on top, name, one meta line, chips. |
-| **Row / list item** | layers, versions, sources | Selected = `--accent-soft` fill + 2 px accent left bar (D2 unifies all lists to this). |
+| **Row / list item** | layers, versions, sources | Selected = `--accent-soft` fill + accent outline or left bar. |
 | **Chip** `.chip` + `ok` / `warn` / `danger` / `accent` | short state tags (Embedded, In use, Seamless) | 20 px, `--fs-tiny`, soft background + same hue text. |
 | **Banner** `.banner` / `.base-banner` | page-wide or editor-wide state needing action | One sentence + one button. warn for attention, danger for errors. |
 | **Toast** | confirmation of something that just happened | One line, disappears; errors stay longer and use `bad`. Never the only place an error is shown when an action is needed. |
 | **Dialog** `openDialog()` (`js/dialog.js`) | confirmations and short forms | Always this helper (focus trap, Esc, safe default). Title is a question or the action; buttons: secondary "Cancel" left, primary/danger right. No native `confirm()`. |
 | **Drawer** | Settings | One drawer; sections are `<section>` with an h3. |
 | **Progress** `.progress` | jobs | Bar plus a text label beside it, never inside. |
-| **Icons** | everywhere | D2: `js/icons.js`, one 16 px stroke SVG set. Until then reuse an existing glyph or SVG from the same area; do not introduce new emoji or Unicode symbols. |
+| **Icons** | everywhere | `js/icons.js`: `icon(name)` gives a 16 px stroke SVG; `widgetIcon(key)` the palette/layer icon of an item kind. Icon-only buttons that still carry ↺ ✕ + ↑ ↓ ⋯ ⚠ get the SVG automatically. A new item kind without an entry in `icons.js` shows its glyph until stream D adds one (say so in your notes). No new emoji. |
 
 ## 4. Adding editor controls (streams A and B: read this)
 
@@ -113,8 +116,8 @@ The Properties column is built in JS with helpers. Use them and you get today's 
 
 - **New widget kind:** an entry in `ENTRIES` (`public/js/widgets.js`) with `name` (one or two words, sentence case),
   `icon` and `props()`; add its key to a group in `PALETTE` (Time, Sensors, Media, Info, Decoration, or one new group if
-  none fits, e.g. "Effects"). Keep names short: the palette shows about 10 characters at the default window size
-  (audit M7); "Top processes" already truncates.
+  none fits, e.g. "Effects"). The palette is two to a row and wraps a name onto a second line at a space, so keep each
+  word under about 10 characters ("Top processes" is fine, "Countdowntimer" is not).
 - **Its properties:** a branch in `paintTypeProps()` (or your own module called from there) that appends to `host`.
 - **Theme-level settings (e.g. an effect background):** a section in Theme settings (`paintThemeProps()` in
   `js/themes.js`) introduced by `el('hr', { class: 'sep' })` + `el('h3', { text: 'Background' })`. Keep the hook in
@@ -163,7 +166,7 @@ host.append(el('div', { class: 'props-grid' },              // two short numbers
 - [ ] Every new control is built with `field` / `swRow` / `range` / `select2` / `numInput` / `colour` / `.styles`.
 - [ ] No new hex/rgba/px literals in CSS; no inline `style=` for colours.
 - [ ] Labels: sentence case, 1–3 words, "Embedded" where the stored picture is meant.
-- [ ] Palette name fits (≤ 10 characters) or is accepted as truncated.
+- [ ] Palette name: no single word over about 10 characters.
 - [ ] Screenshot of the panel at 1280x860 in your notes.
 
 ## 5. Page patterns
@@ -171,7 +174,7 @@ host.append(el('div', { class: 'props-grid' },              // two short numbers
 - **Page header:** title (`--fs-display` on galleries, `--fs-title` in the editor) + muted meta on the same baseline;
   actions on the right (secondary buttons, at most one primary).
 - **Bottom bar:** one component for the My themes selection bar and the Picture page action bar: name and state on the
-  left, actions on the right, main action last (D2).
+  left, actions on the right, main action last.
 - **Empty states:** one sentence saying what this page is for + one primary action (+ one secondary).
 - **States of the screen:** status pill (dot + text) + one banner with one action; never more than one banner per cause.
 - **Selection:** soft fill + 2 px left bar for rows; accent border + soft fill for cards; accent border for stage boxes.
