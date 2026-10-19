@@ -26,6 +26,7 @@ pub mod render;
 pub mod sensors;
 pub mod session;
 pub mod theme;
+pub mod twin;
 pub mod video;
 pub mod volume;
 pub mod weather;

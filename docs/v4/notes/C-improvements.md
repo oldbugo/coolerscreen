@@ -201,3 +201,35 @@ write only into the private copy.
 
 Also in this commit: two flaky child-process tests (`jobobject::children_die_with_the_app`, `media::sys::adopted_children_die_with_the_app`)
 now wait up to 10 s for the system to end the child instead of a fixed 300/500 ms (they failed once in a full parallel run).
+
+## E3: digital twin + smooth dragging (editor refinement round)
+
+**Twin (backend):** `live/twin.rs` keeps the newest sent JPEG (the portrait 756x1680 frame the screen gets, so it already has the
+screen fit, notch and rounded corners: "as on the screen") in memory, at most one per 60 ms (about 15 per second), and only while
+the page has asked within the last 3 s (`wanted()`); the send thread copies a frame only then, so the cost is zero when the editor
+is closed, hidden or minimised. The media server serves it at `<base>/twin/frame.jpg?since=<seq>` (204 when nothing is newer,
+`X-Twin-Seq` header, no-store). New command `twin_watch {on}`: Live on = the frames the engine sends are copied (no second render);
+Live off = a stream for the editor only (null sink: nothing is sent to the screen; render rate locked at 15, settings changes keep it;
+never idle-held); it ends when the editor leaves/hides (`on:false`), or by itself 10 s after the page stopped asking; switching Live
+on while it runs replaces it by live's real stream; quit/stop clears it. `status.twinning` tells the page.
+**Cost (release build, standard theme, Live off, measured with `twin_cost`, `--ignored`):** 11 frames/s actually encoded (unchanged
+pictures are skipped, as for the screen), render 4.3 ms + JPEG 8.5 ms per frame, **17% of one core = about 1.1% of this 16-core PC**
+while the editor is open and looking; 0 otherwise. With Live on it adds only a copy of a ~100 KB JPEG per frame (no extra render or
+encode). Not reduced further (a lower JPEG quality for the twin would save about a fifth); easy to do if wanted.
+Limits: with Live on and the screen not connected (no device, or paused by a device task) no frames are sent, so the twin keeps its
+last picture and then falls back to the still preview after 1.5 s; with the live layer off (live idle) the same fallback applies.
+**Twin (page):** `public/js/twin.js` (new): a canvas under the boxes/guides/corners; turns the portrait frame back to landscape while
+drawing; polls every 45 ms only while the stage is visible (`document.hidden` and a detached stage stop it and tell the engine);
+`.stage.twin-on > img.layer {visibility:hidden}` hides the still images while frames are fresh. Hooks in `themes.js`: one import and
+one line after the stage is built. Effects drawn by the still preview's own animation loop are left as they were (not removed, so
+no E1 conflict; the twin simply covers them while live).
+**Smooth dragging (`themes.js startDrag`, 3 small changes):** pointer events are folded into one placement per animation frame
+(rAF); snap lines are rebuilt only when they change; the theme is sent to the engine every 120 ms while dragging (the live picture
+and the twin catch up) and once more on release; and `appChanged()` no longer repaints (rebuilds) the boxes during a drag (the
+library event the throttled saves cause would otherwise have dropped the drag).
+**Verified:** unit tests (twin store, Live off stream renders for the editor at 15 and ends, Live on copies without a second stream);
+quiet DEBUG fake-device instance driven by `tools/ui-shots/twin-flow.mjs` (needs `document.hidden` forced false: the quiet window
+reports hidden): twin canvas shows the live picture (screenshot checked), frames flow, leaving On screen stops the editor-only
+stream and coming back starts it; a 220-event drag folded to about 100 placements, 9 saves in 1.7 s, the box moved the full distance;
+no page errors. **Not verified:** the user's feel of the drag on real hardware, the twin on a real screen/device, and with E1's new
+layout (E1 is being rebuilt in the same file: merge main again after it lands; my edits are the lines named above).

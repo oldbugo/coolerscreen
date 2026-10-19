@@ -400,7 +400,7 @@ pub const COMMANDS: &[&str] = &[
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
     "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place", "ext_sensor_status",
-    "screen_preview", "screen_preview_end",
+    "screen_preview", "screen_preview_end", "twin_watch",
 ];
 
 // ---------- 4.0 external sensors (CPU temperature through HWiNFO / LibreHardwareMonitor the user runs) ----------
@@ -454,4 +454,24 @@ pub async fn screen_preview_end(core: State<'_, Core>, request: tauri::ipc::Requ
     let a = json_args(&request);
     let keep = a["keepalive"].as_bool().unwrap_or(false);
     run(&core, move |app| Ok(if keep { app.preview_keepalive_on_screen() } else { app.preview_end_on_screen() })).await
+}
+
+// ---------- the editor's digital twin ----------
+
+/// `{ on: bool }` -> `{ running }`: the editor is open and looking (true: frames of the live picture become available at
+/// `/twin/frame.jpg` on the media server, about 15 per second; with Live off a stream for the editor only starts, nothing is sent
+/// to the screen) or is closed / hidden (false: that stream ends). Safe to repeat.
+#[tauri::command]
+pub async fn twin_watch(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let a = json_args(&request);
+    let on = a["on"].as_bool().unwrap_or(true);
+    run(&core, move |app| {
+        if on {
+            app.live.twin_start();
+        } else {
+            app.live.twin_stop();
+        }
+        Ok(json!({ "running": app.live.running(), "twinning": app.live.twinning() }))
+    })
+    .await
 }
