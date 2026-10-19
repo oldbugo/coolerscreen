@@ -149,6 +149,9 @@ host.append(el('div', { class: 'props-grid' },              // two short numbers
   a select) sits top left, the row's icon buttons (↑ ↓ ✕, in an `.inline-ctl`) top right, further fields full width
   below; an "Add a …" secondary button under the list.
 - A new item kind needs an icon: ask stream D to add it to `js/icons.js` (key = the palette key or item type).
+- A control every item kind gets (like Corner radius): register it with `addItemControls(fn)` from `js/edhooks.js`;
+  it renders at the end of the item's Properties, above the pinned "Delete this item" bar. There is no position/size
+  section: items are placed on the preview.
 - Changes call `api.set()` / `api.edited()` immediately. **No Save or Apply buttons**, no "OK" step.
 
 ### 4.3 Rules for the controls

@@ -69,6 +69,67 @@ await js(`(() => { const s = document.querySelector('.stage'); s.dispatchEvent(n
 await check('Theme settings show with no item selected', `/Theme settings/.test(document.querySelector('.ed-right').textContent)`);
 await check('Background: Picture / Live effect switch is there', `!!document.getElementById('bg-effect') && !!document.getElementById('bg-picture')`);
 
+// ---- E1 editor shell (real mouse events through CDP)
+const mouse = async (type, x, y, extra = {}) => c.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, ...extra });
+const drag = async (x1, y1, x2, y2) => {
+  await mouse('mousePressed', x1, y1); for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', x1 + (x2 - x1) * i / 8, y1 + (y2 - y1) * i / 8); await wait(16); }
+  await mouse('mouseReleased', x2, y2); await wait(450);
+};
+const clickAt = async (x, y, modifiers = 0) => { await mouse('mousePressed', x, y, { modifiers }); await mouse('mouseReleased', x, y, { modifiers }); await wait(400); };
+const center = sel => js(`(() => { const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; })()`);
+const rightW = () => js(`Math.round(document.querySelector('.ed-right').getBoundingClientRect().width)`);
+{
+  const [hx, hy] = await center('.ed-right .ed-resizer');
+  await drag(hx, hy, hx - 150, hy);
+  await check('Right panel: drag 150 px wider, settles on the 480 px preset', `Math.abs(${await rightW()} - 480) <= 2`);
+  const [hx2] = await center('.ed-right .ed-resizer');
+  await drag(hx2, hy, hx2 + 400, hy);
+  await check('Right panel: dragged past the narrow bound, springs back to the 280 px preset', `Math.abs(${await rightW()} - 280) <= 2`);
+  await check('Right panel width is remembered', `localStorage.getItem('cs.ed.rightW') === '280'`);
+  const [lx, ly] = await center('.ed-left .ed-resizer');
+  const lw0 = await js(`Math.round(document.querySelector('.ed-left').getBoundingClientRect().width)`);
+  await drag(lx, ly, lx + 60, ly);
+  await check('Left panel: drag 60 px wider, settles on the 380 px preset', `Math.abs(document.querySelector('.ed-left').getBoundingClientRect().width - 380) <= 2`);
+  await drag(lx + 80, ly, lx + 80 - (380 - lw0), ly);
+  const [sx, sy] = await center('.ed-split');
+  const h0 = await js(`document.querySelector('.ed-layers').getBoundingClientRect().height`);
+  await drag(sx, sy, sx, sy - 120);
+  await check('Divider: dragging up makes Layers taller and settles on a preset', `(() => { const h = document.querySelector('.ed-layers').getBoundingClientRect().height, H = document.querySelector('.ed-left').clientHeight; return h > ${h0} && [0.3, 0.45, 0.6].some(f => Math.abs(h - f * H) < 3); })()`);
+  // accordion
+  await click('.pal-toggle', 'Media'); await wait(200);
+  await check('Accordion: Media closes (others stay open) and is remembered', `document.getElementById('pal-media').hidden && !document.getElementById('pal-time').hidden && localStorage.getItem('cs.ed.palClosed').includes('Media')`);
+  await click('.pal-toggle', 'Media'); await wait(200);
+  await check('Accordion: Media opens again', `!document.getElementById('pal-media').hidden`);
+  // deselect rule
+  const selectFirst = () => js(`document.querySelector('.ed-layers .lrow').click(); 1`).then(() => wait(300));
+  const selected = () => js(`!/Theme settings/.test(document.querySelector('.ed-props h3').textContent)`);
+  await selectFirst();
+  const [px, py] = await center('.ed-props h3');
+  await clickAt(px, py);
+  await check('Deselect: a click inside Properties keeps the item selected', `${await selected()}`);
+  const [ax, ay] = await center('.ed-add > h3');
+  await clickAt(ax + 60, ay);
+  await check('Deselect: a click on a blank part of the left panel deselects', `${!(await selected())}`);
+  await selectFirst();
+  const [bx, by] = await center('.appname');
+  await clickAt(bx, by);
+  await check('Deselect: a click on the top bar deselects', `${!(await selected())}`);
+  await selectFirst();
+  await c.key('Escape', 'Escape', 27); await wait(300);
+  await check('Deselect: Esc deselects', `${!(await selected())}`);
+  await selectFirst();
+  const box = await js(`(() => { const b = document.querySelector('.wbox.sel'); if (!b) return null; const r = b.getBoundingClientRect(); return [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)]; })()`);
+  if (box) { await clickAt(box[0], box[1]); await check('Deselect: a click on the item keeps it selected', `${await selected()}`); }
+  // multi-select in Layers still works
+  const rows = await js(`[...document.querySelectorAll('.ed-layers .lrow')].slice(0, 2).map(r => { const b = r.getBoundingClientRect(); return [Math.round(b.left + 60), Math.round(b.top + b.height / 2)]; })`);
+  await clickAt(rows[0][0], rows[0][1]); await clickAt(rows[1][0], rows[1][1], 2 /* Ctrl */);
+  await check('Layers: Ctrl+click selects two layers', `/2 layers selected/.test(document.querySelector('.ed-props').textContent)`);
+  await selectFirst();
+  await check('Properties: no "Position and size" section', `!/Position and size/.test(document.querySelector('.ed-props').textContent)`);
+  await check('Properties: "Delete this item" is visible at the bottom right of the panel', `(() => { const b = [...document.querySelectorAll('.props-foot button')].find(x => x.textContent === 'Delete this item'); if (!b) return false; const r = b.getBoundingClientRect(), p = document.querySelector('.ed-right').getBoundingClientRect(); return r.bottom <= p.bottom && r.bottom > p.bottom - 70 && r.right > p.right - 40; })()`);
+  await c.key('Escape', 'Escape', 27); await wait(300);
+}
+
 // Settings drawer: index links scroll to their section; a switch there toggles and saves
 await click('#gear'); await wait(500);
 await check('Settings index lists the sections', `document.querySelectorAll('.drawer-index .chip-link').length >= 10`);

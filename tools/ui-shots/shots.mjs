@@ -33,7 +33,7 @@ await click('.sel-bar button', 'Delete'); await wait(400); await shot('20-delete
 await click('#navScreen', null); await wait(1500);
 await js('document.querySelector(".ed-center")?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); 1');
 await shot('05-editor-theme-settings');
-await js('document.querySelector(".ed-right").scrollTop = 99999; 1'); await shot('06-editor-theme-settings-lower');
+await js('document.querySelector(".ed-props").scrollTop = 99999; 1'); await shot('06-editor-theme-settings-lower');
 await js('document.querySelector(".lrow")?.click(); 1', 800); await shot('07-editor-item-selected');
 await js('(() => { const r = [...document.querySelectorAll(".lrow")].find(x => /CPU|Meters|Sensor/.test(x.textContent)); if (r) r.click(); return 1; })()', 800);
 await shot('08-editor-sensor-properties');
@@ -46,6 +46,15 @@ await js('document.getElementById("bg-effect")?.click(); 1', 1200);
 await js('(() => { const b = document.getElementById("bgEffect"); b && b.scrollIntoView(); return 1; })()', 600);
 await shot('09-editor-effect-background');
 await js('document.getElementById("bg-picture")?.click(); 1', 1200);
+
+// E1 editor shell states: wide panels, a closed palette group, a taller layer list (then back to the defaults)
+await js(`(() => { const ed = document.querySelector('.ed'); ed.style.setProperty('--ed-left-w', '380px'); ed.style.setProperty('--ed-right-w', '480px'); document.querySelector('.ed-layers .lrow')?.click(); return 1; })()`, 600);
+await shot('26-editor-panels-wide');
+await js(`(() => { const ed = document.querySelector('.ed'); ed.style.setProperty('--ed-left-w', '220px'); ed.style.setProperty('--ed-right-w', '280px'); return 1; })()`, 600);
+await shot('27-editor-panels-narrow');
+await js(`(() => { const ed = document.querySelector('.ed'); ed.style.setProperty('--ed-left-w', '300px'); [...document.querySelectorAll('.pal-toggle')].filter(b => /Sensors|Media/.test(b.textContent)).forEach(b => b.click()); const l = document.querySelector('.ed-left'); l.style.setProperty('--ed-layers-h', Math.round(l.clientHeight * 0.6) + 'px'); return 1; })()`, 600);
+await shot('28-editor-groups-closed-layers-tall');
+await js(`(() => { [...document.querySelectorAll('.pal-toggle')].filter(b => /Sensors|Media/.test(b.textContent)).forEach(b => b.click()); const l = document.querySelector('.ed-left'); l.style.setProperty('--ed-layers-h', Math.round(l.clientHeight * 0.4) + 'px'); return 1; })()`, 400);
 
 // every 4.x item kind's Properties (added by click, shot, deleted again)
 for (const key of ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'agenda', 'ping', 'volume', 'livetext']) {

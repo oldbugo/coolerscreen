@@ -95,3 +95,38 @@ Verification (quiet debug test instances, fake screen, scratch home):
 
 Not verified: real sensor data in the new panels (fake device; values are sample readings), the Agenda source and
 Ping against a real host, the visualizer/pulse with real audio, drag-and-drop (unchanged code), the real screen.
+
+## E1: editor shell (2026-10-19)
+
+Branch `claude/zealous-swanson-66219d` on top of `main` ef025a6 (4.9.2 + plan), merged without conflicts. Code commit
+`18aabee`; new modules `js/edshell.js` (resizers, divider, accordions, deselect rule) and `js/edhooks.js`.
+- Panels: drag the inner edge of the left or right panel. Width follows the pointer; past a bound it stretches at most
+  36 px with resistance (30 % of the travel); on release it eases (220 ms, ease-out; instant with reduced motion) to the
+  nearest preset inside the bounds. Presets and bounds as in the plan (left 220/300/380, right 280/360/480, 200..560);
+  the preview always keeps at least 360 px. Defaults on first run: left 300, right 280. Keyboard: focus the edge, arrows
+  step through presets, Home/End. Stored in localStorage `cs.ed.leftW`, `cs.ed.rightW`.
+- Layers: in the left panel under Add, divider between them with the same feel (presets 30/45/60 % of the panel, min
+  120 px, Add keeps at least 200 px); stored as a share (`cs.ed.layersF`), so it follows the window height.
+- Accordion: `cs.ed.palClosed` holds the closed groups; all open on first run. Alignment: the hidden Sensor metric picker
+  took a full grid row, leaving Sensor alone on its row; it now takes no space, rows pack densely.
+- Deselect rule (`installDeselect`): kept for clicks in Properties, on items, layer rows and their tools, the metric
+  picker, palette items (they add and select), dialogs/drawer, panel edges, the window buttons; the title bar deselects
+  only on a click without movement (moving the window keeps the selection). Esc already deselected.
+- Properties: "Position and size" removed (arrow keys and the preview still move items; the code that synced the fields is
+  inert). "Delete this item" is a sticky footer at the bottom right of the panel.
+- Hook for E2 (stream B): `import { addItemControls } from './edhooks.js'; addItemControls((w, host, api) => { … })`.
+  Rows render at the end of every item's Properties, above the Delete bar; `api` = { el, h { field, select2, range,
+  numInput, swRow }, set, edited, repaint, S, theme }.
+- For E3 (stream C): the stage still holds `img.layer` base + live images (`u.imgBase`, `u.imgLive`) under the boxes;
+  nothing in E1 depends on them.
+
+Verification (quiet debug instances, fake screen, scratch home): `tools/ui-shots/all.ps1 -Flows` now runs 46 checks;
+the new ones drive real mouse events through CDP: right panel drag to the 480 preset, past the narrow bound springing
+back to 280, width remembered, left panel to 380, divider settling on a preset, accordion close/open remembered, the
+deselect rule (Properties keeps, blank left panel / top bar / Esc deselect, the item keeps), Ctrl+click selecting two
+layers, no "Position and size", Delete pinned at the bottom right. All passed, no page errors. Screenshots (full set +
+26 wide panels, 27 narrow panels, 28 groups closed and taller Layers) in `docs/v4/ui-audit/after/`.
+
+Not verified: the feel of the settle animation and overshoot by a person (numbers are first guesses, easy to tune at
+the top of edshell.js); touch input; the real screen. Note: at 1280x860 with default panels the preview is limited by
+the centre's width, so some height stays free under it; narrower panels or a wider window make it larger.
