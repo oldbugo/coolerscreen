@@ -310,3 +310,13 @@ nothing moves up and down. Code: `src-tauri/src/live/morewidgets.rs` (props, cle
   run); `elapsedMs` (time collected before this run); `duration` seconds (timer, 300); `workMin` 25 / `breakMin` 5 (pomodoro);
   `color`. The editor's Start / Pause / Reset buttons write these props (saved at once); the engine computes the display from the
   PC clock, so a running timer survives restarts. A finished timer pulses its opacity.
+
+### Effects and Embedded (stream A, A2; the PM assigns the contract version at merge)
+
+- Storing an effect theme as Embedded records one loop of the effect (`10 / speed` seconds at the screen's 18 fps, or played faster when
+  it would not fit the flash) and stores it through the normal conversion: the stored base is an ordinary MJPEG loop. A stored version made
+  this way carries `effect: { key, file, length }` in its version record (library data, not theme.json).
+- `key` identifies what the recording looks like (effect settings and the engine's drawing version). Embedded is **out of date** when the
+  theme's current effect key differs from the stored version's (any effect setting, or going back to the picture); widget edits do not count.
+- Live hands over to a matching recording like to any base: cross-fade onto the loop's first frame (the effect at phase 0). With no matching
+  recording live stops at once.
