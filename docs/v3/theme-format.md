@@ -311,7 +311,7 @@ nothing moves up and down. Code: `src-tauri/src/live/morewidgets.rs` (props, cle
   `color`. The editor's Start / Pause / Reset buttons write these props (saved at once); the engine computes the display from the
   PC clock, so a running timer survives restarts. A finished timer pulses its opacity.
 
-### Effects and Embedded (stream A, A2; the PM assigns the contract version at merge)
+## v1.9 addendum (stream A, A2): effects and Embedded
 
 - Storing an effect theme as Embedded records one loop of the effect (`10 / speed` seconds at the screen's 18 fps, or played faster when
   it would not fit the flash) and stores it through the normal conversion: the stored base is an ordinary MJPEG loop. A stored version made
