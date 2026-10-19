@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod live_app;
+mod instance_id;
 mod live_measure;
 mod quit_cmd;
 mod window;
@@ -49,6 +50,11 @@ fn main() {
             }
         }));
     }
+    // The single-instance lock is named after the app identifier: debug builds and instances with their own app folder get their
+    // own identifier, so they can never forward a launch to (or take one from) the installed app. See instance_id.rs.
+    let mut context = tauri::generate_context!();
+    let id = instance_id::identifier(&context.config().identifier, cfg!(debug_assertions), instance_id::env_home().as_deref());
+    context.config_mut().identifier = id;
     let app = builder
         .manage(Core(core.clone()))
         .manage(Media(Mutex::new(None)))
@@ -115,6 +121,7 @@ fn main() {
         ])
         .setup(move |app| {
             cs_core::device::log(&cs_core::core::buildinfo::startup_line(env!("CARGO_PKG_VERSION")));
+            cs_core::device::log(&format!("single-instance id: {}", app.config().identifier));
             let _ = relay.0.set(Arc::new(TauriEvents(app.handle().clone())));
             // One-time driver scripts are bundled as resources (installed build); development keeps the repo's.
             if let Ok(res) = app.path().resource_dir() {
@@ -196,7 +203,7 @@ fn main() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building CoolerScreen");
 
     app.run(|app, event| match event {

@@ -128,3 +128,20 @@ plugin forwarded that launch to the user's running 4.9.0 (pid 7356) and its call
 once (around 14:17-14:18 local). I did not touch the app otherwise; the test instances now always set MULTI. Worth knowing for
 the user's fullscreen use: any debug instance launched without MULTI forwards to the installed app. (`--quit` itself never
 starts Tauri, so it can not forward.)
+
+### C4 update: the single-instance lock is scoped (guard against forwarding to the installed app)
+
+`src-tauri/src/instance_id.rs`: the single-instance identifier (the plugin names its mutex and window class after it) is the plain
+`com.oldbugo.coolerscreen` ONLY for a release build with the default app folder, as before (a second Start-menu launch still brings up
+the running window). A debug build, or any build run with COOLERSCREEN_HOME, gets `<identifier>.<debug|release>-<hash of the folder>`
+(case, slashes and a trailing slash do not matter), so it can never forward a launch to, or accept one from, the installed app, even
+without COOLERSCREEN_MULTI (which still skips the plugin in debug builds as before). `main.rs` sets it on the Tauri context before
+the build (`context.config_mut().identifier`); device.log's second line now shows "single-instance id: ...". The `--quit` event uses
+the same scope, so a debug build never answers for a release one either.
+Proof: unit tests (`instance_id::tests`): only (release, default folder) equals the installed identifier; debug, or any folder
+(even "", "default", the real %APPDATA% path) never does; same kind+folder join, different folder or kind do not. Debug instances
+(never touching the installed app): id logged `...debug-8689...`; two instances under the same scratch HOME without MULTI: the second
+exited at once (joined), the first stayed up; a third under another HOME stayed up (did not join) with a different id; the installed
+app (pid 7356) was not touched. `--quit` tests re-run: 3 / 2 / 0 / 3 as before.
+Side effect: debug/scratch instances now also have another Tauri identifier, which is only where WebView2 would put its data when
+WEBVIEW2_USER_DATA_FOLDER is not set (the test scripts set it).

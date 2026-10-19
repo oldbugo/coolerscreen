@@ -32,13 +32,9 @@ fn result_file() -> PathBuf {
 
 /// The event's name: one per app folder (case-insensitive path, FNV-1a).
 pub fn event_name() -> String {
-    let key = base().to_string_lossy().to_lowercase().replace('/', "\\");
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in key.trim_end_matches('\\').bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("Local\\CoolerScreenQuit-{h:016x}")
+    // the same scope as the single-instance lock: build kind + app folder (a debug build never answers for a release one)
+    let scope = crate::instance_id::scope(cfg!(debug_assertions), Some(&base())).unwrap_or_default();
+    format!(r"Local\CoolerScreenQuit-{scope}")
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -126,7 +122,7 @@ mod tests {
     #[test]
     fn the_event_name_follows_the_app_folder() {
         let a = event_name();
-        assert!(a.starts_with("Local\\CoolerScreenQuit-") && a.len() == "Local\\CoolerScreenQuit-".len() + 16);
+        assert!(a.starts_with("Local\\CoolerScreenQuit-") && a.len() > "Local\\CoolerScreenQuit-".len() + 16);
         assert_eq!(a, event_name());
     }
 }
