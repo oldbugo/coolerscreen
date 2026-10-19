@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 const FALLBACKS: [&str; 4] = ["msyh.ttc", "YuGothM.ttc", "malgun.ttf", "seguisym.ttf"];
 mod extras;
+mod more;
 mod sensors;
 mod widgets;
 pub(crate) use widgets::resize_exact;
@@ -727,7 +728,7 @@ impl Renderer {
             "visualizer" => self.draw_visualizer(r, &w.id, &w.visualizer()),
             "slideshow" => self.draw_slideshow(r, &w.id, &w.slideshow(), w),
             "info" => self.draw_info(r, &w.info()),
-            _ => {}
+            _ => self.draw_more(r, w, now), // the 4.0 widget types (render/more.rs)
         }
         self.widget_us.entry(w.id.clone()).or_insert_with(|| (w.kind.clone(), 0)).1 += tw0.elapsed().as_micros() as u64;
     }

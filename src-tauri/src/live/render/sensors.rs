@@ -84,7 +84,7 @@ pub(super) fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
 // ---------------------------------------------------------------- metrics
 
 #[derive(Clone, Copy, PartialEq)]
-enum Kind {
+pub(super) enum Kind {
     Percent,
     Temp,
     Mhz,
@@ -93,9 +93,9 @@ enum Kind {
     Rate,
 }
 
-struct Info {
-    label: &'static str,
-    kind: Kind,
+pub(super) struct Info {
+    pub(super) label: &'static str,
+    pub(super) kind: Kind,
     /// Default scale max (None: the metric's total, else automatic).
     max: Option<f32>,
     /// (threshold, colour) in the metric's threshold unit, ascending.
@@ -103,7 +103,7 @@ struct Info {
     base: [u8; 3],
 }
 
-fn info(metric: &str) -> Info {
+pub(super) fn info(metric: &str) -> Info {
     let thr_load: &'static [(f32, [u8; 3])] = &[(70.0, AMBER), (88.0, RED)];
     match metric {
         "cpu.core" => Info { label: "CPU core", kind: Kind::Percent, max: Some(100.0), thr: thr_load, base: GREEN },
@@ -125,7 +125,7 @@ fn info(metric: &str) -> Info {
 }
 
 /// Round up to 1, 2 or 5 times a power of ten.
-fn nice_ceil(v: f32) -> f32 {
+pub(super) fn nice_ceil(v: f32) -> f32 {
     if v <= 0.0 {
         return 1.0;
     }
@@ -198,15 +198,15 @@ fn sample_history(v: f32, secs: f32) -> Vec<(f32, f32)> {
         .collect()
 }
 
-struct Reading {
-    value: Option<f32>,
+pub(super) struct Reading {
+    pub(super) value: Option<f32>,
     /// Natural range end of the metric in the same unit as the value (total RAM, ...).
-    total: Option<f32>,
-    hist: Vec<(f32, f32)>,
+    pub(super) total: Option<f32>,
+    pub(super) hist: Vec<(f32, f32)>,
 }
 
 impl Renderer {
-    fn read_metric(&mut self, p: &SensorProps, need_hist: bool) -> Reading {
+    pub(super) fn read_metric(&mut self, p: &SensorProps, need_hist: bool) -> Reading {
         if self.sample {
             let (v, total) = sample_value(&p.metric, p.core);
             let hist = if need_hist { sample_history(v.unwrap_or(0.0), p.history_secs()) } else { Vec::new() };
@@ -220,7 +220,7 @@ impl Renderer {
     }
 
     /// The threshold colour of a value: user steps, else the metric's defaults, else the base colour.
-    fn sensor_color(&self, p: &SensorProps, i: &Info, value: f32, total: Option<f32>) -> [u8; 3] {
+    pub(super) fn sensor_color(&self, p: &SensorProps, i: &Info, value: f32, total: Option<f32>) -> [u8; 3] {
         let base = p.color.as_deref().map(|c| parse_color(c, i.base)).unwrap_or(i.base);
         // the value in threshold units
         let tv = match (i.kind, total) {

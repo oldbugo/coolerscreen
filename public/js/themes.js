@@ -736,7 +736,7 @@ export function createThemes(ctx) {
     nameIn.value = w.props.name || '';
     u.props.append(el('h3', { text: Wd.typeTitle(w) }), field('Layer name', nameIn, 'pName'));
     const p = w.props;
-    if (['clock', 'sensor', 'date', 'weather', 'visualizer', 'slideshow', 'info'].includes(w.type)) {
+    if (['clock', 'sensor', 'date', 'weather', 'visualizer', 'slideshow', 'info'].includes(w.type) || Wd.hasMorePanel(w.type)) {
       Wd.paintTypeProps(w, u.props, {
         el, h: { field, select2, range, numInput, swRow }, set, edited, S, backend, toast, oid: E.oid,
         repaint: () => paintProps(), moved: m => { const b = boxEl(m.id); if (b) placeBox(b, m); syncPosFields(m); refreshWarnings(); },

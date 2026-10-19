@@ -13,6 +13,7 @@ pub mod audio;
 pub mod fitcal;
 pub mod gif;
 pub mod metrics;
+pub mod morewidgets;
 pub mod mask;
 pub mod nowplaying;
 pub mod pipeline;

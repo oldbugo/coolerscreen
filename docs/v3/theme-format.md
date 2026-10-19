@@ -260,3 +260,27 @@ clip or version) mark the base as needing to be stored again, using the full not
   stale: "Embedded is out of date (screen fit/corners/notch/text/pictures changed) · Update Embedded". With Live off the title
   says "Live is off · the screen shows Embedded".
 - The "App responsibilities" Apply description above (3 steps) is superseded by this section.
+
+## 4.0 widgets, stream B (added 2026-10-19; the PM assigns the contract version at merge)
+
+Additive: six new widget `type`s. Old themes load and look exactly as before; unknown props are ignored, missing = default; the
+app cleans props on `theme_set` (`live/morewidgets.rs` `clean`). A missing source shows a grey dash, never 0. Bars grow sideways;
+nothing moves up and down. Code: `src-tauri/src/live/morewidgets.rs` (props, cleaning, timer, time zones), `render/more.rs`
+(drawing), `public/js/morewidgets.js` (palette and property panels).
+
+- `meters`: your own list of readings, each a name, a big value and a bar. `rows` (1-8, default CPU load, RAM, GPU load, GPU
+  temperature): `{ "metric": <any sensor metric>, "label": string|null, "core": 0, "drive": "C:" }`; `unit` "C"|"F"; `bars` bool (true);
+  `rate` 1|2|4 Hz (1).
+- `cores`: every logical core. `style` "bars"|"heat" (bars), `average` bool (true: the average load as a big number), `color`
+  "#rrggbb"|null (null = green / amber / red by load), `rate` (2).
+- `network`: download and upload together: two big numbers and one graph with both lines. `graph` bool (true), `history` 10-600 s
+  (60), `adapter` string|null (null = the busiest), `downColor` ("#5ad2a0"), `upColor` ("#aa8cff"), `rate` (2).
+- `disks`: fixed drives with a used bar. `drives` ["C:", ...] (empty = every fixed drive), `show` "used" ("412 GB / 931 GB") |
+  "free", `maxRows` 2-6 (4). Bars turn amber at 85 % and red at 95 %.
+- `worldclock`: 1-4 cities. `zones` `[{ "name": "Tokyo", "tz": "Tokyo Standard Time" }]` where `tz` is a Windows time-zone id
+  (empty = this PC's own zone; an unknown id shows a dash); `format` "24h"|"12h"; `color`. Rules come from the Windows registry
+  (no network). A row shows "Tomorrow" or "Yesterday" when its date differs from this PC's.
+- `timer`: `mode` "stopwatch"|"timer"|"pomodoro"; `label`; `running` bool; `startedAt` (ms since 1970, the start of the current
+  run); `elapsedMs` (time collected before this run); `duration` seconds (timer, 300); `workMin` 25 / `breakMin` 5 (pomodoro);
+  `color`. The editor's Start / Pause / Reset buttons write these props (saved at once); the engine computes the display from the
+  PC clock, so a running timer survives restarts. A finished timer pulses its opacity.
