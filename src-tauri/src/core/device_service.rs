@@ -65,15 +65,31 @@ pub fn script_command(script: &Path, log: &Path, extra: &[&str], elevated: bool)
     )
 }
 
+/// Which screen a process uses: `Some(mode)` = the fake one (`COOLERSCREEN_FAKE_DEVICE`'s value, "winusb" when a debug build was given
+/// none), `None` = the real one. Release builds: fake only when asked, as always. DEBUG builds: fake unless
+/// `COOLERSCREEN_REAL_DEVICE=1`; if both are set the fake one wins (the safe side).
+pub fn fake_mode_name(debug_build: bool, fake_env: Option<&str>, real_env: Option<&str>) -> Option<String> {
+    match fake_env.filter(|v| !v.is_empty()) {
+        Some(v) => Some(v.to_string()),
+        None if crate::device::real_allowed_with(debug_build, real_env) => None,
+        None => Some("winusb".to_string()),
+    }
+}
+
+/// `fake_mode_name` for this process and its environment.
+pub fn fake_mode_from_env() -> Option<String> {
+    fake_mode_name(cfg!(debug_assertions), std::env::var("COOLERSCREEN_FAKE_DEVICE").ok().as_deref(), std::env::var("COOLERSCREEN_REAL_DEVICE").ok().as_deref())
+}
+
 impl DeviceService {
-    /// Real device unless COOLERSCREEN_FAKE_DEVICE is set.
+    /// The real device, unless COOLERSCREEN_FAKE_DEVICE is set, or this is a debug build without COOLERSCREEN_REAL_DEVICE=1.
     pub fn from_env(base: &Path) -> Self {
-        let mut d = match std::env::var("COOLERSCREEN_FAKE_DEVICE") {
-            Ok(v) if !v.is_empty() => {
+        let mut d = match fake_mode_from_env() {
+            Some(v) => {
                 let speed = std::env::var("COOLERSCREEN_FAKE_SPEED").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
                 Self::fake(&v, speed, std::env::var_os("COOLERSCREEN_FAKE_FAIL").is_some())
             }
-            _ => DeviceService { fake: None, ..Self::fake("winusb", 1.0, false) },
+            None => DeviceService { fake: None, ..Self::fake("winusb", 1.0, false) },
         };
         d.logs_dir = base.join("logs");
         d
@@ -606,5 +622,30 @@ mod tests {
         assert_eq!(f.reconnect(&mut |_, _| {}).unwrap()["already"], json!(false));
         let n = DeviceService::fake("none", 0.01, false);
         assert!(n.reconnect(&mut |_, _| {}).is_err());
+    }
+
+    /// A debug build never uses the real screen unless COOLERSCREEN_REAL_DEVICE=1 is set (a test instance once took the user's).
+    #[test]
+    fn debug_builds_use_the_fake_screen_unless_the_real_one_is_asked_for() {
+        // release builds: real unless a fake is asked for (unchanged)
+        assert_eq!(fake_mode_name(false, None, None), None);
+        assert_eq!(fake_mode_name(false, Some("serial"), None).as_deref(), Some("serial"));
+        assert_eq!(fake_mode_name(false, Some(""), None), None);
+        assert_eq!(fake_mode_name(false, None, Some("1")), None);
+        // debug builds: fake by default, with or without a mode given
+        assert_eq!(fake_mode_name(true, None, None).as_deref(), Some("winusb"));
+        assert_eq!(fake_mode_name(true, Some(""), None).as_deref(), Some("winusb"));
+        assert_eq!(fake_mode_name(true, Some("busy"), None).as_deref(), Some("busy"));
+        // the real screen only with an explicit 1; anything else stays fake
+        assert_eq!(fake_mode_name(true, None, Some("1")), None);
+        for no in ["0", "", "true", "yes", "2"] {
+            assert_eq!(fake_mode_name(true, None, Some(no)).as_deref(), Some("winusb"), "REAL_DEVICE={no:?}");
+        }
+        // both set: the fake one wins
+        assert_eq!(fake_mode_name(true, Some("winusb"), Some("1")).as_deref(), Some("winusb"));
+        // and this process agrees with the rule
+        let want = fake_mode_name(cfg!(debug_assertions), std::env::var("COOLERSCREEN_FAKE_DEVICE").ok().as_deref(), std::env::var("COOLERSCREEN_REAL_DEVICE").ok().as_deref());
+        assert_eq!(fake_mode_from_env(), want);
+        assert_eq!(DeviceService::from_env(std::path::Path::new("x")).fake_mode(), want);
     }
 }

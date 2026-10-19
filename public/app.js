@@ -202,7 +202,7 @@ async function checkScreen(opts) {
 // ---------- data loading ----------
 async function loadApp() {
   S.app = await call('app_state');
-  if (S.app.build) document.title = `CoolerScreen ${S.app.appVersion} (${S.app.build.hash})`;
+  if (S.app.build) document.title = `CoolerScreen ${S.app.appVersion} (${S.app.build.hash})${S.app.build.screen || ''}`;
   backend.setMediaBase(S.app.mediaBase);
   renderTop(); renderBanners();
   if (typeof themes !== 'undefined') themes.appChanged();

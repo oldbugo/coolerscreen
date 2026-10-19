@@ -142,6 +142,9 @@ impl Screen {
     }
 
     pub fn open_usb() -> Result<Screen, DevErr> {
+        if !real_allowed() {
+            return Err(DevErr::new(DEBUG_NO_REAL));
+        }
         let (tx, rx) = channel();
         let link = usb::UsbLink::open(tx).map_err(DevErr::new)?;
         log("opened over WinUSB");
@@ -153,6 +156,9 @@ impl Screen {
     }
 
     pub fn open_serial(path: &str) -> Result<Screen, DevErr> {
+        if !real_allowed() {
+            return Err(DevErr::new(DEBUG_NO_REAL));
+        }
         let (tx, rx) = channel();
         let link = serial::SerialLink::open(path, tx).map_err(DevErr::new)?;
         OPEN_HERE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -292,6 +298,20 @@ impl Screen {
 
 pub mod ops;
 
+/// Said when a debug build is asked to open the real screen.
+pub const DEBUG_NO_REAL: &str = "This is a debug build: it never uses the real screen (set COOLERSCREEN_REAL_DEVICE=1 to allow it).";
+
+/// May this process open the real screen? Release builds always (as before). DEBUG builds, which workers and tests run, never, unless
+/// COOLERSCREEN_REAL_DEVICE=1 is set explicitly: a test instance once took the user's real screen because nobody had asked for the
+/// fake one. This is the lowest level, so the app, `cs2` and `cs-companion` are all covered.
+pub fn real_allowed_with(debug_build: bool, real_env: Option<&str>) -> bool {
+    !debug_build || real_env == Some("1")
+}
+
+pub fn real_allowed() -> bool {
+    real_allowed_with(cfg!(debug_assertions), std::env::var("COOLERSCREEN_REAL_DEVICE").ok().as_deref())
+}
+
 /// A reply of the upload commands that says "no": a `hex` field other than "00".
 pub fn ack_refused(v: &Value) -> bool {
     v.get("hex").and_then(Value::as_str).is_some_and(|h| h != "00")
@@ -337,5 +357,26 @@ impl Screen {
     /// FF D9 FF D9. Deliberately not part of `live_key`'s list.
     pub fn live_screen_off(&mut self) -> Result<(), DevErr> {
         self.live_write(&frame::frame(0x14, &[0, 0]))
+    }
+}
+
+#[cfg(test)]
+mod guard_real_tests {
+    use super::*;
+
+    #[test]
+    fn the_real_screen_is_closed_to_debug_builds_at_the_lowest_level() {
+        assert!(real_allowed_with(false, None), "release builds are unchanged");
+        assert!(!real_allowed_with(true, None));
+        assert!(!real_allowed_with(true, Some("0")));
+        assert!(!real_allowed_with(true, Some("true")));
+        assert!(real_allowed_with(true, Some("1")));
+        // in this very process: a debug build refuses to open the screen at all (no USB or serial traffic is attempted)
+        if cfg!(debug_assertions) && std::env::var("COOLERSCREEN_REAL_DEVICE").ok().as_deref() != Some("1") {
+            assert!(!real_allowed());
+            assert_eq!(Screen::open_usb().err().map(|e| e.message), Some(DEBUG_NO_REAL.to_string()));
+            assert_eq!(Screen::open_serial("COM1").err().map(|e| e.message), Some(DEBUG_NO_REAL.to_string()));
+            assert!(crate::device::ops::open_any().is_err());
+        }
     }
 }

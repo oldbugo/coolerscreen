@@ -330,3 +330,23 @@ check is on the fixed build), the unit test is the before/after evidence. Not ve
 scenario of 3 to 4 big offset copies: my pre-fix measurement shows edge pixels differing by up to about a quarter of the card colour,
 so the visible copies the user saw may be larger than what the test reproduces; if ghosts remain on a build with this fix, a frame dump
 (COOLERSCREEN_DUMP_FRAMES) of the moving item is the next step.
+
+## Fake-screen guard for DEBUG builds (after two incidents of a worker's test instance taking the user's real screen)
+
+Rule, enforced in code: a DEBUG build never uses the real screen unless `COOLERSCREEN_REAL_DEVICE=1` is set explicitly. Release builds are
+unchanged (real unless `COOLERSCREEN_FAKE_DEVICE` asks for a fake).
+- **Lowest level** (`device/mod.rs`): `Screen::open_usb()` and `Screen::open_serial()` refuse in a debug build without the flag
+  ("This is a debug build: it never uses the real screen (set COOLERSCREEN_REAL_DEVICE=1 to allow it)."), so the app, `cs2` (every
+  command, including recovery tools) and `cs-companion` (its live session) are all covered, whatever else goes wrong.
+- **The app** (`device_service::fake_mode_name`): a debug build with no `COOLERSCREEN_FAKE_DEVICE` uses the fake screen "winusb" (a value
+  given is kept; both variables set: the fake one wins), so live runs on the null sink and the page shows the fake state instead of
+  errors. Anything but `1` in `COOLERSCREEN_REAL_DEVICE` ("0", "true", ...) stays fake.
+- **Visible:** debug builds append " (debug, fake screen: winusb)" or " (debug, REAL screen)" to the window title (also in `app_state.build.screen`
+  and the page's `document.title`) and to the first line of device.log; release builds show nothing new.
+- Tests: `debug_builds_use_the_fake_screen_unless_the_real_one_is_asked_for` (the whole rule table) and
+  `the_real_screen_is_closed_to_debug_builds_at_the_lowest_level` (in a debug test run, open_usb / open_serial / open_any are refused).
+**Verified:** both tests in a debug test run (so the refusal really ran) and the suite in release; a debug app instance started with NO fake
+variable and NO real variable (the exact mistake): title "CoolerScreen 4.17.0 (4262a4e+) (debug, fake screen: winusb)", app_state fake
+"winusb", live on the null sink, device.log has the note on its first line and no "opened over WinUSB"; a debug `cs2 info` with no
+variable answered "Screen not found" without touching USB. **Not verified:** a debug build WITH `COOLERSCREEN_REAL_DEVICE=1` (never done:
+it would use the real screen), a release build (unchanged by design), `cs-companion` run by hand (covered by the open_usb guard).

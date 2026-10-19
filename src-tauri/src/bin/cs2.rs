@@ -205,7 +205,7 @@ fn app_running() -> bool {
 /// The app's own Apply job for a theme (make or reuse the fitted base, store it in the loop slot, make it the current theme).
 /// Prints each step and the resulting version and device file.
 fn core_apply(oid: &str) -> i32 {
-    let fake = std::env::var_os("COOLERSCREEN_FAKE_DEVICE").is_some();
+    let fake = cs_core::core::device_service::fake_mode_from_env().is_some(); // (a debug build is fake unless COOLERSCREEN_REAL_DEVICE=1)
     if !fake && app_running() {
         eprintln!("CoolerScreen is running and holds the screen. Quit it from its tray icon first, then run this again.");
         return 3;
