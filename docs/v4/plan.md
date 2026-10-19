@@ -67,6 +67,22 @@ Each milestone gets its own version in the order it lands on `main`: the first i
 fixes get a patch number (4.2.1). Every version gets a tag `vX.Y.Z`, a changelog entry naming its stream, a build and an
 install. Only the PM sets versions.
 
+## Seating chart (vault revisions 28-29, from 2026-10-19 afternoon)
+
+Route each new task to the principal whose area fits (one line saying why); queue it if that one is busy; start a new
+principal if none fits; a reused principal merges the latest main first. New parts tell the principal to hand groundwork
+to Sonnet players and to report "Helpers used", "Verified", "Not verified".
+
+| Principal | Area | Files it knows | Branch | Status |
+|---|---|---|---|---|
+| A: live effects | live rendering engine, effect backgrounds, Embedded recording, store speed | `live/effects/`, `live/render.rs`, `live/pipeline.rs`, `live/effects/record.rs`, `core/themes.rs` (store path) | `claude/determined-greider-88a800` | idle |
+| B: widgets | widget kinds and data sources, per-item corner radius, snap/gap rules | `live/morewidgets.rs`, `live/render/more.rs`, `live/extsensors.rs`, `ping.rs`, `agenda.rs`, `volume.rs`, `public/js/morewidgets.js`, `layers.js` snap | `claude/recursing-matsumoto-31e4c5` | E2 done, re-hooking onto E1 |
+| C: app plumbing | live host, preview on select, digital twin, screen checks, budgets, `--quit`, single instance | `core/live_host.rs`, `core/outside.rs`, `core/settings.rs` budgets, `quit_cmd.rs`, `instance_id.rs`, `public/js/screenpreview.js`, twin | `claude/vibrant-proskuriakova-d382db` | E3 done, merging E1 |
+| D: UI | look and layout of `public/`, style guide, editor shell, UI flow checks | `public/css/*`, `public/js/edshell.js`, `edhooks.js`, `icons.js`, `themes.js` layout, `tools/ui-shots/` | `claude/zealous-swanson-66219d` | idle |
+
+Note (review 2026-10-19): E3's live preview would have fitted A (live rendering) better than C; route future live-picture
+work to A.
+
 ## Editor refinement round (user, 2026-10-19; vault user flows C1, "User requests 2026-10-19")
 
 Sequenced so two sessions never rewrite the same editor code at once (`public/js/themes.js` is the hot file):
