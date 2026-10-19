@@ -509,11 +509,21 @@ impl Library {
     /// were already saved, unless `body.force`.
     pub fn create_version(&self, oid: &str, body: &Value) -> CoreResult<Value> {
         let o = self.read_original(oid).ok_or_else(|| CoreError::new("Unknown clip"))?;
-        if self.source_path(&o).is_none() {
+        // 4.0: an effect theme's loop is recorded from the live effect: { key, file, length } names that clip, which replaces the
+        // original's file as the source (and its length is the whole loop).
+        let effect = body.get("effect").filter(|v| v.is_object() && v["key"].is_string() && v["file"].is_string()).cloned();
+        if effect.is_none() && self.source_path(&o).is_none() {
             return Err(CoreError::new("The original file is missing, so a new version can't be made."));
         }
         let ctx = self.context();
-        let st = clean_settings(&o, body, ctx.max_seconds, &ctx.corners_default);
+        let mut st = clean_settings(&o, body, ctx.max_seconds, &ctx.corners_default);
+        if let Some(e) = &effect {
+            st["start"] = num(0.0);
+            st["length"] = num(e["length"].as_f64().unwrap_or(10.0));
+            st["blend"] = num(0.0);
+        }
+        let eff_key = |v: &Value| v["effect"]["key"].as_str().map(String::from);
+        let want_eff = effect.as_ref().and_then(|e| e["key"].as_str().map(String::from));
         // 3.0: text/picture items baked into the base ({ key, file }); a version without them never duplicates one with.
         let overlay = body.get("overlay").filter(|v| v.is_object() && v["key"].is_string()).cloned();
         let ov_key = |v: &Value| v["overlay"]["key"].as_str().map(String::from);
@@ -523,6 +533,7 @@ impl Library {
         let dup = vs.iter().find(|v| {
             v["status"] != "error"
                 && ov_key(v) == want
+                && eff_key(v) == want_eff
                 && base_key(v["notchKey"].as_str()) == ctx.notch_key
                 && v["settings"].is_object()
                 && same_settings(&effective_settings(v), &st)
@@ -540,7 +551,7 @@ impl Library {
         settings.insert("fps".into(), num(DEVICE_FPS));
         let v = json!({
             "id": new_id(), "originalId": oid, "n": num(n), "label": null, "created": js::iso_now(),
-            "settings": settings, "notch": ctx.mask, "notchKey": ctx.notch_key, "result": null, "status": "queued", "error": null, "overlay": overlay,
+            "settings": settings, "notch": ctx.mask, "notchKey": ctx.notch_key, "result": null, "status": "queued", "error": null, "overlay": overlay, "effect": effect,
         });
         self.write_version_locked(oid, &v)
     }

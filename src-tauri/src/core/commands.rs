@@ -276,7 +276,8 @@ pub async fn theme_preview(core: State<'_, Core>, request: tauri::ipc::Request<'
     let theme = a.get("theme").filter(|t| t.is_object()).cloned();
     let with_live = a["withLive"].as_bool().unwrap_or(true);
     let (w, h) = (a["w"].as_u64().unwrap_or(1200) as u32, a["h"].as_u64().unwrap_or(540) as u32);
-    run(&core, move |app| app.theme_preview(&oid, theme.as_ref(), with_live, w, h)).await
+    let phase = a["phase"].as_f64(); // an effect background is drawn at this loop phase (the editor animates it)
+    run(&core, move |app| app.theme_preview(&oid, theme.as_ref(), with_live, w, h, phase)).await
 }
 
 /// JSON `{ originalId, path }`, or the raw bytes of a picture with headers `x-cs-oid` and `x-cs-name` -> `{ file }`.

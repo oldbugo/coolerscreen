@@ -336,7 +336,12 @@ impl App {
 
     fn encode_req(&self, oid: &str, o: &Value, st: &Value, ctx: &super::library::Ctx) -> CoreResult<EncodeReq> {
         let src = self.lib.source_path(o).ok_or_else(|| CoreError::new("The original file is missing."))?;
-        Ok(EncodeReq {
+        Ok(self.encode_req_from(oid, src, probe_of(o), st, ctx))
+    }
+
+    /// The conversion request for a given source file (the original's, or an effect theme's recorded loop).
+    fn encode_req_from(&self, oid: &str, src: PathBuf, info: ProbeInfo, st: &Value, ctx: &super::library::Ctx) -> EncodeReq {
+        EncodeReq {
             file: src,
             dir: self.lib.o_dir(oid),
             start: st["start"].as_f64().unwrap_or(0.0),
@@ -349,9 +354,9 @@ impl App {
             blend: st["blend"].as_f64().unwrap_or(0.0),
             budget_bytes: ctx.budget.max(0.0) as u64,
             max_seconds: ctx.max_seconds,
-            info: probe_of(o),
+            info,
             overlay: None,
-        })
+        }
     }
 
     /// The size meter: superseded requests for the same clip return `{ stale: true }`.
@@ -579,16 +584,30 @@ impl App {
     fn run_version(&self, tctx: &super::scheduler::TaskCtx, vid: &str) -> CoreResult<Value> {
         let (oid, v) = self.lib.find_version(vid).ok_or_else(|| CoreError::new("This version was deleted."))?;
         let o = self.lib.read_original(&oid).ok_or_else(|| CoreError::new("This version was deleted."))?;
-        if self.lib.source_path(&o).is_none() {
+        // an effect theme's version is converted from the recorded loop clip, not from the original's file
+        let eff_file = v["effect"]["file"].as_str().map(PathBuf::from);
+        if eff_file.is_none() && self.lib.source_path(&o).is_none() {
             self.lib.patch_version(vid, &json!({ "status": "error", "error": "The original file is missing." }))?;
             return Err(CoreError::new("The original file is missing."));
+        }
+        if let Some(f) = eff_file.as_ref().filter(|f| !f.is_file()) {
+            let _ = f;
+            let msg = "The recorded effect clip is missing. Update Embedded to record it again.";
+            self.lib.patch_version(vid, &json!({ "status": "error", "error": msg }))?;
+            return Err(CoreError::new(msg));
         }
         let ctx = self.lib.context();
         self.lib.patch_version(vid, &json!({ "status": "converting", "error": null }))?;
         let st = effective_settings(&v);
         let mut c2 = ctx.clone();
         c2.mask = v.get("notch").cloned().unwrap_or(ctx.mask.clone());
-        let mut req = self.encode_req(&oid, &o, &st, &c2)?;
+        let mut req = match eff_file {
+            Some(f) => {
+                let info = self.media.probe(tctx, &f)?;
+                self.encode_req_from(&oid, f, info, &st, &c2)
+            }
+            None => self.encode_req(&oid, &o, &st, &c2)?,
+        };
         if let Some(f) = v["overlay"]["file"].as_str() {
             if !std::path::Path::new(f).is_file() {
                 let msg = "The text and pictures for this base are missing. Update Embedded to make them.";

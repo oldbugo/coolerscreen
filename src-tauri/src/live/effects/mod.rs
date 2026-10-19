@@ -16,6 +16,7 @@ pub mod aurora;
 pub mod clouds;
 pub mod drift;
 pub mod plasma;
+pub mod record;
 pub mod util;
 
 use util::Span;
@@ -73,7 +74,17 @@ pub struct Params {
     pub seed: u32,
 }
 
+/// Bump when an effect's drawing changes: stored recordings made with the old drawing then count as out of date.
+pub const RENDER_VERSION: u32 = 1;
+
 impl Params {
+    /// Identifies what a recording of these settings looks like (the Embedded loop is stale when this changes).
+    pub fn key(&self) -> String {
+        let cols: Vec<String> = self.colors.iter().map(|c| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect();
+        let s = format!("fx{RENDER_VERSION}|{}|{:.3}|{:.3}|{:.3}|{:.3}|{}|{}", self.kind.name(), self.speed, self.density, self.scale, self.brightness, cols.join(","), self.seed);
+        sha1_smol::Sha1::from(s.as_bytes()).digest().to_string()[..12].to_string()
+    }
+
     pub fn loop_seconds(&self) -> f32 {
         LOOP_BASE_S / self.speed
     }
@@ -412,6 +423,35 @@ mod pipeline_tests {
         assert_eq!(&png[1..4], b"PNG");
         let live = crate::live::render_preview(&effect_theme("plasma"), 640, 288, false).unwrap();
         assert!(live.len() > 20_000, "a plasma picture is not a flat colour: {} bytes", live.len());
+    }
+
+    /// The preview can be drawn at any loop phase (the editor animates it) and two phases differ.
+    #[test]
+    fn the_preview_follows_the_phase() {
+        let t = effect_theme("aurora");
+        let a = crate::live::preview::render_preview_at(&t, 400, 180, false, Some(0.1)).unwrap();
+        let b = crate::live::preview::render_preview_at(&t, 400, 180, false, Some(0.6)).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(a, crate::live::preview::render_preview_at(&t, 400, 180, false, Some(0.1)).unwrap());
+    }
+
+    /// With a recorded loop that matches, live stops with the hand-over fade onto the loop's first frame (phase 0 of the effect).
+    #[test]
+    fn a_stored_effect_hands_over_with_a_fade() {
+        let mut cfg = Config::default();
+        cfg.music.enabled = false;
+        cfg.notch = "off".into();
+        let p = Pipeline::start(&cfg, Sink::Null);
+        let mut th = effect_theme("aurora");
+        th.effect_stored = true;
+        assert!(!th.instant_handover());
+        p.set_theme(th);
+        std::thread::sleep(Duration::from_millis(1000));
+        let t = Instant::now();
+        p.stop();
+        let e = t.elapsed();
+        assert!(e >= Duration::from_millis(350) && e < Duration::from_millis(1300), "fade expected: {e:?}");
+        assert!(p.shared.hand_done.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     /// An old theme (no background field) is unchanged by the effect code: still the 3.0 behaviour and the same JSON.
