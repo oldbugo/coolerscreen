@@ -271,7 +271,7 @@ impl App {
         if t.widgets.len() > MAX_WIDGETS {
             return Err(CoreError::new(format!("A theme can hold at most {MAX_WIDGETS} items.")));
         }
-        if let Some(w) = t.widgets.iter().find(|w| !widget_props::TYPES.contains(&w.kind.as_str())) {
+        if let Some(w) = t.widgets.iter().find(|w| !widget_props::TYPES.contains(&w.kind.as_str()) && !crate::live::morewidgets::is_more(&w.kind)) {
             return Err(CoreError::new(format!("Unknown item type \"{}\".", w.kind)));
         }
         for w in t.widgets.iter_mut().filter(|w| w.kind == "image") {
@@ -284,6 +284,7 @@ impl App {
             }
         }
         for w in t.widgets.iter_mut() {
+            crate::live::morewidgets::clean(&w.kind, &mut w.props); // the 4.0 types
             widget_props::clean(&w.kind, &mut w.props); // sensor, date, weather, visualizer, slideshow, info (and the clock style)
         }
         t.base_version_id = self.load_theme(oid).base_version_id;

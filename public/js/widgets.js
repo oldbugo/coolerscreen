@@ -1,6 +1,8 @@
 // 3.0 theme editor: the item types (docs/v3/theme-format.md, v1.6) - the palette, default sizes, names and the
 // property panels per type. themes.js owns the editor state; the panels here get what they need through `api`.
 
+import * as More from './morewidgets.js';
+
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 export const r4 = v => Math.round(v * 10000) / 10000;
 /** Width fraction of a box that is square on screen when its height fraction is h (the canvas is 2400x1080). */
@@ -32,6 +34,8 @@ const SENSOR_STYLES = [['number', 'Number'], ['bar', 'Bar'], ['ring', 'Ring'], [
 
 /** Default box [w, h] (fractions of the canvas) for a type and its props: rings square, graphs wide, numbers compact. */
 export function defaultSize(type, p = {}) {
+  const more = More.defaultSize(type, p);
+  if (more) return more;
   switch (type) {
     case 'sensor': return ({ number: [0.2, 0.22], bar: [0.3, 0.14], ring: [sq(0.34), 0.34], gauge: [sq(0.38), 0.38], graph: [0.34, 0.26], sparkline: [0.24, 0.12] })[p.style || 'number'] || [0.2, 0.22];
     case 'clock': return ({ digital: [0.3, 0.34], analog: [sq(0.4), 0.4], minimal: [0.4, 0.3] })[p.style || 'digital'] || [0.3, 0.34];
@@ -72,6 +76,7 @@ export const ENTRIES = {
   procs: { type: 'info', name: 'Top processes', icon: '≣', props: () => ({ kind: 'topProcesses', by: 'cpu', count: 4, color: '#ffffff' }) },
   text: { type: 'text', name: 'Text', icon: 'T', props: () => ({ text: 'Your text', size: 0.08, color: '#ffffff', opacity: 1, align: 'left', weight: 'regular' }) },
 };
+Object.assign(ENTRIES, More.ENTRIES);
 let appRef = null;
 /** The weather unit follows the default chosen in Settings. */
 function weatherProps() {
@@ -88,10 +93,11 @@ export const PALETTE = [
   ['Info', ['weather', 'uptime', 'countdown', 'cpuName', 'procs']],
   ['Decoration', ['text']],
 ];
+for (const [group, keys] of PALETTE) if (More.PALETTE_ADD[group]) keys.push(...More.PALETTE_ADD[group]);
 const TYPE_ICON = Object.fromEntries(Object.values(ENTRIES).map(e => [e.type, e.icon]));
 export const typeIcon = t => TYPE_ICON[t] || '?';
 const INFO_KINDS = [['uptime', 'Uptime'], ['cpuName', 'CPU name'], ['gpuName', 'GPU name'], ['countdown', 'Countdown'], ['topProcesses', 'Top processes']];
-const TYPE_NAME = { clock: 'Clock', date: 'Date', sensor: 'Sensor', stats: 'Stats panel', music: 'Music', visualizer: 'Visualizer', slideshow: 'Slideshow', image: 'Picture', weather: 'Weather', text: 'Text', info: 'Info' };
+const TYPE_NAME = { ...More.TYPE_NAME, clock: 'Clock', date: 'Date', sensor: 'Sensor', stats: 'Stats panel', music: 'Music', visualizer: 'Visualizer', slideshow: 'Slideshow', image: 'Picture', weather: 'Weather', text: 'Text', info: 'Info' };
 export const typeTitle = w => (w.type === 'info' ? (INFO_KINDS.find(k => k[0] === (w.props || {}).kind) || [])[1] : null) || TYPE_NAME[w.type] || w.type;
 /** The base text/pictures can be baked into the stored base. */
 export const canBeOnBase = type => type === 'text' || type === 'image';
@@ -99,6 +105,7 @@ export const canBeOnBase = type => type === 'text' || type === 'image';
 export function nameOf(w) {
   const p = w.props || {};
   if (p.name) return p.name;
+  if (More.isMore(w.type)) return More.nameOf(w);
   if (w.type === 'text') { const t = (p.text || '').replace(/\s+/g, ' ').trim(); return t ? `Text: “${t.slice(0, 22)}${t.length > 22 ? '…' : ''}”` : 'Text'; }
   if (w.type === 'image') return p.file ? `Picture: ${p.file.split('/').pop()}` : 'Picture (none chosen)';
   if (w.type === 'sensor') return typeof p.label === 'string' && p.label ? p.label : metricName(p.metric);
@@ -186,7 +193,7 @@ export function paintTypeProps(w, host, api) {
       return;
     case 'slideshow': return slideshowPanel();
     case 'info': return infoPanel();
-    default: return false;
+    default: return More.isMore(w.type) ? More.paintProps(w, host, api, { METRICS, metricName, tempUnit: defaultTempUnit }) : false;
   }
 
   function sensorPanel() {
@@ -316,3 +323,6 @@ export function paintTypeProps(w, host, api) {
     host.append(colour('color'));
   }
 }
+
+/** The 4.0 item types have their property panels in morewidgets.js. */
+export const hasMorePanel = More.isMore;

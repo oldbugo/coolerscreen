@@ -702,7 +702,7 @@ impl Theme {
             if w.id.trim().is_empty() || !ids.insert(w.id.as_str()) {
                 out.push(format!("widget id '{}' is empty or used twice", w.id));
             }
-            if !WIDGET_TYPES.contains(&w.kind.as_str()) {
+            if !WIDGET_TYPES.contains(&w.kind.as_str()) && !super::morewidgets::is_more(&w.kind) {
                 out.push(format!("widget '{}': unknown type '{}'", w.id, w.kind));
             }
             if w.w < MIN_BOX || w.h < MIN_BOX || w.x < 0.0 || w.y < 0.0 || w.x + w.w > 1.0001 || w.y + w.h > 1.0001 {
