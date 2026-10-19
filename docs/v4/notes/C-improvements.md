@@ -34,3 +34,26 @@ reports it readable here); countdown on a real DST night (unit-tested only).
 
 Note: while testing I (by mistake) ran a taskkill by image name; the user's app was not running (its device.log ends at the
 forced shutdown, 2026-10-18 11:51 UTC), so nothing of the user's was closed. Test instances are now stopped by path filter.
+
+## C2: "screen changed outside the app" check
+
+For the changelog: after a check, if the screen's free space is clearly different from what it was when CoolerScreen last stored
+something, a warning banner says "The screen changed since CoolerScreen last stored Embedded (free space X MB then, Y MB now).
+Another program may have written to it." with an "It's fine" button (accepts the screen as it is now). Storing something again
+(Store as Embedded / Apply) clears it.
+
+How it works (read-only; nothing is sent to the screen, no 0x05, 0x0C or 0x23): the info answer every check already gets has
+`i_block_free`. `screenBaseline {free, at}` in settings.json is set from the final check of each store, or from the first check when
+there is none yet (a fresh install or an upgrade cannot know the past). A later check with |free - baseline| > 64 blocks (32 KB)
+writes `screenChanged {was, now, blockSize, at}`, logs "Screen changed outside the app: ..." once in device.log, and `app_state`
+returns `screenChanged {wasFree, nowFree, at}` (bytes). A store whose final check failed drops the baseline (no false alarm; the next
+check starts over). Not run while live holds the screen (that path never queries the screen).
+Code: `src/core/outside.rs`; hooks in service.rs (device_check, send_version, app_state, settings_update `screenChanged: "accept"`),
+settings.rs sanitize (both keys written only when set), device_service.rs (fake `free` + `fake_set_free` test hook), app.js banner.
+Test: `a_check_flags_screen_content_changed_outside_the_app` (fake device: first check, wobble inside tolerance, big change, repeat
+keeps "was", accept, rebase after a store, failed final check). Full suite passes at default threads.
+
+PM to verify on hardware: (1) after a real store, check twice: no banner (is `i_block_free` stable between reads, and across a
+restart? if it wobbles by more than 64 blocks, raise TOLERANCE_BLOCKS in outside.rs); (2) the banner would only be seen after
+another program writes to the screen, so a cheap proof is to read `screenBaseline` in settings.json against the value `cs2` info
+reports. Not verified: any of this on the real screen; the banner look in the app (reuses the existing banner classes).

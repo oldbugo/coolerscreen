@@ -16,6 +16,7 @@ pub mod js;
 pub mod live_host;
 pub mod library;
 pub mod mask;
+pub mod outside;
 pub mod media_server;
 pub mod paths;
 pub mod recycle;

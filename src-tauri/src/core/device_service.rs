@@ -24,6 +24,8 @@ struct Fake {
     restarted: bool,
     fail_upload: bool,
     speed: f64,
+    /// Free blocks the fake screen reports (a test hook plays "another program wrote to the screen").
+    free: u64,
 }
 
 pub struct DeviceService {
@@ -103,7 +105,7 @@ impl DeviceService {
     pub fn fake(mode: &str, speed: f64, fail_upload: bool) -> Self {
         let t = if mode == "1" { "winusb".to_string() } else { mode.to_lowercase() };
         DeviceService {
-            fake: Some(Mutex::new(Fake { transport: t, restarted: false, fail_upload, speed })),
+            fake: Some(Mutex::new(Fake { transport: t, restarted: false, fail_upload, speed, free: 4880 })),
             scripts: Mutex::new(super::paths::scripts_dir()),
             logs_dir: std::env::temp_dir().join("CoolerScreen-logs"),
             last_log: Mutex::new(None),
@@ -119,6 +121,13 @@ impl DeviceService {
 
     pub fn scripts_dir(&self) -> PathBuf {
         self.scripts.lock().unwrap().clone()
+    }
+
+    /// Test hook: the free blocks the fake screen reports from now on.
+    pub fn fake_set_free(&self, blocks: u64) {
+        if let Some(f) = &self.fake {
+            f.lock().unwrap().free = blocks;
+        }
     }
 
     /// The fake mode name ("winusb", ...) or None for the real screen (AppState.fake).
@@ -171,7 +180,7 @@ impl DeviceService {
             let serial = self.fake.as_ref().unwrap().lock().unwrap().transport == "serial";
             let t = if serial { "serial" } else { "winusb" };
             let mut v = json!({ "model": "D215-NOR-JD9365-6.67inch-hor (fake)", "version": "3.6", "i_blocks": 24520, "i_block_size": 512,
-                "i_block_free": 4880, "_transport": t, "_needsSetup": serial, "_fake": true });
+                "i_block_free": self.fake.as_ref().unwrap().lock().unwrap().free, "_transport": t, "_needsSetup": serial, "_fake": true });
             if serial {
                 v["_warning"] = json!(SERIAL_WARNING);
             }

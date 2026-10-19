@@ -346,6 +346,16 @@ pub fn sanitize(s: &Value) -> Settings {
     if !live.as_object().is_none_or(|o| o.is_empty()) {
         out["live"] = live;
     }
+    // 4.0 (C2): what the screen's free space was after our last store, and an open difference; written only when set.
+    if let Some(f) = s.get("screenBaseline").and_then(|b| b.get("free")).and_then(Value::as_f64).filter(|f| f.is_finite() && *f >= 0.0) {
+        out["screenBaseline"] = json!({ "free": num(f), "at": str80(s["screenBaseline"].get("at"), 40).unwrap_or_default() });
+    }
+    if let Some(c) = s.get("screenChanged").filter(|c| c.is_object()) {
+        let n = |k: &str| c.get(k).and_then(Value::as_f64).filter(|f| f.is_finite() && *f >= 0.0);
+        if let (Some(was), Some(now)) = (n("was"), n("now")) {
+            out["screenChanged"] = json!({ "was": num(was), "now": num(now), "blockSize": num(n("blockSize").unwrap_or(512.0)), "at": str80(c.get("at"), 40).unwrap_or_default() });
+        }
+    }
     // 3.0 (v1.8): the live theme when it is not the Embedded one; written only when set.
     if let Some(t) = str80(s.get("liveTheme"), 80) {
         out["liveTheme"] = json!(t);
