@@ -23,7 +23,7 @@ fn size_text(gb: f32) -> String {
 }
 
 impl Renderer {
-    fn mcard(&mut self, b: Rect) -> Rect {
+    pub(super) fn mcard(&mut self, b: Rect) -> Rect {
         let sc = (self.cw as f32 / 1680.0).max(0.1);
         let rad = self.card_radius(b, (28.0 * sc).min(b.w.min(b.h) / 5.0));
         round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, [0, 0, 0, 96]);
@@ -46,6 +46,9 @@ impl Renderer {
             "worldclock" => self.draw_worldclock(b, &w.worldclock()),
             "timer" => self.draw_timer(b, &w.timer(), now),
             "livetext" => self.draw_livetext(b, w, now),
+            "progress" => self.draw_progress(b, w, now),
+            "sunmoon" => self.draw_sunmoon(b, w, now),
+            "todo" => self.draw_todo(b, w, now),
             "volume" => self.draw_volume(b, &w.volume()),
             "ping" => self.draw_ping(b, &w.ping()),
             "agenda" => self.draw_agenda(b, &w.agenda()),

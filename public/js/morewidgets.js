@@ -5,7 +5,13 @@
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 /** The new item types. */
-export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume', 'ping', 'agenda'];
+import progress from './w-progress.js';
+import sunmoon from './w-sunmoon.js';
+import todo from './w-todo.js';
+// Item kinds that live in their own file (each default-exports { type, key, name, icon, group, props(), size(p), title(w), panel(w, host, api, h) }).
+const WIDGETS = [progress, sunmoon, todo];
+const own = t => WIDGETS.find(m => m.type === t);
+export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume', 'ping', 'agenda', ...WIDGETS.map(m => m.type)];
 export const isMore = t => MORE_TYPES.includes(t);
 
 const meterRows = () => ['cpu.load', 'ram.used', 'gpu.load', 'gpu.temp'].map(metric => ({ metric }));
@@ -28,10 +34,13 @@ export const ENTRIES = {
 /** [group name, entry keys] pairs added to the palette (widgets.js puts them into the existing groups). */
 export const PALETTE_ADD = { Time: ['worldclock', 'timer', 'agenda'], Sensors: ['meters', 'cores', 'network', 'disks', 'ping'], Media: ['volume'], Decoration: ['livetext'] };
 
+for (const m of WIDGETS) ENTRIES[m.key] = { type: m.type, name: m.name, icon: m.icon, props: m.props };
+for (const m of WIDGETS) (PALETTE_ADD[m.group] = PALETTE_ADD[m.group] || []).push(m.key);
 export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer', livetext: 'Live text', volume: 'Volume', ping: 'Ping', agenda: 'Agenda' };
 
 /** Default box [w, h] as fractions of the 2400x1080 canvas. */
 export function defaultSize(type, p = {}) {
+  if (own(type)) return own(type).size(p);
   switch (type) {
     case 'meters': return [0.26, clamp(0.085 * Math.max(2, (p.rows || []).length || 4) + 0.04, 0.16, 0.8)];
     case 'cores': return p.style === 'heat' ? [0.28, 0.34] : [0.3, 0.42];
@@ -48,6 +57,7 @@ export function defaultSize(type, p = {}) {
 }
 
 export function nameOf(w) {
+  if (own(w.type)) return (w.props && w.props.name) || own(w.type).title(w);
   const p = w.props || {};
   if (w.type === 'timer') return p.label || ({ stopwatch: 'Stopwatch', timer: 'Timer', pomodoro: 'Pomodoro' })[p.mode] || 'Timer';
   if (w.type === 'livetext') { const t = (p.text || '').replace(/\s+/g, ' ').trim(); return t ? `Live text: “${t.slice(0, 20)}${t.length > 20 ? '…' : ''}”` : 'Live text'; }
@@ -151,6 +161,7 @@ export function paintProps(w, host, api, ctx) {
     api.edited(); api.relabel(); api.repaint();
   };
 
+  if (own(w.type)) return own(w.type).panel(w, host, api, { colour, restructure, clamp, rateField });
   switch (w.type) {
     case 'meters': return metersPanel();
     case 'cores':
