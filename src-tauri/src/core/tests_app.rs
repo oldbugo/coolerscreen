@@ -1123,6 +1123,26 @@ fn v1_6_widgets_are_cleaned_and_saved() {
 }
 
 #[test]
+fn v4_more_widgets_are_cleaned_and_saved() {
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "t.mp4");
+    let t = json!({ "widgets": [
+        { "id": "m", "type": "meters", "x": 0.1, "y": 0.1, "w": 0.2, "h": 0.3, "props": { "rows": [{ "metric": "gpu.temp" }, { "metric": "bogus" }], "rate": 9 } },
+        { "id": "z", "type": "worldclock", "x": 0.4, "y": 0.1, "w": 0.2, "h": 0.3, "props": { "zones": [{ "name": "Tokyo", "tz": "Tokyo Standard Time" }, { "name": "x", "tz": "../etc" }] } },
+        { "id": "t", "type": "timer", "x": 0.7, "y": 0.1, "w": 0.2, "h": 0.3, "props": { "mode": "timer", "duration": 0, "running": true, "startedAt": 1700000000000.0 } } ] });
+    let v = app.theme_set(&oid, &t).unwrap();
+    let w = &v["theme"]["widgets"];
+    assert_eq!(w[0]["props"]["rows"][1]["metric"], "cpu.load");
+    assert_eq!(w[0]["props"]["rate"], json!(4));
+    assert_eq!(w[1]["props"]["zones"][0]["tz"], "Tokyo Standard Time");
+    assert_eq!(w[1]["props"]["zones"][1]["tz"], "");
+    assert_eq!(w[2]["props"]["duration"], json!(1.0));
+    assert_eq!(w[2]["props"]["running"], json!(true));
+    // the saved file reads back with the same types
+    assert_eq!(app.theme_get(&oid).unwrap()["theme"]["widgets"][2]["type"], "timer");
+}
+
+#[test]
 fn weather_place_and_unit_are_stored_in_settings() {
     let (_d, app, _rec, _gallery) = setup();
     let st = app.app_state();
