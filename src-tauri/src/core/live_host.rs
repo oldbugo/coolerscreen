@@ -49,6 +49,14 @@ pub struct LiveHost {
     /// The unsaved fit the Screen fit page is trying on the live picture (None: not tuning), and whether tuning started live.
     fit_tune: Mutex<Option<crate::core::fit::Fit>>,
     tune_temp: AtomicBool,
+    /// 4.x preview: a theme (or a picture) tried on the real screen from My themes / Browse without being used. It is shown
+    /// instead of the live theme and never saved; `preview_temp` says it started the stream (Live off), so ending it stops it.
+    preview: Mutex<Option<crate::live::theme::ThemeLive>>,
+    preview_temp: AtomicBool,
+    /// When the page last asked for the preview (a safety net: a preview nobody looks at ends by itself) and the watcher state.
+    preview_touched: Mutex<Option<std::time::Instant>>,
+    preview_watching: AtomicBool,
+    preview_idle_ms: AtomicU64,
     /// Called when something the UI and the tray show changes (theme, idle state).
     on_change: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
     /// How many times live was paused (holds went from none to some) and brought back since the app started (tests, log).
@@ -93,6 +101,11 @@ impl Default for LiveHost {
             fit_cal: Mutex::new(None),
             fit_tune: Mutex::new(None),
             tune_temp: AtomicBool::new(false),
+            preview: Mutex::new(None),
+            preview_temp: AtomicBool::new(false),
+            preview_touched: Mutex::new(None),
+            preview_watching: AtomicBool::new(false),
+            preview_idle_ms: AtomicU64::new(150_000),
             on_change: Mutex::new(Vec::new()),
             pauses: AtomicU64::new(0),
             resumes: AtomicU64::new(0),
@@ -219,6 +232,108 @@ impl LiveHost {
         self.fit_tune.lock().unwrap().is_some()
     }
 
+    // ---------- preview on the real screen (My themes / Browse) ----------
+
+    /// How long a preview stays up with no sign of life from the page (150 s; the page ends it sooner when the user is idle or leaves).
+    pub fn set_preview_idle(&self, d: Duration) {
+        self.preview_idle_ms.store(d.as_millis() as u64, SeqCst);
+    }
+
+    pub fn previewing(&self) -> bool {
+        self.preview.lock().unwrap().is_some()
+    }
+
+    fn preview_forget(&self) {
+        *self.preview.lock().unwrap() = None;
+        self.preview_temp.store(false, SeqCst);
+        *self.preview_touched.lock().unwrap() = None;
+    }
+
+    /// Show this theme on the real screen instead of the live theme, nothing saved. Live on: the running stream is given the theme
+    /// (no reconnect). Live off: a temporary stream starts, and `preview_end` ends it with the normal hand-over. Calling it again
+    /// with another theme just swaps the picture. A ruler calibration in progress is ended first.
+    pub fn preview_start(self: &Arc<Self>, t: crate::live::theme::ThemeLive) {
+        if self.calibrating() {
+            self.calibrate_end();
+        }
+        *self.preview.lock().unwrap() = Some(t.clone());
+        *self.preview_touched.lock().unwrap() = Some(std::time::Instant::now());
+        match self.pipeline() {
+            Some(p) => {
+                hlog("preview: another theme on the screen (nothing saved)");
+                p.set_theme(t);
+            }
+            None => {
+                hlog("preview: live is off; a temporary stream starts");
+                self.preview_temp.store(true, SeqCst);
+                self.start();
+            }
+        }
+        self.evaluate_idle();
+        self.preview_watch();
+    }
+
+    /// The page is still showing the preview (keeps the safety timer from ending it).
+    pub fn preview_keepalive(&self) -> bool {
+        if !self.previewing() {
+            return false;
+        }
+        *self.preview_touched.lock().unwrap() = Some(std::time::Instant::now());
+        true
+    }
+
+    /// Back to what the screen showed before: live on gets its own theme again; a temporary stream ends with the normal hand-over
+    /// (instant when the previewed picture is not the Embedded one). False when no preview was running.
+    pub fn preview_end(self: &Arc<Self>) -> bool {
+        if self.preview.lock().unwrap().is_none() {
+            return false;
+        }
+        let temp = self.preview_temp.swap(false, SeqCst);
+        if temp {
+            // stop() reads the previewed theme from the pipeline for the ending, then forgets the preview
+            hlog("preview: ended, the temporary stream stops");
+            self.stop();
+        } else {
+            *self.preview.lock().unwrap() = None;
+            *self.preview_touched.lock().unwrap() = None;
+            hlog("preview: ended, live shows its own theme again");
+            if let Some(p) = self.pipeline() {
+                if let Some(t) = self.theme.lock().unwrap().clone() {
+                    p.set_theme(t);
+                }
+            }
+        }
+        self.evaluate_idle();
+        true
+    }
+
+    /// One small watcher per preview: ends it when the page has not asked for it in `PREVIEW_IDLE` (window closed, page gone).
+    fn preview_watch(self: &Arc<Self>) {
+        if self.preview_watching.swap(true, SeqCst) {
+            return;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(500));
+                let last = *me.preview_touched.lock().unwrap();
+                match last {
+                    None => break,
+                    Some(t) if t.elapsed() >= Duration::from_millis(me.preview_idle_ms.load(SeqCst)) => {
+                        hlog("preview: nobody asked for it for a while");
+                        me.preview_end();
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            me.preview_watching.store(false, SeqCst);
+            if me.previewing() {
+                me.preview_watch(); // a new preview began while this watcher was ending
+            }
+        });
+    }
+
     /// Start the Screen fit calibration: the ruler picture for `fit` goes on the screen, whether live is on or not. Live (when on)
     /// steps aside first and comes back after `calibrate_end`. Already running: just updates the picture.
     pub fn calibrate_start(self: &Arc<Self>, fit: crate::core::fit::Fit, sel: usize) {
@@ -284,7 +399,7 @@ impl LiveHost {
     /// A theme whose live layer is off holds live (like a device task does) until another theme, or the switch, brings it back.
     pub fn set_theme(self: &Arc<Self>, t: crate::live::theme::ThemeLive) {
         *self.theme.lock().unwrap() = Some(t.clone());
-        if let Some(p) = self.pipeline() {
+        if let Some(p) = self.pipeline().filter(|_| !self.previewing()) {
             hlog("theme changed: reloaded in place, the stream goes on");
             p.set_theme(t);
         }
@@ -296,7 +411,7 @@ impl LiveHost {
     fn evaluate_idle(self: &Arc<Self>) {
         let fit = self.effective_fit();
         // while the Screen fit page is tuning, the live picture is what the user is looking at: never idle
-        let idle = !self.tuning() && self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer || t.nothing_to_stream(fit));
+        let idle = !self.tuning() && !self.previewing() && self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer || t.nothing_to_stream(fit));
         let layer_off = idle;
         let held = self.holds.load(SeqCst) & LAYER != 0;
         if layer_off && !held {
@@ -341,6 +456,7 @@ impl LiveHost {
     pub fn start_with(&self, cfg: Config) {
         let mut g = self.pipeline.lock().unwrap();
         if g.is_some() {
+            self.preview_temp.store(false, SeqCst); // live was switched on during a preview: the stream is live's now
             return;
         }
         self.off_stopped.store(false, SeqCst);
@@ -348,7 +464,7 @@ impl LiveHost {
         let sink = if self.no_device.load(SeqCst) { Sink::Null } else { Sink::Device };
         hlog(&format!("start (holds: {})", if self.holds.load(SeqCst) == 0 { "none".to_string() } else { reason(self.holds.load(SeqCst)) }));
         let p = Arc::new(Pipeline::start(&cfg, sink));
-        if let Some(t) = self.theme.lock().unwrap().clone() {
+        if let Some(t) = self.preview.lock().unwrap().clone().or_else(|| self.theme.lock().unwrap().clone()) {
             p.set_theme(t);
         }
         if let Some(g) = self.calibration.lock().unwrap().clone() {
@@ -363,6 +479,7 @@ impl LiveHost {
     /// Stop live and end the stream properly (the screen plays its loop clip again). Blocks until the threads are done.
     pub fn stop(&self) {
         self.off_stopped.store(false, SeqCst);
+        self.preview_forget();
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
             hlog("stop (live switched off or the app is closing)");
@@ -373,6 +490,7 @@ impl LiveHost {
     /// Shutdown or logoff: the fast ending (at most 800 ms), loop clip or screen off.
     pub fn stop_fast(&self, screen_off: bool) {
         self.off_stopped.store(false, SeqCst);
+        self.preview_forget();
         self.end_calibration_now();
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
@@ -515,6 +633,7 @@ impl LiveHost {
             "running": running,
             "connected": connected,
             "fps": fps,
+            "previewing": self.previewing(),
             "measuredFps": measured,
             "paused": h & USER != 0,
             "deviceHold": h & DEVICE != 0,
@@ -835,5 +954,96 @@ mod tests {
         assert_eq!(h.status()["liveItems"], json!(false));
         assert!(p.shared.paused.load(SeqCst));
         h.stop();
+    }
+
+    fn marked(n: usize) -> crate::live::theme::ThemeLive {
+        use crate::live::theme::{Theme, ThemeLive, Widget};
+        let mut t = Theme::default();
+        t.widgets = (0..n).map(|i| Widget::new(&format!("w{i}"), "clock", 0.1, 0.1, 0.3, 0.3, json!({}))).collect();
+        ThemeLive::new(t, std::path::PathBuf::new())
+    }
+    fn shown(p: &Arc<Pipeline>) -> usize {
+        p.shared.theme.lock().unwrap().as_ref().map(|t| t.theme.widgets.len()).unwrap_or(99)
+    }
+
+    /// Preview with Live off: a temporary stream that follows the clicks without reconnecting, and ends when asked.
+    #[test]
+    fn preview_with_live_off_starts_a_temporary_stream_swaps_in_place_and_ends() {
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_theme(marked(1)); // the live theme (not shown)
+        assert!(!h.running() && !h.previewing());
+        h.preview_start(marked(2));
+        let p = h.pipeline().expect("a temporary stream");
+        assert!(h.previewing() && h.status()["previewing"] == json!(true));
+        assert_eq!(shown(&p), 2);
+        // another click: same stream, other picture
+        h.preview_start(marked(3));
+        assert!(Arc::ptr_eq(&p, &h.pipeline().unwrap()), "no reconnect per click");
+        assert_eq!(shown(&p), 3);
+        // the live theme changing meanwhile (a file refresh) must not replace the preview
+        h.set_theme(marked(4));
+        assert_eq!(shown(&p), 3);
+        eventually(|| p.shared.stats.snap().rendered > 0);
+        assert!(p.shared.stats.snap().rendered > 0, "frames flow");
+        assert!(h.preview_keepalive());
+        assert!(h.preview_end());
+        assert!(!h.running() && !h.previewing(), "the temporary stream is gone");
+        assert!(!h.preview_end(), "ending twice does nothing");
+        assert!(!h.preview_keepalive());
+    }
+
+    /// Preview with Live on: the running stream shows it and gets its own theme back afterwards.
+    #[test]
+    fn preview_with_live_on_restores_the_live_theme() {
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_theme(marked(1));
+        h.start();
+        let p = h.pipeline().unwrap();
+        assert_eq!(shown(&p), 1);
+        h.preview_start(marked(2));
+        assert!(Arc::ptr_eq(&p, &h.pipeline().unwrap()));
+        assert_eq!(shown(&p), 2);
+        assert!(h.preview_end());
+        assert!(h.running() && Arc::ptr_eq(&p, &h.pipeline().unwrap()), "live keeps running");
+        assert_eq!(shown(&p), 1, "back to the live theme");
+        h.stop();
+    }
+
+    /// A device task (upload, check) pauses a preview like it pauses live, and it carries on afterwards.
+    #[test]
+    fn a_device_task_pauses_a_preview_like_live() {
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.preview_start(marked(2));
+        let p = h.pipeline().unwrap();
+        eventually(|| !p.shared.paused.load(SeqCst));
+        h.device_busy(true);
+        assert!(p.shared.paused.load(SeqCst), "yields the screen to the task");
+        h.device_busy(false);
+        eventually(|| !p.shared.paused.load(SeqCst));
+        assert!(!p.shared.paused.load(SeqCst));
+        h.preview_end();
+        assert!(!h.running());
+    }
+
+    /// Nobody asks for it any more (window closed, page gone): it ends by itself; quitting forgets it too.
+    #[test]
+    fn a_forgotten_preview_ends_by_itself_and_stop_forgets_it() {
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_preview_idle(Duration::from_millis(1200));
+        h.preview_start(marked(2));
+        assert!(h.previewing());
+        eventually(|| !h.previewing());
+        assert!(!h.previewing() && !h.running(), "ended by the safety timer");
+        h.preview_start(marked(2));
+        h.stop();
+        assert!(!h.previewing() && !h.running());
     }
 }

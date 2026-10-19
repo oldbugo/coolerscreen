@@ -104,7 +104,9 @@ fn main() {
             cc::fit_cal,
             cc::weather_search,
             cc::weather_set_place,
-            cc::ext_sensor_status
+            cc::ext_sensor_status,
+            cc::screen_preview,
+            cc::screen_preview_end
         ])
         .setup(move |app| {
             cs_core::device::log(&cs_core::core::buildinfo::startup_line(env!("CARGO_PKG_VERSION")));

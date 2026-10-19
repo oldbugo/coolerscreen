@@ -1382,3 +1382,32 @@ fn an_effect_theme_stores_a_recorded_loop_and_goes_stale_when_the_effect_changes
     let n = std::fs::read_dir(app.theme_dir(&oid).join("effect")).map(|d| d.count()).unwrap_or(0);
     assert_eq!(n, 1, "only the current recording is kept");
 }
+
+/// Preview on the real screen: selecting a theme shows it, saves nothing, never marks Embedded stale; ending puts the screen back.
+#[test]
+fn previewing_a_theme_saves_nothing_and_ends_cleanly() {
+    let (_d, app, _rec, gallery) = setup();
+    app.live.set_no_device(true); // never open the real screen from a test
+    put(&gallery.join("My clip.mp4"), b"fake video data");
+    app.startup();
+    let oid = app.originals_list()["originals"][0]["id"].as_str().unwrap().to_string();
+    wait_until(|| app.original_get(&oid).unwrap()["assets"] == "ready");
+    let settings_before = std::fs::read(app.settings.file()).unwrap();
+    let theme_json = app.theme_dir(&oid).join("theme.json");
+    let theme_before = std::fs::read(&theme_json).ok();
+    let state_before = app.app_state()["live"]["settings"].clone();
+    // preview, twice (another click), and the status says so
+    app.preview_theme_on_screen(&oid).unwrap();
+    app.preview_theme_on_screen(&oid).unwrap();
+    assert!(app.live.previewing() && app.live.status()["previewing"] == json!(true));
+    assert!(app.live.running());
+    assert!(app.theme_view(&oid).unwrap()["baseStale"] == json!(false), "a preview never marks Embedded stale");
+    // nothing written
+    assert_eq!(std::fs::read(app.settings.file()).unwrap(), settings_before, "settings.json untouched");
+    assert_eq!(std::fs::read(&theme_json).ok(), theme_before, "theme.json untouched");
+    assert_eq!(app.app_state()["live"]["settings"], state_before, "the Live setting stays as it was");
+    assert_eq!(app.preview_end_on_screen()["ended"], json!(true));
+    assert!(!app.live.previewing() && !app.live.running(), "Live was off: the temporary stream is gone");
+    assert_eq!(app.preview_end_on_screen()["ended"], json!(false));
+    assert_eq!(std::fs::read(app.settings.file()).unwrap(), settings_before);
+}

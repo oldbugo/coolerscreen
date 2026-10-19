@@ -7,6 +7,7 @@ import { initSettingsNav } from './js/settingsnav.js';
 import { backend } from './js/backend.js';
 import { createBandSlider } from './js/bandslider.js';
 import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
+import { createScreenPreview } from './js/screenpreview.js';
 
 // ---------- small helpers ----------
 const $ = id => document.getElementById(id);
@@ -68,6 +69,8 @@ function toast(msg, bad = false, ms = 5000) {
 }
 
 // ---------- state ----------
+// Preview on the real screen (My themes selection, Browse selection); see js/screenpreview.js. Nothing is saved.
+const SP = createScreenPreview({ call: (...a) => call(...a), toast: (...a) => toast(...a), onChange: () => { if (S.view === 'mine') renderSelBar(); if (S.view === 'browse') renderBrowsePreviewBar(); } });
 const S = {
   app: null, originals: [], longMissing: [], rev: -1, sel: null, detail: null,
   jobs: [], deviceBusy: false,
@@ -342,6 +345,7 @@ const HOME_KEY = 'cs.home';
 const NAV = { screen: 'navScreen', mine: 'navMine', browse: 'navBrowse' };
 function setView(v) {
   const prev = S.view;
+  if (prev !== v && (prev === 'mine' || prev === 'browse')) { SP.end(); S.selTheme = null; BV.sel = null; } // leaving without using it: the screen goes back
   S.view = v;
   if (v !== 'detail') S.home = v;
   for (const [name, id] of Object.entries(NAV)) {
@@ -698,12 +702,9 @@ function renderSelBar() {
   if (isLive) kids.push(el('span', { class: 'chip ok', text: 'Live' }));
   if (isEmb) kids.push(el('span', { class: 'chip accent', text: 'Embedded' }));
   kids.push(el('span', { class: 'small muted', text: themeLabel(o) }));
-  if (liveOn()) {
-    kids.push(el('button', { class: 'btn primary big', text: isLive ? 'Using' : 'Use this theme', disabled: off || isLive, title: 'Live switches to it now. Embedded stays as it is.', onclick: () => useTheme(o.id, o.name) }));
-    kids.push(el('button', { class: 'btn secondary', text: isEmb ? 'Update Embedded' : 'Store as Embedded', disabled: off, title: 'Write its picture to the screen', onclick: () => storeTheme(o.id, o.name) }));
-  } else {
-    kids.push(el('button', { class: 'btn primary big', text: isEmb && isLive ? 'Update Embedded' : 'Use and store as Embedded', disabled: off, title: 'Live is off: this writes its picture to the screen', onclick: () => useAndStore(o.id, o.name) }));
-  }
+  kids.push(el('button', { class: 'btn primary big', text: isLive ? 'Using' : 'Use this theme', disabled: off || isLive, title: 'Make it the theme on the screen, then edit it on On screen', onclick: () => useTheme(o.id, o.name) }));
+  if (SP.key() === 't:' + o.id) kids.splice(1, 0, el('span', { class: 'chip accent pv-chip', text: SP.shown() ? 'Previewing on the screen' : 'Starting preview…' }));
+  else if (!off) kids.splice(1, 0, el('button', { class: 'btn ghost', text: 'Preview', title: 'Show it on the screen', onclick: () => SP.showTheme(o.id) }));
   kids.push(el('button', { class: 'btn secondary', text: 'Picture…', title: 'Choose its picture: any clip, its loop, quality and versions', onclick: () => openBase(o.id, { name: o.name }) }),
     el('button', { class: 'btn secondary', text: 'Rename…', onclick: () => renameTheme(o) }),
     el('button', { class: 'btn danger', text: o.missing ? 'Remove…' : 'Delete…', onclick: () => deleteTheme(o) }));
@@ -729,7 +730,7 @@ async function deleteTheme(o) {
 // when you enter Browse, change Sort or press Refresh.
 const BROWSE_SORTS = [['default', 'Source order'], ['name', 'Name (A–Z)']];
 const pick = (list, v, dflt) => (list.some(([x]) => x === v) ? v : dflt);
-const BV = { q: '', sort: pick(BROWSE_SORTS, lsGet('cs.browseSort'), 'default'), frozen: new Map(), lastKey: null, refreshing: false };
+const BV = { sel: null, q: '', sort: pick(BROWSE_SORTS, lsGet('cs.browseSort'), 'default'), frozen: new Map(), lastKey: null, refreshing: false };
 function arrangeBrowse(items) {
   const list = [...items];
   if (BV.sort === 'name') list.sort((a, b) => byName(a.title, b.title));
@@ -776,9 +777,22 @@ const browseUI = (() => {
     el('label', { class: 'g-tool g-tool-q' }, el('span', { class: 'sr-only', text: 'Filter Browse by title' }), q),
     el('label', { class: 'g-tool' }, el('span', { class: 'muted small', text: 'Sort' }), sort));
   const body = el('div');
-  box.append(head, note, chips, tools, body);
-  return { box, linkBtn, refresh, note, chips, q, tools, body };
+  const bar = el('div', { class: 'sel-bar', hidden: true, role: 'region', 'aria-label': 'Previewing on the screen' });
+  box.append(head, note, chips, tools, body, bar);
+  return { box, linkBtn, refresh, note, chips, q, tools, body, bar };
 })();
+// Browse: the selected item is shown on the real screen (its picture); nothing is added until you press Add.
+function renderBrowsePreviewBar() {
+  const bar = browseUI.bar;
+  const [sid, ...rest] = (BV.sel || '').split('/');
+  const d = B.data.get(sid), it = d && d.items.find(i => i.id === rest.join('/'));
+  bar.hidden = !it || S.view !== 'browse';
+  bar.textContent = '';
+  if (bar.hidden) return;
+  bar.append(el('span', { class: 'sel-name', text: it.title, title: it.title }),
+    el('span', { class: 'chip accent pv-chip', text: SP.key() === 's:' + BV.sel ? (SP.shown() ? 'Previewing on the screen' : 'Starting preview…') : 'Preview off' }),
+    el('button', { class: 'btn ghost', text: SP.key() === 's:' + BV.sel ? 'Stop' : 'Preview', onclick: () => { if (SP.key() === 's:' + BV.sel) SP.end(); else SP.showPicture(sid, it.id, it.thumb); } }));
+}
 function renderBrowse() {
   const u = browseUI;
   if (u.box.hidden) return;
@@ -820,12 +834,19 @@ function renderBrowse() {
       const list = all.filter(it => matches(it.title, q));
       const entries = list.map(it => {
         const job = B.jobs.get(`${s.id}/${it.id}`);
-        return { key: `${s.id}/${it.id}`, sig: JSON.stringify([it.title, it.thumb, it.badge, it.action, it.note, job ? (job.error ? 'e:' + job.error : 'run') : '']),
+        return { key: `${s.id}/${it.id}`, sig: JSON.stringify([it.title, it.thumb, it.badge, it.action, it.note, job ? (job.error ? 'e:' + job.error : 'run') : '', BV.sel === `${s.id}/${it.id}`]),
           make: () => {
             const thumb = el('div', { class: 'g-thumb' }, it.thumb ? el('img', { src: it.thumb, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' }) : null,
               el('span', { class: 'src-badge', text: it.badge ? `${s.name} · ${it.badge}` : s.name }));
-            return el('div', { class: 'g-card s-card', 'data-key': `${s.id}/${it.id}` }, thumb,
+            const k = `${s.id}/${it.id}`;
+            const card = el('div', { class: 'g-card s-card' + (BV.sel === k ? ' sel' : ''), 'data-key': k, 'aria-pressed': String(BV.sel === k), title: 'Click to preview it on the screen',
+              onclick: e => {
+                if (e.target.closest('button, a, input')) return; // the card's own buttons do their own thing
+                if (BV.sel === k) { BV.sel = null; SP.end(); } else { BV.sel = k; SP.showPicture(s.id, it.id, it.thumb); }
+                renderBrowse(); renderBrowsePreviewBar();
+              } }, thumb,
               el('div', { class: 'g-name', text: it.title, title: it.title }), sourceAction(s, it));
+            return card;
           } };
       });
       if (d.loading) for (let i = 0; i < 3; i++) entries.push({ key: `skel:${i}`, sig: 's', make: () => el('div', { class: 'g-card', 'aria-hidden': 'true' }, el('div', { class: 'g-thumb skeleton' }), el('div', { class: 'g-name', text: ' ' }), el('div', { class: 'th-action' })) });
@@ -850,6 +871,7 @@ function renderBrowse() {
     }
     u.body.append(...notes);
   });
+  renderBrowsePreviewBar();
 }
 
 // A theme card: the picture shows the base with its live layer (when it has one), the line below says which.
@@ -866,7 +888,7 @@ function themeCard(o) {
   if (o.assets === 'error' && !o.versionCount) chips.append(el('span', { class: 'chip danger', text: 'Can\'t read this file' }));
   const sel = S.selTheme === o.id;
   const card = el('button', { class: 'g-card' + (sel ? ' sel' : ''), 'data-id': o.id, 'aria-pressed': String(sel), 'aria-label': `${o.name}, ${themeLabel(o)}${S.currentTheme === o.id ? ', live' : ''}${S.embeddedTheme === o.id ? ', embedded' : ''}`,
-    onclick: () => { S.selTheme = S.selTheme === o.id ? null : o.id; renderGallery(); const c = mineUI.box.querySelector(`.g-card[data-id="${CSS.escape(o.id)}"]`); if (c) c.focus({ preventScroll: true }); } },
+    onclick: () => { S.selTheme = S.selTheme === o.id ? null : o.id; if (S.selTheme && !(o.missing && !o.versionCount)) SP.showTheme(o.id); else SP.end(); renderGallery(); const c = mineUI.box.querySelector(`.g-card[data-id="${CSS.escape(o.id)}"]`); if (c) c.focus({ preventScroll: true }); } },
     thumb, el('div', { class: 'g-name', text: o.name, title: o.name }), el('div', { class: 'g-sub', text: themeLabel(o) }), chips);
   let v = null; // hover (or keyboard focus) plays a muted preview
   const play = () => {
@@ -879,7 +901,7 @@ function themeCard(o) {
   const stop = () => { if (v) { v.remove(); v = null; } };
   card.addEventListener('mouseenter', play); card.addEventListener('mouseleave', stop);
   card.addEventListener('focus', play); card.addEventListener('blur', stop);
-  card.addEventListener('dblclick', () => (liveOn() ? useTheme(o.id, o.name) : useAndStore(o.id, o.name)));
+  card.addEventListener('dblclick', () => useTheme(o.id, o.name));
   return card;
 }
 
@@ -2797,19 +2819,13 @@ async function storeTheme(oid, name) {
 // "Use this theme": live switches at once; Embedded is not touched.
 async function useTheme(oid, name) {
   try { await themes.flush(); await call('theme_use', { originalId: oid }); } catch (e) { toast(e.message, true); return 'failed'; }
+  await SP.end(); // the screen goes back to what live shows: now this theme
   await loadApp().catch(() => {});
   await loadOriginals().catch(() => {});
   S.selTheme = null; goHome('screen');
   const emb = S.embeddedTheme && S.embeddedTheme !== oid ? S.originals.find(o => o.id === S.embeddedTheme) : null;
-  toast(`Live: “${name}”.` + (emb ? ` Embedded: “${emb.name}”.` : ''), false, 6000);
+  toast(liveOn() ? `Live: “${name}”.` + (emb ? ` Embedded: “${emb.name}”.` : '') : `Theme: “${name}”. Store it as Embedded here when you are happy.`, false, 6000);
   return 'done';
-}
-// Live off: one action, use it and store it as Embedded.
-async function useAndStore(oid, name) {
-  try { await themes.flush(); await call('theme_use', { originalId: oid }); } catch (e) { toast(e.message, true); return; }
-  await loadOriginals().catch(() => {});
-  const r = await storeTheme(oid, name);
-  if (r === 'done') { S.selTheme = null; goHome('screen'); }
 }
 const themes = createThemes({ el, $, call, backend, S, toast, goHome, loadOriginals, openBase, storeTheme, openSettings: openDrawer });
 initApply({ call, backend, plainWait });

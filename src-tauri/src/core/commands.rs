@@ -400,6 +400,7 @@ pub const COMMANDS: &[&str] = &[
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
     "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
     "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place", "ext_sensor_status",
+    "screen_preview", "screen_preview_end",
 ];
 
 // ---------- 4.0 external sensors (CPU temperature through HWiNFO / LibreHardwareMonitor the user runs) ----------
@@ -427,4 +428,30 @@ pub async fn weather_search(core: State<'_, Core>, query: String) -> Result<Valu
 pub async fn weather_set_place(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
     let place = json_args(&request).get("place").cloned().unwrap_or(Value::Null);
     run(&core, move |a| a.weather_set_place(&place)).await
+}
+
+// ---------- preview on the real screen (My themes / Browse) ----------
+
+/// `{ originalId }` (a theme of My themes) or `{ sourceId, item, thumb }` (a Browse item) -> `{ ok }`. Nothing is saved.
+#[tauri::command]
+pub async fn screen_preview(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let a = json_args(&request);
+    let oid = a["originalId"].as_str().map(String::from);
+    let sid = a["sourceId"].as_str().map(String::from);
+    let item = a["item"].as_str().map(String::from);
+    let thumb = a["thumb"].as_str().map(String::from);
+    run(&core, move |app| match (oid, sid, item) {
+        (Some(o), _, _) => app.preview_theme_on_screen(&o),
+        (None, Some(s), Some(i)) => app.preview_picture_on_screen(&s, &i, thumb.as_deref()),
+        _ => Err(CoreError::new("Nothing to preview.")),
+    })
+    .await
+}
+
+/// `{ keepalive?: true }` -> `{ ended }` / `{ previewing }`: put the screen back (or tell the safety timer the page still shows it).
+#[tauri::command]
+pub async fn screen_preview_end(core: State<'_, Core>, request: tauri::ipc::Request<'_>) -> Result<Value, CoreError> {
+    let a = json_args(&request);
+    let keep = a["keepalive"].as_bool().unwrap_or(false);
+    run(&core, move |app| Ok(if keep { app.preview_keepalive_on_screen() } else { app.preview_end_on_screen() })).await
 }
