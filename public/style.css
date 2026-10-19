@@ -228,7 +228,6 @@ summary h3 { display: inline; color: var(--text); }
 .g-add { border-style: dashed; border-color: var(--border-strong); }
 .g-add-thumb { display: grid; place-items: center; color: var(--accent); background: var(--surface-2); }
 .crumbs { display: flex; align-items: center; gap: var(--s2); margin: calc(-1 * var(--s2)) 0 var(--s2); }
-.crumbs .back { padding-left: 0; }
 .crumb-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* loop cards */
@@ -480,8 +479,6 @@ summary h3 { display: inline; color: var(--text); }
 .offs { display: grid; gap: var(--s1); }
 .off-row { display: grid; grid-template-columns: 1fr 84px; gap: var(--s2); align-items: center; }
 .off-row input[type="number"] { width: 100%; }
-.ctx-bar { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); background: var(--accent-soft); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.ctx-bar p { flex: 1; min-width: 240px; }
 .guides-layer.in-frame { z-index: 1; }
 .screenframe .guides-layer { z-index: 2; }
 /* Settings > Screen guides */
