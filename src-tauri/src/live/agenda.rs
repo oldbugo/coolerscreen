@@ -86,7 +86,7 @@ fn parse_time(value: &str, params: &[(String, String)]) -> Option<(i64, bool)> {
 
 /// Naive UTC seconds -> naive local seconds in this PC's zone.
 #[cfg(windows)]
-fn utc_to_local(utc: i64) -> i64 {
+pub(crate) fn utc_to_local(utc: i64) -> i64 {
     use windows_sys::Win32::Foundation::SYSTEMTIME;
     use windows_sys::Win32::System::Time::SystemTimeToTzSpecificLocalTime;
     let days = utc.div_euclid(86400);
@@ -101,7 +101,7 @@ fn utc_to_local(utc: i64) -> i64 {
 }
 
 #[cfg(not(windows))]
-fn utc_to_local(utc: i64) -> i64 {
+pub(crate) fn utc_to_local(utc: i64) -> i64 {
     utc
 }
 
