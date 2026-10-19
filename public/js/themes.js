@@ -10,6 +10,7 @@ import * as Ly from './layers.js';
 import * as Wd from './widgets.js';
 import { backgroundSection, effectSpeed } from './effects.js';
 import { icon, widgetIcon } from './icons.js';
+import { createTwin } from './twin.js';
 
 const MIN_BOX = 0.02;
 const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
@@ -126,6 +127,7 @@ export function createThemes(ctx) {
   /** The app settings changed (guides, default radius): redraw what depends on them. */
   function appChanged() {
     if (!E.ui) return;
+    if (E.dragging) { E.repaint = true; return; } // the boxes are being dragged: redraw once the drag is over
     paintTitle(); paintBar();
     // a new screen fit makes the stored base stale: read the editor's view again so the banner shows
     const fk = JSON.stringify((S.app && S.app.screenFit) || {});
@@ -201,6 +203,7 @@ export function createThemes(ctx) {
     u.boxes = el('div', { class: 'boxes' });
     u.snaps = el('div', { class: 'snaps' });
     u.stage.append(u.imgBase, u.imgLive, u.corners, u.gz, u.notch, u.boxes, u.snaps, u.note);
+    u.twin = createTwin(u.stage, { call, mediaBase: () => S.app && S.app.mediaBase }); // the live picture, as on the screen (js/twin.js)
     u.stage.addEventListener('dragover', ev => { if ([...ev.dataTransfer.types].includes('text/x-cs-widget')) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; u.stage.classList.add('drop-ok'); } });
     u.stage.addEventListener('dragleave', () => u.stage.classList.remove('drop-ok'));
     u.stage.addEventListener('drop', ev => {
@@ -402,9 +405,17 @@ export function createThemes(ctx) {
     const live = boxEl(w.id);
     if (live) { live.focus({ preventScroll: true }); try { live.setPointerCapture(ev.pointerId); } catch { /* gone */ } }
     const target = live || E.ui.stage;
-    let moved = false;
+    let moved = false, dirty = false;
     E.dragging = true;
+    // The box follows the pointer once per animation frame (events in between are folded into the newest); the live picture on
+    // the screen is updated a few times a second while dragging, and once more on release.
+    let pend = null, raf = 0, snapKey = '';
+    const push = setInterval(() => { if (dirty) { dirty = false; E.rev++; paintSave(); save(); } }, 120);
     const move = e => {
+      pend = e;
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; const ev = pend; pend = null; if (ev) place(ev); });
+    };
+    const place = e => {
       const dx = (e.clientX - sx) / sr.width, dy = (e.clientY - sy) / sr.height;
       const snapOn = E.snap && !e.altKey;
       let vx = [], hy = [];
@@ -429,11 +440,15 @@ export function createThemes(ctx) {
         Object.assign(o.m, { x: r4(x), y: r4(y), w: r4(ww), h: r4(hh) });
         const b = boxEl(o.m.id); if (b) placeBox(b, o.m);
       }
-      moved = true;
-      drawSnapLines(vx, hy);
+      moved = true; dirty = true;
+      const key = vx.join(',') + '|' + hy.join(',');
+      if (key !== snapKey) { snapKey = key; drawSnapLines(vx, hy); }
       if (moving.length === 1) syncPosFields(moving[0]);
     };
     const up = () => {
+      clearInterval(push);
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      if (pend) { const ev = pend; pend = null; place(ev); } // the last position is not lost
       target.removeEventListener('pointermove', move);
       target.removeEventListener('pointerup', up);
       target.removeEventListener('pointercancel', up);

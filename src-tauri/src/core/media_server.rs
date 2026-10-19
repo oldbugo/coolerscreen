@@ -221,6 +221,19 @@ fn serve_conn(stream: TcpStream, token: &str, resolver: &Resolver) -> std::io::R
         }
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let rest = path.strip_prefix('/').and_then(|p| p.strip_prefix(token)).filter(|p| p.starts_with('/'));
+        // The editor's digital twin: the newest live picture from memory (`?since=<seq>`: 204 when there is nothing newer).
+        if host_ok && rest == Some("/twin/frame.jpg") {
+            crate::live::twin::touch();
+            let since = query_param(query, "since").and_then(|s| s.parse().ok()).unwrap_or(0);
+            match crate::live::twin::latest(since) {
+                Some((seq, jpeg)) => respond(&mut w, 200, "OK", &[cors, ("Content-Type", "image/jpeg".into()), ("Cache-Control", "no-store".into()), ("X-Twin-Seq", seq.to_string()), ("Access-Control-Expose-Headers", "X-Twin-Seq".into()), ("Content-Length", jpeg.len().to_string())], if method == "HEAD" { b"" } else { &jpeg[..] }, keep)?,
+                None => respond(&mut w, 204, "No Content", &[cors, ("Cache-Control", "no-store".into()), ("Content-Length", "0".into())], b"", keep)?,
+            }
+            if !keep {
+                return Ok(());
+            }
+            continue;
+        }
         let resolved = if host_ok { rest.and_then(|p| resolver(&percent_decode(p), query)) } else { None };
         let Some((file, cache)) = resolved else {
             respond(&mut w, 404, "Not Found", &[cors, ("Content-Length", "0".into())], b"", keep)?;

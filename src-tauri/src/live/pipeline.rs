@@ -136,6 +136,8 @@ pub struct Shared {
     pub quit: AtomicBool,
     pub paused: AtomicBool,
     pub fps: AtomicU32,
+    /// The render rate was set directly (the editor's twin runs at 15 per second): settings changes keep it.
+    pub rate_locked: AtomicBool,
     pub show_seconds: AtomicBool,
     pub max_kb: AtomicU32,
     pub connected: AtomicBool,
@@ -186,6 +188,7 @@ impl Pipeline {
             quit: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             fps: AtomicU32::new(if cfg.fps >= 45 { 60 } else { 30 }),
+            rate_locked: AtomicBool::new(false),
             show_seconds: AtomicBool::new(cfg.show_seconds),
             max_kb: AtomicU32::new(cfg.max_kb),
             connected: AtomicBool::new(sink == Sink::Null),
@@ -569,6 +572,9 @@ impl Pipeline {
                     match jin.take(Duration::from_millis(wait)) {
                         Some(jpeg) => {
                             let t = Instant::now();
+                            if super::twin::wanted() {
+                                super::twin::publish(&jpeg); // the editor's digital twin (about 15 per second, only while it looks)
+                            }
                             if let Some(d) = &dump_dir {
                                 if dump_n < 20 || dump_n % 60 == 0 {
                                     let _ = std::fs::write(d.join(format!("frame-{dump_n}.jpg")), &jpeg);
@@ -642,8 +648,16 @@ impl Pipeline {
     /// -re), so there is no decoder to restart.
     pub fn set_fps(&self, fps: u32) {
         let f = if fps >= 45 { 60 } else { 30 };
-        self.shared.fps.store(f, Relaxed);
+        if !self.shared.rate_locked.load(Relaxed) {
+            self.shared.fps.store(f, Relaxed);
+        }
         self.shared.cfg.lock().unwrap().fps = f;
+    }
+
+    /// A fixed render rate (any value, e.g. 15 for the editor's twin) that settings changes do not touch.
+    pub fn lock_rate(&self, fps: u32) {
+        self.shared.rate_locked.store(true, Relaxed);
+        self.shared.fps.store(fps.clamp(1, 60), Relaxed);
     }
 
     /// Swap the theme (widgets, background, hand-over) while running, without restarting the pipeline.
@@ -678,7 +692,9 @@ impl Pipeline {
 
     /// Apply a new config while running: fps, seconds, frame size, background clip, decode mode, notch mode, music.
     pub fn reload_config(&self, cfg: &Config) {
-        self.shared.fps.store(if cfg.fps >= 45 { 60 } else { 30 }, Relaxed);
+        if !self.shared.rate_locked.load(Relaxed) {
+            self.shared.fps.store(if cfg.fps >= 45 { 60 } else { 30 }, Relaxed);
+        }
         self.shared.show_seconds.store(cfg.show_seconds, Relaxed);
         self.shared.max_kb.store(cfg.max_kb, Relaxed);
         *self.shared.cfg.lock().unwrap() = cfg.clone();

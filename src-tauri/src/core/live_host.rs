@@ -57,6 +57,9 @@ pub struct LiveHost {
     preview_touched: Mutex<Option<std::time::Instant>>,
     preview_watching: AtomicBool,
     preview_idle_ms: AtomicU64,
+    /// The editor's digital twin started the stream (Live off): frames are rendered and encoded for the editor only, nothing is sent.
+    twin_temp: AtomicBool,
+    twin_watching: AtomicBool,
     /// Called when something the UI and the tray show changes (theme, idle state).
     on_change: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
     /// How many times live was paused (holds went from none to some) and brought back since the app started (tests, log).
@@ -106,6 +109,8 @@ impl Default for LiveHost {
             preview_touched: Mutex::new(None),
             preview_watching: AtomicBool::new(false),
             preview_idle_ms: AtomicU64::new(150_000),
+            twin_temp: AtomicBool::new(false),
+            twin_watching: AtomicBool::new(false),
             on_change: Mutex::new(Vec::new()),
             pauses: AtomicU64::new(0),
             resumes: AtomicU64::new(0),
@@ -334,6 +339,56 @@ impl LiveHost {
         });
     }
 
+    // ---------- the editor's digital twin ----------
+
+    /// The editor is open and looking: with Live on the frames the engine sends are copied for it (no second render); with Live
+    /// off a stream is started for the editor only (15 per second, a null sink: nothing goes to the screen). Safe to call again.
+    pub fn twin_start(self: &Arc<Self>) {
+        crate::live::twin::touch();
+        if self.pipeline().is_none() {
+            hlog("twin: live is off; a stream for the editor only starts (nothing is sent)");
+            self.twin_temp.store(true, SeqCst);
+            self.start();
+            self.evaluate_idle();
+        }
+        self.twin_watch();
+    }
+
+    /// The editor closed or is hidden: a stream started for the twin ends; live's own stream is left alone.
+    pub fn twin_stop(self: &Arc<Self>) {
+        crate::live::twin::clear();
+        if self.twin_temp.swap(false, SeqCst) {
+            hlog("twin: the editor closed; its stream stops");
+            self.stop();
+            self.evaluate_idle();
+        }
+    }
+
+    pub fn twinning(&self) -> bool {
+        self.twin_temp.load(SeqCst)
+    }
+
+    /// Ends the editor-only stream when the page has not asked for frames for 10 s (window closed, crashed, hidden).
+    fn twin_watch(self: &Arc<Self>) {
+        if self.twin_watching.swap(true, SeqCst) {
+            return;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            while me.twin_temp.load(SeqCst) {
+                std::thread::sleep(Duration::from_millis(1000));
+                if !crate::live::twin::wanted() {
+                    std::thread::sleep(Duration::from_secs(7)); // the page may be between two requests; wanted() already allows 3 s
+                    if !crate::live::twin::wanted() {
+                        me.twin_stop();
+                        break;
+                    }
+                }
+            }
+            me.twin_watching.store(false, SeqCst);
+        });
+    }
+
     /// Start the Screen fit calibration: the ruler picture for `fit` goes on the screen, whether live is on or not. Live (when on)
     /// steps aside first and comes back after `calibrate_end`. Already running: just updates the picture.
     pub fn calibrate_start(self: &Arc<Self>, fit: crate::core::fit::Fit, sel: usize) {
@@ -411,7 +466,7 @@ impl LiveHost {
     fn evaluate_idle(self: &Arc<Self>) {
         let fit = self.effective_fit();
         // while the Screen fit page is tuning, the live picture is what the user is looking at: never idle
-        let idle = !self.tuning() && !self.previewing() && self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer || t.nothing_to_stream(fit));
+        let idle = !self.tuning() && !self.previewing() && !self.twin_temp.load(SeqCst) && self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer || t.nothing_to_stream(fit));
         let layer_off = idle;
         let held = self.holds.load(SeqCst) & LAYER != 0;
         if layer_off && !held {
@@ -457,13 +512,22 @@ impl LiveHost {
         let mut g = self.pipeline.lock().unwrap();
         if g.is_some() {
             self.preview_temp.store(false, SeqCst); // live was switched on during a preview: the stream is live's now
+            if self.twin_temp.swap(false, SeqCst) {
+                // live was switched on while the editor's twin ran its own stream: the real stream (live's) is what is started now
+                drop(g);
+                self.stop();
+                self.start_with(cfg);
+            }
             return;
         }
         self.off_stopped.store(false, SeqCst);
         *self.last_cfg.lock().unwrap() = Some(cfg.clone());
-        let sink = if self.no_device.load(SeqCst) { Sink::Null } else { Sink::Device };
+        let sink = if self.no_device.load(SeqCst) || self.twin_temp.load(SeqCst) { Sink::Null } else { Sink::Device };
         hlog(&format!("start (holds: {})", if self.holds.load(SeqCst) == 0 { "none".to_string() } else { reason(self.holds.load(SeqCst)) }));
         let p = Arc::new(Pipeline::start(&cfg, sink));
+        if self.twin_temp.load(SeqCst) {
+            p.lock_rate(15);
+        }
         if let Some(t) = self.preview.lock().unwrap().clone().or_else(|| self.theme.lock().unwrap().clone()) {
             p.set_theme(t);
         }
@@ -480,6 +544,7 @@ impl LiveHost {
     pub fn stop(&self) {
         self.off_stopped.store(false, SeqCst);
         self.preview_forget();
+        self.twin_temp.store(false, SeqCst);
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
             hlog("stop (live switched off or the app is closing)");
@@ -491,6 +556,7 @@ impl LiveHost {
     pub fn stop_fast(&self, screen_off: bool) {
         self.off_stopped.store(false, SeqCst);
         self.preview_forget();
+        self.twin_temp.store(false, SeqCst);
         self.end_calibration_now();
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
@@ -634,6 +700,7 @@ impl LiveHost {
             "connected": connected,
             "fps": fps,
             "previewing": self.previewing(),
+            "twinning": self.twinning(),
             "measuredFps": measured,
             "paused": h & USER != 0,
             "deviceHold": h & DEVICE != 0,
@@ -1045,5 +1112,102 @@ mod tests {
         h.preview_start(marked(2));
         h.stop();
         assert!(!h.previewing() && !h.running());
+    }
+
+    /// The editor's twin with Live off: a stream for the editor only (15 per second, nothing sent), frames available while the
+    /// page asks, and it ends when the editor closes.
+    #[test]
+    fn the_twin_with_live_off_renders_for_the_editor_only_and_ends() {
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_theme(marked(1));
+        assert!(!h.running());
+        h.twin_start();
+        let p = h.pipeline().expect("a stream for the editor");
+        assert!(h.twinning() && h.status()["twinning"] == json!(true));
+        assert_eq!(p.shared.fps.load(SeqCst), 15);
+        // frames appear while the page keeps asking (touch stands for the page's requests)
+        let mut first = None;
+        eventually(|| {
+            crate::live::twin::touch();
+            first = crate::live::twin::latest(0);
+            first.is_some()
+        });
+        let (s0, jpeg) = first.expect("a frame");
+        assert!(jpeg.starts_with(&[0xFF, 0xD8]), "a JPEG");
+        let t0 = std::time::Instant::now();
+        let mut last = s0;
+        while t0.elapsed() < Duration::from_millis(2000) {
+            crate::live::twin::touch();
+            if let Some((s, _)) = crate::live::twin::latest(last) {
+                last = s;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let n = last - s0;
+        assert!((8..=40).contains(&n), "about 15 frames per second, got {n} in 2 s");
+        // a settings change keeps the twin's rate
+        h.set_fps(60);
+        assert_eq!(p.shared.fps.load(SeqCst), 15);
+        h.twin_stop();
+        assert!(!h.running() && !h.twinning(), "the editor-only stream is gone");
+    }
+
+    /// With Live on the editor gets the frames the engine sends (no second stream), and closing the editor leaves live alone.
+    #[test]
+    fn the_twin_with_live_on_copies_the_sent_frames_and_leaves_live_running() {
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_theme(marked(1));
+        h.start();
+        let p = h.pipeline().unwrap();
+        h.twin_start();
+        assert!(Arc::ptr_eq(&p, &h.pipeline().unwrap()) && !h.twinning(), "no second stream");
+        eventually(|| {
+            crate::live::twin::touch();
+            crate::live::twin::latest(0).is_some()
+        });
+        assert!(crate::live::twin::latest(0).is_some());
+        h.twin_stop();
+        assert!(h.running(), "live keeps running");
+        h.stop();
+    }
+
+    /// Measuring aid (run by hand in a release build): CPU used by the editor-only twin stream, as a share of one core and of the PC.
+    /// cargo test --release --lib -- twin_cost --ignored --nocapture
+    #[test]
+    #[ignore = "measuring aid"]
+    fn twin_cost() {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        let cpu = || unsafe {
+            let (mut c, mut e, mut k, mut u) = (FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 }, FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 }, FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 }, FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 });
+            GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u);
+            let f = |t: FILETIME| (((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64) as f64 / 1e7;
+            f(k) + f(u)
+        };
+        let h = LiveHost::new();
+        h.set_no_device(true);
+        h.set_config_override(Some(Config::default()));
+        h.set_theme(crate::live::theme::ThemeLive::new(crate::live::theme::Theme::standard_preset(), std::path::PathBuf::new()));
+        h.twin_start();
+        std::thread::sleep(Duration::from_millis(1500));
+        let p = h.pipeline().unwrap();
+        let (a, c0) = (p.shared.stats.snap(), cpu());
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < Duration::from_secs(8) {
+            crate::live::twin::touch();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let (b, c1) = (p.shared.stats.snap(), cpu());
+        let secs = t0.elapsed().as_secs_f64();
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) as f64;
+        let frames = (b.encoded - a.encoded) as f64;
+        println!("twin: {:.1} frames/s encoded, render {:.1} ms + encode {:.1} ms per frame, process CPU {:.1}% of one core = {:.2}% of the PC ({} logical cores)",
+            frames / secs, (b.render_us - a.render_us) as f64 / (b.rendered - a.rendered).max(1) as f64 / 1000.0, (b.encode_us - a.encode_us) as f64 / frames.max(1.0) / 1000.0,
+            (c1 - c0) / secs * 100.0, (c1 - c0) / secs * 100.0 / cores, cores);
+        h.twin_stop();
     }
 }

@@ -67,6 +67,7 @@
     "allow-weather-set-place",
     "allow-ext-sensor-status",
     "allow-screen-preview",
-    "allow-screen-preview-end"
+    "allow-screen-preview-end",
+    "allow-twin-watch"
   ]
 }

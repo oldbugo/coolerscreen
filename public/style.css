@@ -374,6 +374,8 @@ summary h3 { display: inline; color: var(--text); }
 .seg button[aria-pressed="true"] { color: var(--text); background: var(--surface-3); box-shadow: var(--shadow-sm); }
 .save-state { font-size: var(--fs-small); color: var(--text-muted); min-width: 9ch; }
 .stage { position: relative; width: 100%; aspect-ratio: 20 / 9; background: var(--picture-bg); border: 2px solid var(--border-strong); border-radius: var(--r-sm); overflow: hidden; user-select: none; touch-action: none; }
+.stage > canvas.layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.stage.twin-on > img.layer { visibility: hidden; }
 .stage > img.layer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; -webkit-user-drag: none; }
 .stage .stage-note { position: absolute; left: 8px; bottom: 6px; padding: 2px 8px; border-radius: var(--r-xs); background: var(--scrim); color: var(--on-picture); font-size: var(--fs-tiny); line-height: 16px; pointer-events: none; z-index: 4; }
 .stage.drop-ok { outline: 2px dashed var(--accent); outline-offset: -6px; }
