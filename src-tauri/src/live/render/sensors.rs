@@ -97,7 +97,7 @@ pub(super) struct Info {
     pub(super) label: &'static str,
     pub(super) kind: Kind,
     /// Default scale max (None: the metric's total, else automatic).
-    max: Option<f32>,
+    pub(super) max: Option<f32>,
     /// (threshold, colour) in the metric's threshold unit, ascending.
     thr: &'static [(f32, [u8; 3])],
     base: [u8; 3],

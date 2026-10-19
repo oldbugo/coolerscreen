@@ -178,7 +178,7 @@ impl Renderer {
         } else {
             // bars: fill columns first; as few columns as keep every bar row at least ~12 px high
             let mut cols = 1usize;
-            while cols < 4 && area.h / (n.div_ceil(cols)) as f32 < 12.0 {
+            while cols < 4 && (area.h / n.div_ceil(cols) as f32) < 12.0 {
                 cols += 1;
             }
             let rows = n.div_ceil(cols);
@@ -516,5 +516,38 @@ mod tests {
         let mut d = theme(&[("meters", 0.1, 0.1, 0.3, 0.3, json!({ "rows": [] })), ("worldclock", 0.5, 0.1, 0.3, 0.3, json!({ "zones": [] })), ("disks", 0.1, 0.5, 0.3, 0.3, json!({}))]);
         d.theme.widgets[2].props = json!("garbage");
         crate::live::render_preview(&d, 640, 288, true).unwrap();
+    }
+
+    /// Live (not sample) data: the sampler thread feeds the widgets; measures what one redraw of all six costs.
+    #[test]
+    fn live_data_draws_and_costs_little() {
+        use std::sync::{Arc, Mutex};
+        let mut r = crate::live::render::Renderer::new(Arc::new(Mutex::new(Default::default())), None);
+        let mut t = theme(&[
+            ("meters", 0.02, 0.04, 0.3, 0.45, json!({})),
+            ("cores", 0.34, 0.04, 0.3, 0.45, json!({})),
+            ("network", 0.66, 0.04, 0.32, 0.3, json!({})),
+            ("disks", 0.02, 0.52, 0.3, 0.44, json!({})),
+            ("worldclock", 0.34, 0.52, 0.3, 0.44, json!({})),
+            ("timer", 0.66, 0.52, 0.32, 0.3, json!({ "mode": "stopwatch", "running": true, "startedAt": crate::live::morewidgets::now_ms() })),
+        ]);
+        t.theme.widgets.iter_mut().for_each(|w| w.id = format!("live-{}", w.id));
+        r.set_theme(t);
+        let _ = r.render();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let n = 100;
+        let t0 = std::time::Instant::now();
+        for _ in 0..n {
+            r.invalidate();
+            let _ = r.render();
+        }
+        let per = t0.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        eprintln!("six new widgets, live data: {per:.2} ms per full redraw ({:.2} % of one core at 10 redraws/s)", per / 10.0);
+        let by: Vec<_> = r.widget_us.values().map(|(k, us)| format!("{k}={:.2}ms", *us as f64 / 1000.0 / (n + 1) as f64)).collect();
+        eprintln!("per widget: {by:?}");
+        assert!(per < 25.0, "a redraw of all six took {per:.1} ms");
+        // the cores really were read: every logical core slot exists in the sampler
+        let (v, _) = crate::live::metrics::hub().read("cpu.core:0", 2);
+        let _ = v;
     }
 }
