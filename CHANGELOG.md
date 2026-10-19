@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.9.1 - 2026-10-19 (stream C: clean quit for updates)
+
+- **`CoolerScreen.exe --quit`:** quits the running app exactly like tray Quit (live hands back to Embedded). It refuses
+  while an upload, conversion or store is running, never opens a window and never starts the app. Updates now use it
+  instead of force-closing the app.
+- **Test copies can no longer reach your app:** a development or test copy of CoolerScreen (debug build, or its own data
+  folder) can no longer hand its launch to your installed app and bring its window up. Opening CoolerScreen from the
+  Start menu still brings up the running window.
+
 ## 4.9.0 - 2026-10-19 (stream A: faster Embedded stores)
 
 - **No second send of the same clip:** if the exact clip is already on the screen (same content, and a fresh check of
