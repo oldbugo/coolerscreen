@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.13.0 - 2026-10-19 (stream C: restart)
+
+- **Restart CoolerScreen** button at the top of Settings: quits like tray Quit (the screen goes back to Embedded) and
+  opens a fresh copy. It refuses while something is still running.
+- **`CoolerScreen.exe --restart` and `--update <installer>`:** restart the app, or install an update and reopen it,
+  started by the app itself. Updates no longer leave the app closed.
+
 ## 4.12.0 - 2026-10-19 (stream C: live editor preview, smooth dragging)
 
 - **Digital twin:** the On screen editor shows the live picture as it is on the screen (music, processes, sensors and
