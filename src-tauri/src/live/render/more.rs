@@ -676,8 +676,14 @@ mod tests {
         for k in ["disk.read", "disk.write", "net.rx.total:*", "net.tx.total:*"] {
             h.read(k, 4);
         }
-        std::thread::sleep(std::time::Duration::from_millis(1600));
-        let (rx, _) = h.read("net.rx.total:*", 4);
+        let mut rx = None;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            rx = h.read("net.rx.total:*", 4).0;
+            if rx.is_some() {
+                break;
+            }
+        }
         assert!(rx.is_some_and(|v| v > 0.0), "adapter counters are read");
         let (r, _) = h.read("disk.read", 4);
         eprintln!("disk read now: {r:?}");
