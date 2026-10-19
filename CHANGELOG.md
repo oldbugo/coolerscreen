@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.0.0 - 2026-10-19 (stream C: small improvements, first batch)
+
+- **Frame rate counter:** Settings > Live screen shows the frames per second actually sent ("59.8 of 60"). A new switch
+  (off by default) draws the frame rate on the screen. A still picture shows a low number on purpose: the app only
+  re-sends a few frames per second when nothing changes.
+- **GPU power and fan fixed:** they could never be read (a broken lookup name). NVML is now retried if it was missing at
+  start, and device.log says why a GPU value is unavailable.
+- **Countdown and daylight saving:** the countdown info widget counts real time across a clock change.
+- **Clean build number:** generated build files are no longer tracked, so an installed clean build shows no "+".
+- **Reliable tests:** the engine timing tests wait for the state instead of fixed sleeps; they pass at default threads.
+
 ## 3.0.3 - 2026-10-18 (final 3.0)
 
 - **Embedded:** the picture stored on the screen is now called **Embedded** everywhere. A theme's background before it is
