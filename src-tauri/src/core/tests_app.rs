@@ -1291,3 +1291,46 @@ fn only_picture_inputs_make_the_stored_base_stale() {
     app.theme_set(&oid, &json!({ "widgets": [{ "id": "t", "type": "text", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.2, "onBase": false, "props": { "text": "Baked" } }] })).unwrap();
     assert!(!stale(&app), "the same item, live only");
 }
+
+#[test]
+fn an_effect_theme_stores_a_recorded_loop_and_goes_stale_when_the_effect_changes() {
+    if !crate::media::ffmpeg::locate().exists() {
+        return; // the loop is recorded through ffmpeg
+    }
+    let (_d, app, _rec, gallery) = setup();
+    let oid = one_original(&app, &gallery, "Effect theme.mp4");
+    let fx = |color: &str| json!({ "background": { "kind": "effect", "effect": "drift", "speed": 3.0, "colors": [color, "#ffffff"] } });
+    let run = |app: &App| {
+        let r = app.theme_apply(&oid).unwrap();
+        let j = wait_job(app, r["jobId"].as_str().unwrap());
+        assert_eq!(j["state"], "done", "{j}");
+        j["result"]["versionId"].as_str().unwrap().to_string()
+    };
+    app.theme_set(&oid, &fx("#7fd4ff")).unwrap();
+    let v1 = run(&app);
+    let (_, ver) = app.lib.find_version(&v1).unwrap();
+    assert!(ver["effect"]["key"].is_string(), "the version remembers which effect it records: {ver}");
+    // the recording is 3.33 s at the screen's 18 fps = 60 frames, the whole loop
+    assert_eq!(ver["settings"]["length"].as_f64().unwrap().round(), 3.0);
+    let v = app.theme_get(&oid).unwrap();
+    assert_eq!(v["baseVersionId"], json!(v1));
+    assert_eq!(v["baseStale"], json!(false), "just stored");
+    assert!(app.theme_live_of(&oid, app.load_theme(&oid)).effect_stored, "live may hand over to it");
+    // a live-only change keeps it; a changed effect makes Embedded stale and the live engine stops handing over to the old loop
+    assert_eq!(app.theme_set(&oid, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3 }], "background": fx("#7fd4ff")["background"] })).unwrap()["baseStale"], json!(false));
+    let stale = app.theme_set(&oid, &fx("#ff6b6b")).unwrap();
+    assert_eq!(stale["baseStale"], json!(true));
+    assert!(!app.theme_live_of(&oid, app.load_theme(&oid)).effect_stored);
+    // storing again makes a new loop; storing the same effect again reuses it
+    let v2 = run(&app);
+    assert_ne!(v1, v2);
+    assert_eq!(app.theme_get(&oid).unwrap()["baseStale"], json!(false));
+    assert_eq!(run(&app), v2);
+    assert_eq!(app.lib.versions(&oid).len(), 2);
+    // back to the picture: the stored loop is not its picture any more
+    let back = app.theme_set(&oid, &json!({})).unwrap();
+    assert_eq!(back["baseStale"], json!(true));
+    // an old loop recording is cleaned up once a new one exists
+    let n = std::fs::read_dir(app.theme_dir(&oid).join("effect")).map(|d| d.count()).unwrap_or(0);
+    assert_eq!(n, 1, "only the current recording is kept");
+}

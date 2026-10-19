@@ -759,6 +759,8 @@ pub struct ThemeLive {
     /// This theme's base is not the picture the screen holds (Embedded): live must stream its base itself, and when live stops it
     /// hands over instantly (the stored picture is another one, so a fade or a first-frame cross-fade would be wrong).
     pub not_embedded: bool,
+    /// 4.0: this effect theme's Embedded loop is a recording of exactly the effect it has now (see `effects::record`).
+    pub effect_stored: bool,
 }
 
 impl ThemeLive {
@@ -771,7 +773,7 @@ impl ThemeLive {
     /// Live stops with no fade onto the stored loop: the stored picture is not this theme's (another theme, or an effect that is
     /// not recorded yet), so a cross-fade to its first frame would be wrong.
     pub fn instant_handover(&self) -> bool {
-        self.not_embedded || self.theme.effect().is_some()
+        self.not_embedded || (self.theme.effect().is_some() && !self.effect_stored)
     }
 
     pub fn has_live_items(&self) -> bool {
@@ -779,7 +781,7 @@ impl ThemeLive {
     }
 
     pub fn new(theme: Theme, theme_dir: PathBuf) -> ThemeLive {
-        ThemeLive { theme, theme_dir, base_video: None, fallback_video: None, base_fit: None, not_embedded: false }
+        ThemeLive { theme, theme_dir, base_video: None, fallback_video: None, base_fit: None, not_embedded: false, effect_stored: false }
     }
 }
 

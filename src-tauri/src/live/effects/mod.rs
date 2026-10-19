@@ -16,6 +16,7 @@ pub mod aurora;
 pub mod clouds;
 pub mod drift;
 pub mod plasma;
+pub mod record;
 pub mod util;
 
 use util::Span;
@@ -73,7 +74,17 @@ pub struct Params {
     pub seed: u32,
 }
 
+/// Bump when an effect's drawing changes: stored recordings made with the old drawing then count as out of date.
+pub const RENDER_VERSION: u32 = 1;
+
 impl Params {
+    /// Identifies what a recording of these settings looks like (the Embedded loop is stale when this changes).
+    pub fn key(&self) -> String {
+        let cols: Vec<String> = self.colors.iter().map(|c| format!("{:02x}{:02x}{:02x}", c[0], c[1], c[2])).collect();
+        let s = format!("fx{RENDER_VERSION}|{}|{:.3}|{:.3}|{:.3}|{:.3}|{}|{}", self.kind.name(), self.speed, self.density, self.scale, self.brightness, cols.join(","), self.seed);
+        sha1_smol::Sha1::from(s.as_bytes()).digest().to_string()[..12].to_string()
+    }
+
     pub fn loop_seconds(&self) -> f32 {
         LOOP_BASE_S / self.speed
     }

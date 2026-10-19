@@ -422,9 +422,35 @@ impl Renderer {
     /// Start, change or stop the background effect to match the theme (an unchanged effect keeps running).
     fn sync_effect(&mut self) {
         let want = self.theme.theme.effect();
+        if want.is_none() && self.effect.is_some() {
+            *self.first.lock().unwrap() = None; // no longer an effect theme: drop its hand-over frame
+        }
         if want != self.effect.as_ref().map(|e| e.params.clone()) {
             self.effect = want.map(super::effects::EffectBg::new);
             self.effect_clear = true;
+        }
+        self.fill_effect_first();
+    }
+
+    /// The hand-over target of an effect theme whose Embedded loop is a recording of it: the loop starts at phase 0, so the first
+    /// frame is the effect at phase 0 (drawn here, no decoder). Cleared when the theme has no such loop.
+    fn fill_effect_first(&mut self) {
+        let mut slot = self.first.lock().unwrap();
+        match (&self.effect, self.theme.effect_stored) {
+            (Some(e), true) => {
+                let (cw, ch) = (self.cw, self.ch);
+                let mut buf = vec![0u8; cw * ch * 4];
+                for p in buf.chunks_exact_mut(4) {
+                    p.copy_from_slice(&[0, 0, 0, 255]);
+                }
+                super::effects::EffectBg::new(e.params.clone()).draw_phase(0.0, &mut buf, cw, ch, self.fit.placed(cw, ch));
+                *slot = Some(Arc::new(buf));
+            }
+            _ => {
+                if self.effect.is_some() {
+                    *slot = None; // an effect without a matching recording has nothing to hand over to
+                }
+            }
         }
     }
 
@@ -539,6 +565,7 @@ impl Renderer {
         if self.fit != f {
             self.fit = f.clamped();
             self.effect_clear = true;
+            self.fill_effect_first();
             self.update_fit_rects();
             self.last_key = None;
             self.layer_key = None;
