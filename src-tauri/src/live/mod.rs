@@ -11,6 +11,7 @@
 pub mod effects;
 pub mod encode;
 pub mod extsensors;
+pub mod agenda;
 pub mod audio;
 pub mod fitcal;
 pub mod gif;
@@ -18,6 +19,7 @@ pub mod metrics;
 pub mod morewidgets;
 pub mod mask;
 pub mod nowplaying;
+pub mod ping;
 pub mod pipeline;
 pub mod preview;
 pub mod render;

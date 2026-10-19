@@ -4,7 +4,7 @@
 use super::sensors::{arc, fill, info, line, mix, nice_ceil, stroke, Kind, GREY};
 use super::{round_rect, LocalTime, Rect, Renderer, Weight};
 use crate::live::metrics;
-use crate::live::morewidgets::{self as mw, CoresProps, DisksProps, MetersProps, NetworkProps, TimerProps, VolumeProps, WorldClockProps};
+use crate::live::morewidgets::{self as mw, AgendaProps, CoresProps, DisksProps, MetersProps, NetworkProps, PingProps, TimerProps, VolumeProps, WorldClockProps};
 use crate::live::theme::{parse_color, SensorProps, Widget};
 use tiny_skia::PathBuilder;
 
@@ -46,6 +46,8 @@ impl Renderer {
             "timer" => self.draw_timer(b, &w.timer(), now),
             "livetext" => self.draw_livetext(b, w, now),
             "volume" => self.draw_volume(b, &w.volume()),
+            "ping" => self.draw_ping(b, &w.ping()),
+            "agenda" => self.draw_agenda(b, &w.agenda()),
             _ => {}
         }
     }
@@ -67,6 +69,137 @@ impl Renderer {
         round_rect(&mut self.layer, x, y, w, h, h / 2.0, [255, 255, 255, 40]);
         if present && frac > 0.005 {
             round_rect(&mut self.layer, x, y, (w * frac).max(h), h, h / 2.0, [col[0], col[1], col[2], 255]);
+        }
+    }
+
+    // ------------------------------------------------------------ agenda
+
+    fn draw_agenda(&mut self, b: Rect, p: &AgendaProps) {
+        use crate::live::agenda;
+        let inner = self.mcard(b);
+        let col = parse_color(&p.color, [255, 255, 255]);
+        let now = agenda::now_local_secs();
+        let count = p.count.clamp(2, 6) as usize;
+        let view = if self.sample {
+            let t = |d: i64, h: i64, m: i64| (now.div_euclid(86400) + d) * 86400 + h * 3600 + m * 60;
+            agenda::AgendaView {
+                loaded: true,
+                error: None,
+                events: vec![
+                    agenda::Event { title: "Stand-up".into(), start: t(0, 23, 30), end: t(0, 23, 45), all_day: false },
+                    agenda::Event { title: "Dentist".into(), start: t(1, 14, 30), end: t(1, 15, 30), all_day: false },
+                    agenda::Event { title: "Mum's birthday".into(), start: t(2, 0, 0), end: t(3, 0, 0), all_day: true },
+                    agenda::Event { title: "Team lunch".into(), start: t(4, 12, 0), end: t(4, 13, 0), all_day: false },
+                    agenda::Event { title: "Flight to Perth".into(), start: t(5, 7, 15), end: t(5, 9, 0), all_day: false },
+                    agenda::Event { title: "Rent due".into(), start: t(6, 0, 0), end: t(7, 0, 0), all_day: true },
+                ],
+            }
+        } else if p.source.trim().is_empty() {
+            agenda::AgendaView { loaded: true, error: None, events: Vec::new() }
+        } else {
+            agenda::read(&p.source)
+        };
+        let events: Vec<&agenda::Event> = view.events.iter().filter(|e| e.end > now && (p.all_day || !e.all_day)).take(count).collect();
+        if events.is_empty() {
+            let msg = if p.source.trim().is_empty() && !self.sample {
+                "Add a calendar link or file"
+            } else if let Some(e) = &view.error {
+                e.as_str()
+            } else if !view.loaded {
+                "Loading\u{2026}"
+            } else {
+                "Nothing coming up"
+            };
+            let sz = self.fit_px(msg, Weight::Regular, inner.w, inner.h * 0.3);
+            let m = self.fit(msg, sz, Weight::Regular, inner.w);
+            self.text(&m, inner.x, inner.y + inner.h / 2.0 + sz as f32 * 0.3, sz, Weight::Regular, if view.error.is_some() { AMBER } else { GREY }, 1.0);
+            return;
+        }
+        let today = now.div_euclid(86400);
+        let n = events.len();
+        let row_h = inner.h / n as f32;
+        let sz = ((row_h * 0.5).min(inner.w * 0.09)).round().max(8.0) as u32;
+        let whens: Vec<String> = events
+            .iter()
+            .map(|e| {
+                let day = e.start.div_euclid(86400);
+                let (hh, mm) = ((e.start.rem_euclid(86400)) / 3600, (e.start.rem_euclid(3600)) / 60);
+                if e.start <= now {
+                    return "Now".to_string();
+                }
+                let dayname = match day - today {
+                    0 => "Today".to_string(),
+                    1 => "Tomorrow".to_string(),
+                    d if d < 7 => super::DAYS[((day + 4).rem_euclid(7)) as usize][..3].to_string(),
+                    _ => {
+                        let (_, m, dd) = crate::live::agenda::civil_from_days(day);
+                        format!("{} {}", dd, &super::MONTHS[(m as usize).clamp(1, 12) - 1][..3])
+                    }
+                };
+                match (e.all_day, day - today) {
+                    (true, _) => dayname,
+                    (false, 0) => format!("{hh:02}:{mm:02}"),
+                    (false, _) => format!("{dayname} {hh:02}:{mm:02}"),
+                }
+            })
+            .collect();
+        let wcol = whens.iter().map(|w| self.fonts.width(w, sz, Weight::Bold)).fold(0.0f32, f32::max).min(inner.w * 0.5);
+        for (i, e) in events.iter().enumerate() {
+            let base = inner.y + row_h * (i as f32 + 0.5) + sz as f32 * 0.36;
+            let w = self.fit(&whens[i], sz, Weight::Bold, wcol);
+            self.text(&w, inner.x, base, sz, Weight::Bold, if e.start <= now { GREEN } else { CYAN }, 1.0);
+            let t = self.fit(&e.title, sz, Weight::Regular, (inner.w - wcol - sz as f32 * 0.8).max(20.0));
+            self.text(&t, inner.x + wcol + sz as f32 * 0.8, base, sz, Weight::Regular, col, 1.0);
+        }
+    }
+
+    // ------------------------------------------------------------ ping
+
+    fn draw_ping(&mut self, b: Rect, p: &PingProps) {
+        let inner = self.mcard(b);
+        let secs = p.history.clamp(10.0, 600.0);
+        let host = crate::live::ping::clean_host(&p.host).unwrap_or_else(|| "1.1.1.1".into());
+        let graph = p.style == "graph";
+        let view = if self.sample {
+            Some(crate::live::ping::PingView { last: Some(14.0), tried: true, loss: 0.0, hist: sample_series(14.0, secs).into_iter().map(|(a, v)| (a, v.clamp(6.0, 60.0))).collect() })
+        } else {
+            crate::live::ping::read(&host, secs)
+        };
+        let (txt, col) = match &view {
+            Some(v) => match v.last {
+                Some(ms) => (format!("{ms:.0} ms"), if ms >= 120.0 { RED } else if ms >= 60.0 { AMBER } else { GREEN }),
+                None if v.tried => ("Timeout".to_string(), RED),
+                None => ("\u{2013}".to_string(), GREY),
+            },
+            None => ("\u{2013}".to_string(), GREY),
+        };
+        let head_h = if graph { inner.h * 0.5 } else { inner.h };
+        let lsz = (head_h * 0.22).min(inner.w * 0.1).max(8.0).round() as u32;
+        self.text("Ping", inner.x, inner.y + lsz as f32 * 0.85, lsz, Weight::Regular, LAB, 1.0);
+        let hw = self.fonts.width(&host, lsz, Weight::Regular);
+        let hs = self.fit(&host, lsz, Weight::Regular, (inner.w * 0.6).max(20.0));
+        let _ = hw;
+        self.text_r(&hs, inner.x + inner.w, inner.y + lsz as f32 * 0.85, lsz, Weight::Regular, LAB, 0.9);
+        let area_h = head_h - lsz as f32 * 1.2;
+        let vsz = self.fit_px(&txt, Weight::Bold, inner.w, area_h * 0.9);
+        let loss_note = view.as_ref().filter(|v| v.loss > 0.0 && v.last.is_some()).map(|v| format!("{:.0} % lost", v.loss * 100.0));
+        let base = inner.y + lsz as f32 * 1.2 + (area_h + vsz as f32 * 0.72) / 2.0;
+        self.text(&txt, inner.x, base, vsz, Weight::Bold, col, 1.0);
+        if let Some(n) = loss_note {
+            let nsz = (lsz as f32 * 0.9).round().max(8.0) as u32;
+            self.text_r(&n, inner.x + inner.w, base, nsz, Weight::Regular, AMBER, 1.0);
+        }
+        if graph {
+            let (px, pw) = (inner.x, inner.w);
+            let py = inner.y + head_h + inner.h * 0.03;
+            let ph = (inner.y + inner.h - py).max(6.0);
+            let hist = view.map(|v| v.hist).unwrap_or_default();
+            let peak = hist.iter().map(|h| h.1).fold(0.0f32, f32::max);
+            let max = nice_ceil((peak * 1.2).max(50.0));
+            for f in [0.0f32, 0.5, 1.0] {
+                line(&mut self.layer, px, py + ph * f, px + pw, py + ph * f, [255, 255, 255, if f == 1.0 { 55 } else { 28 }], 1.0, false);
+            }
+            self.plot(&hist, px, py, pw, ph, secs, max, col, true);
         }
     }
 

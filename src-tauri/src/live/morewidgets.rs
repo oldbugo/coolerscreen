@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-pub const TYPES: [&str; 8] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume"];
+pub const TYPES: [&str; 10] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume", "ping", "agenda"];
 
 pub fn is_more(kind: &str) -> bool {
     TYPES.contains(&kind)
@@ -228,7 +228,46 @@ impl Default for VolumeProps {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PingProps {
+    /// The host that is pinged (typed by the user).
+    pub host: String,
+    /// "number" | "graph"
+    pub style: String,
+    /// Seconds of history in the graph (10..600).
+    pub history: f32,
+}
+impl Default for PingProps {
+    fn default() -> Self {
+        PingProps { host: "1.1.1.1".into(), style: "number".into(), history: 60.0 }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AgendaProps {
+    /// A calendar link (https:// or webcal://) or the path of an .ics file; empty = nothing chosen yet.
+    pub source: String,
+    /// How many events (2..6).
+    pub count: u32,
+    /// Also list all-day events.
+    pub all_day: bool,
+    pub color: String,
+}
+impl Default for AgendaProps {
+    fn default() -> Self {
+        AgendaProps { source: String::new(), count: 4, all_day: true, color: "#ffffff".into() }
+    }
+}
+
 impl Widget {
+    pub fn agenda(&self) -> AgendaProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn ping(&self) -> PingProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
     pub fn volume(&self) -> VolumeProps {
         serde_json::from_value(self.props.clone()).unwrap_or_default()
     }
@@ -398,6 +437,22 @@ pub fn clean(kind: &str, props: &mut Value) {
             o.insert("zones".into(), Value::Array(zones));
             word(o, "format", &["24h", "12h"], "24h");
             colour(o, "color", "#ffffff", false);
+        }
+        "agenda" => {
+            short(o, "source", 500, false);
+            let s = o.get("source").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            // only what the engine can read: a link, or an .ics file path; anything else is dropped
+            let ok = s.is_empty() || super::agenda::classify(&s).is_some();
+            o.insert("source".into(), json!(if ok { s } else { String::new() }));
+            int(o, "count", 4, 2, 6);
+            boolean(o, "allDay", true);
+            colour(o, "color", "#ffffff", false);
+        }
+        "ping" => {
+            let h = o.get("host").and_then(Value::as_str).and_then(super::ping::clean_host).unwrap_or_else(|| "1.1.1.1".into());
+            o.insert("host".into(), json!(h));
+            word(o, "style", &["number", "graph"], "number");
+            number(o, "history", 60.0, 10.0, 600.0);
         }
         "volume" => {
             word(o, "style", &["bar", "ring"], "bar");

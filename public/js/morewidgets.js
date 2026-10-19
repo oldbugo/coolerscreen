@@ -5,7 +5,7 @@
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 /** The new item types. */
-export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume'];
+export const MORE_TYPES = ['meters', 'cores', 'network', 'disks', 'worldclock', 'timer', 'livetext', 'volume', 'ping', 'agenda'];
 export const isMore = t => MORE_TYPES.includes(t);
 
 const meterRows = () => ['cpu.load', 'ram.used', 'gpu.load', 'gpu.temp'].map(metric => ({ metric }));
@@ -20,13 +20,15 @@ export const ENTRIES = {
     zones: [{ name: 'New York', tz: 'Eastern Standard Time' }, { name: 'London', tz: 'GMT Standard Time' }, { name: 'Tokyo', tz: 'Tokyo Standard Time' }], format: '24h', color: '#ffffff' }) },
   livetext: { type: 'livetext', name: 'Live text', icon: 'T', props: () => ({ text: '{time}  CPU {cpu}  GPU {gpu}', size: 0.08, color: '#ffffff', opacity: 1, align: 'left', weight: 'regular' }) },
   volume: { type: 'volume', name: 'Volume', icon: '♪', props: () => ({ style: 'bar', color: '#5ac8ff' }) },
+  ping: { type: 'ping', name: 'Ping', icon: '⇄', props: () => ({ host: '1.1.1.1', style: 'number', history: 60 }) },
+  agenda: { type: 'agenda', name: 'Agenda', icon: '▦', props: () => ({ source: '', count: 4, allDay: true, color: '#ffffff' }) },
   timer: { type: 'timer', name: 'Timer', icon: '⏲', props: () => ({ mode: 'stopwatch', running: false, startedAt: 0, elapsedMs: 0, duration: 300, workMin: 25, breakMin: 5, color: '#ffffff' }) },
 };
 
 /** [group name, entry keys] pairs added to the palette (widgets.js puts them into the existing groups). */
-export const PALETTE_ADD = { Time: ['worldclock', 'timer'], Sensors: ['meters', 'cores', 'network', 'disks'], Media: ['volume'], Decoration: ['livetext'] };
+export const PALETTE_ADD = { Time: ['worldclock', 'timer', 'agenda'], Sensors: ['meters', 'cores', 'network', 'disks', 'ping'], Media: ['volume'], Decoration: ['livetext'] };
 
-export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer', livetext: 'Live text', volume: 'Volume' };
+export const TYPE_NAME = { meters: 'Meters', cores: 'CPU cores', network: 'Down + up', disks: 'All disks', worldclock: 'World clocks', timer: 'Timer', livetext: 'Live text', volume: 'Volume', ping: 'Ping', agenda: 'Agenda' };
 
 /** Default box [w, h] as fractions of the 2400x1080 canvas. */
 export function defaultSize(type, p = {}) {
@@ -38,6 +40,8 @@ export function defaultSize(type, p = {}) {
     case 'worldclock': return [0.26, clamp(0.12 * Math.max(1, (p.zones || []).length || 3) + 0.04, 0.2, 0.7)];
     case 'timer': return [0.28, 0.28];
     case 'livetext': return [0.5, 0.12];
+    case 'agenda': return [0.34, 0.3];
+    case 'ping': return p.style === 'graph' ? [0.3, 0.3] : [0.22, 0.2];
     case 'volume': return p.style === 'ring' ? [0.14, 0.32] : [0.26, 0.16];
     default: return null;
   }
@@ -149,6 +153,29 @@ export function paintProps(w, host, api, ctx) {
     case 'worldclock': return worldPanel();
     case 'timer': return timerPanel();
     case 'livetext': return liveTextPanel();
+    case 'agenda': {
+      const src = el('input', { type: 'text', id: 'pSrc', maxLength: 500, spellcheck: false, placeholder: 'https://… or C:\\…\\calendar.ics',
+        onchange: e => { p.source = e.target.value.trim().replace(/^"|"$/g, ''); e.target.value = p.source; api.edited(); } });
+      src.value = p.source || '';
+      host.append(field('Calendar link or file', src, 'pSrc'),
+        el('p', { class: 'muted small', text: 'A calendar link (iCal / .ics, https or webcal) or an .ics file on this PC. It is kept in this theme and fetched every 15 minutes while the item is shown.' }),
+        field('Events', select2('pCnt', String(clamp(p.count || 4, 2, 6)), [2, 3, 4, 5, 6].map(n => [String(n), String(n)]), v => api.set('count', Number(v))), 'pCnt'),
+        swRow('All-day events', p.allDay !== false, v => api.set('allDay', v)),
+        colour('color', 'Colour', '#ffffff'));
+      return true;
+    }
+    case 'ping': {
+      const hostIn = el('input', { type: 'text', id: 'pHost', maxLength: 60, spellcheck: false, placeholder: '1.1.1.1', onchange: e => {
+        const v = e.target.value.trim();
+        p.host = /^[A-Za-z0-9.-]{1,60}$/.test(v) ? v : '1.1.1.1'; e.target.value = p.host; api.edited();
+      } });
+      hostIn.value = p.host || '1.1.1.1';
+      host.append(field('Host', hostIn, 'pHost'),
+        el('p', { class: 'muted small', text: 'Sends one small ping a second to this address while the item is shown.' }),
+        field('Style', select2('pStyle', p.style || 'number', [['number', 'Number'], ['graph', 'Graph']], v => restructure(() => { p.style = v; })), 'pStyle'));
+      if (p.style === 'graph') host.append(field('History (s)', range('pHist', clamp(p.history || 60, 10, 600), 10, 600, 10, v => api.set('history', Math.round(v)), v => String(v)), 'pHist'));
+      return true;
+    }
     case 'volume':
       host.append(
         field('Style', select2('pStyle', p.style || 'bar', [['bar', 'Bar'], ['ring', 'Ring']], v => restructure(() => { p.style = v; })), 'pStyle'),
