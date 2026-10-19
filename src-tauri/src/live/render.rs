@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 const FALLBACKS: [&str; 4] = ["msyh.ttc", "YuGothM.ttc", "malgun.ttf", "seguisym.ttf"];
 mod extras;
 mod more;
+mod music;
 mod progress;
 mod sunmoon;
 mod todo;
@@ -250,6 +251,8 @@ pub struct Renderer {
     music_alpha: f32,
     music_tick: u64,
     cover: Option<(u64, usize, Vec<u8>)>,
+    /// Caches and clock of the four extra music looks (render/music.rs).
+    mus: music::MusicCache,
     theme: ThemeLive,
     images: HashMap<PathBuf, ImgEntry>,
     /// Union of the widget boxes (the only part of the layer that is cleared and composited).
@@ -331,6 +334,7 @@ impl Renderer {
             music: None,
             music_alpha: 0.0,
             music_tick: 0,
+            mus: Default::default(),
             cover: None,
             theme: ThemeLive::new(Theme::standard_preset(), PathBuf::new()),
             images: HashMap::new(),
@@ -558,6 +562,7 @@ impl Renderer {
                     c.hz = c.hz.max(match w.kind.as_str() {
                         "visualizer" => 20,
                         "slideshow" => 15,
+                        "music" => music::hz(&w.music()),
                         "clock" if w.clock().style == "analog" && w.clock().seconds => 15,
                         _ => 10,
                     });
@@ -565,6 +570,7 @@ impl Renderer {
             }
         }
         self.clusters = clusters;
+        self.mus.fast = self.theme.theme.widgets.iter().filter(|w| w.kind == "music" && self.theme.theme.is_visible(w)).fold(0, |a, w| a | music::fast_bits(&w.music()));
         self.update_fit_rects();
     }
 
@@ -630,6 +636,7 @@ impl Renderer {
     pub fn render(&mut self) -> (&[u8], bool) {
         let t = self.t0.elapsed().as_secs_f32();
         self.tick = (t * 10.0) as u64;
+        self.mus.set_clock(t, self.sample);
         let now = local_time();
         let vframe = if self.still.is_some() { self.still.clone() } else { self.video.as_ref().and_then(|v| v.frame()) };
         let mut vkey = vframe.as_ref().map(|a| Arc::as_ptr(a) as usize).unwrap_or(0);
@@ -655,7 +662,7 @@ impl Renderer {
         let np = if np.as_ref().is_some_and(|n| n.visible()) { np } else { None };
         let show_music = self.music_alpha > 0.01;
         let music_key = match &np {
-            Some(n) => (n.track_id << 24) ^ ((n.playing as u64) << 20) ^ (((n.position() * 3.0) as u64) << 4) ^ (self.music_alpha * 5.0) as u64,
+            Some(n) => (n.track_id << 24) ^ ((n.playing as u64) << 20) ^ (((n.position() * 3.0) as u64) << 4) ^ (self.music_alpha * 5.0) as u64 ^ self.mus.motion_key(n.playing),
             None => (self.music_alpha * 5.0) as u64,
         };
         // Fade state (live-layer opacity and hand-over blend in 1/64 steps) is part of the key so fades redraw every frame.

@@ -34,3 +34,27 @@ other playing → the playing one, none playing → current, empty → none). Fu
 
 Changelog line (for the PM): "Music: the play/pause sign now shows like a player's button (two bars while playing); with several players
 open, the one Windows shows as current wins when it is playing."
+
+## M3: more music looks
+
+User (2026-10-19): "a few more styles. Current one, it's fine ... we're not going to remove this one, but we'll just have more."
+Four new looks in Properties > Music (picture choices): **Card** (today's, default), **Cover**, **Line**, **Disc**, **Blur**; "Turn while playing"
+shows for Disc only. Contract: see `docs/v3/theme-format.md` "music looks" section.
+
+- Code: `live/render/music.rs` (looks, per-item caches: rounded cover, blurred background, pre-drawn vinyl, ticker strip), small hooks in
+  `render.rs` (module, one cache field, refresh rate, motion key), `render/widgets.rs` (one early branch in `draw_music`), `theme.rs`
+  (`style`, `spin`), `nowplaying.rs` (cover decode cap 640 px); editor `public/js/w-music.js` + one call in `themes.js`. No new CSS.
+- Motion: Line slides sideways (60 px/s on the design canvas) and fades; Disc rotates. Both redraw at 30 Hz; nothing moves vertically.
+- Cost per redraw of the widget (release, 1680x756): card 0.72 ms, cover 0.71, line 0.54, disc 1.44, blur 0.64. Disc at 30 Hz ≈ 43 ms of work per
+  second (about 4 % of one core, well under 1 % of the PC on a multi-core CPU).
+- For stream D: the picker reuses `.styles` / `.sty`; icons are inline SVGs in `w-music.js`.
+
+Changelog line (for the PM): "Music: four new looks (Cover, Line, Disc, Blur) besides the current card, which stays the default."
+
+**Verification (M3):** full lib suite 348 passed, 0 failed, 20 ignored (13 new music tests: every look draws only inside its box; no style =
+pixel-identical card; Line moves only sideways; a paused Disc is still and a playing one changes only inside its square; spin by time; serde
+round-trip keeps old props byte-identical). Quiet DEBUG instance (port 9781, fake device, scratch home): the panel shows the five picture choices,
+"Turn while playing" only for Disc, theme.json gets `style` and loses it again on Card; live frames of all five looks with a real (paused) player
+session looked right. Pictures: `E-m3-looks.png` (all five, sample render), `E-m3-panel-disc.png` (panel at 1280x860).
+Not verified: a spinning Disc in a live session (nothing was playing); CPU in a release build of the app (debug build measured the same for Card and
+Disc, so the look itself adds no visible load); the real screen.
