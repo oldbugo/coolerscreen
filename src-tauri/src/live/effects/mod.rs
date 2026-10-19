@@ -405,6 +405,15 @@ mod pipeline_tests {
         assert!(t.elapsed() < Duration::from_millis(300), "no hand-over fade for an effect: {:?}", t.elapsed());
     }
 
+    /// The editor preview and the My themes card render effect themes without a decoder or a clip.
+    #[test]
+    fn the_editor_preview_draws_the_effect() {
+        let png = crate::live::render_preview(&effect_theme("plasma"), 640, 288, true).unwrap();
+        assert_eq!(&png[1..4], b"PNG");
+        let live = crate::live::render_preview(&effect_theme("plasma"), 640, 288, false).unwrap();
+        assert!(live.len() > 20_000, "a plasma picture is not a flat colour: {} bytes", live.len());
+    }
+
     /// An old theme (no background field) is unchanged by the effect code: still the 3.0 behaviour and the same JSON.
     #[test]
     fn a_theme_without_a_background_is_untouched() {
