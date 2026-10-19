@@ -49,6 +49,8 @@ impl Renderer {
             "progress" => self.draw_progress(b, w, now),
             "sunmoon" => self.draw_sunmoon(b, w, now),
             "todo" => self.draw_todo(b, w, now),
+            "headlines" => self.draw_headlines(b, w, now),
+            "webpicture" => self.draw_webpicture(b, w, now),
             "volume" => self.draw_volume(b, &w.volume()),
             "ping" => self.draw_ping(b, &w.ping()),
             "agenda" => self.draw_agenda(b, &w.agenda()),
