@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.6.0 - 2026-10-19 (stream D: UI revision)
+
+The look is tidied up everywhere; every flow, button action and setting works as before.
+- **One look per control:** one switch for every on/off setting (top-bar Live, Live layer, Snap, Guides, Properties,
+  Settings), one button set, one segmented control, one set of line icons instead of mixed symbols and emoji.
+- **Editor:** the preview fills the window instead of leaving an empty band; the top bar fits the smallest window.
+- **Pages:** no empty strip at the bottom; Settings has a section index under its title; Properties uses one field
+  layout; the Picture page now looks like the rest of the app.
+- **Under the hood:** colours, sizes and corner radii come from one set of design tokens (`public/css/tokens.css`).
+
 ## 4.5.0 - 2026-10-19 (stream B: more widgets, second batch)
 
 - **CPU temperature** (also CPU power, CPU fan and board temperature): read from HWiNFO (Shared Memory Support on) or
