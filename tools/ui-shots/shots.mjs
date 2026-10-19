@@ -6,7 +6,7 @@
 import { mkdirSync } from 'node:fs';
 import { connect } from './cdp.mjs';
 
-const [port = '9333', out = 'shots', only = ''] = process.argv.slice(2);
+const [port = '9371', out = 'shots', only = ''] = process.argv.slice(2);
 mkdirSync(out, { recursive: true });
 const c = await connect(port);
 const wait = ms => new Promise(r => setTimeout(r, ms));

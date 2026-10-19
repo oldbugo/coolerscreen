@@ -3,7 +3,7 @@
 //   node tools/ui-shots/flows.mjs <port>
 import { connect } from './cdp.mjs';
 
-const [port = '9333'] = process.argv.slice(2);
+const [port = '9371'] = process.argv.slice(2);
 const c = await connect(port);
 await c.send('Runtime.enable');
 await c.size(1280, 860);
@@ -91,8 +91,9 @@ const rightW = () => js(`Math.round(document.querySelector('.ed-right').getBound
   await drag(lx, ly, lx + 60, ly);
   await check('Left panel: drag 60 px wider, settles on the 380 px preset', `Math.abs(document.querySelector('.ed-left').getBoundingClientRect().width - 380) <= 2`);
   await drag(lx + 80, ly, lx + 80 - (380 - lw0), ly);
+  { const [sx0, sy0] = await center('.ed-split'); await drag(sx0, sy0, sx0, sy0 + 400); } // start from the smallest preset
   const [sx, sy] = await center('.ed-split');
-  const h0 = await js(`document.querySelector('.ed-layers').getBoundingClientRect().height`);
+  const h0 =await js(`document.querySelector('.ed-layers').getBoundingClientRect().height`);
   await drag(sx, sy, sx, sy - 120);
   await check('Divider: dragging up makes Layers taller and settles on a preset', `(() => { const h = document.querySelector('.ed-layers').getBoundingClientRect().height, H = document.querySelector('.ed-left').clientHeight; return h > ${h0} && [0.3, 0.45, 0.6].some(f => Math.abs(h - f * H) < 3); })()`);
   // accordion
