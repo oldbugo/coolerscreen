@@ -263,14 +263,15 @@ impl Pipeline {
                         r.set_theme(eff);
                         force_apply = true;
                     }
+                    let streaming = sh.connected.load(Relaxed) && !sh.paused.load(Relaxed);
                     if fps_mark.0.elapsed() >= Duration::from_secs(1) {
                         let sent = sh.stats.sent.load(Relaxed);
                         let v = (sent.saturating_sub(fps_mark.1) as f64 * 10.0 / fps_mark.0.elapsed().as_secs_f64()).round() as u32;
-                        // while no session is open nothing is sent: show 0 rather than the last value
-                        sh.stats.sent_fps_x10.store(if sh.session_active.load(Relaxed) { v } else { 0 }, Relaxed);
+                        // while nothing is streaming (paused, connecting) show 0 rather than the last value
+                        sh.stats.sent_fps_x10.store(if streaming { v } else { 0 }, Relaxed);
                         fps_mark = (Instant::now(), sent);
                     }
-                    r.set_fps_overlay(if cfg.fps_overlay && sh.session_active.load(Relaxed) { Some((sh.stats.sent_fps_x10.load(Relaxed), sh.fps.load(Relaxed))) } else { None });
+                    r.set_fps_overlay(if cfg.fps_overlay && streaming { Some((sh.stats.sent_fps_x10.load(Relaxed), sh.fps.load(Relaxed))) } else { None });
                     let cg = sh.calibration_gen.load(Relaxed);
                     if cg != seen_cal_gen {
                         seen_cal_gen = cg;
