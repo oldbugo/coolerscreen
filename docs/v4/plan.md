@@ -1,4 +1,4 @@
-# CoolerScreen 4.0 plan (shared by every 4.0 session)
+﻿# CoolerScreen 4.0 plan (shared by every 4.0 session)
 
 Written 2026-10-18 by the 4.0 PM session. Approved by the user the same day ("Go ahead with the plan as written,
 including the landing-order version numbers"). Every worker session reads this file, the repo `CLAUDE.md` standing list
@@ -76,8 +76,8 @@ to Sonnet players and to report "Helpers used", "Verified", "Not verified".
 | Principal | Area | Files it knows | Branch | Status |
 |---|---|---|---|---|
 | A: live effects | live rendering engine, effect backgrounds, Embedded recording, store speed | `live/effects/`, `live/render.rs`, `live/pipeline.rs`, `live/effects/record.rs`, `core/themes.rs` (store path) | `claude/determined-greider-88a800` | idle |
-| B: widgets | widget kinds and data sources, per-item corner radius, snap/gap rules | `live/morewidgets.rs`, `live/render/more.rs`, `live/extsensors.rs`, `ping.rs`, `agenda.rs`, `volume.rs`, `public/js/morewidgets.js`, `layers.js` snap | `claude/recursing-matsumoto-31e4c5` | E2 done, re-hooking onto E1 |
-| C: app plumbing | live host, preview on select, digital twin, screen checks, budgets, `--quit`, single instance | `core/live_host.rs`, `core/outside.rs`, `core/settings.rs` budgets, `quit_cmd.rs`, `instance_id.rs`, `public/js/screenpreview.js`, twin | `claude/vibrant-proskuriakova-d382db` | E3 done, merging E1 |
+| B: widgets | widget kinds and data sources, per-item corner radius, snap/gap rules | `live/morewidgets.rs`, `live/render/more.rs`, `live/extsensors.rs`, `ping.rs`, `agenda.rs`, `volume.rs`, `public/js/morewidgets.js`, `layers.js` snap | `claude/recursing-matsumoto-31e4c5` | busy: W1 (progress, sun and moon, to-do), then W2 (headlines, web picture) |
+| C: app plumbing | live host, preview on select, digital twin, screen checks, budgets, `--quit`, single instance | `core/live_host.rs`, `core/outside.rs`, `core/settings.rs` budgets, `quit_cmd.rs`, `instance_id.rs`, `public/js/screenpreview.js`, twin | `claude/vibrant-proskuriakova-d382db` | idle (E3, C6, flaky test done) |
 | D: UI | look and layout of `public/`, style guide, editor shell, UI flow checks | `public/css/*`, `public/js/edshell.js`, `edhooks.js`, `icons.js`, `themes.js` layout, `tools/ui-shots/` | `claude/zealous-swanson-66219d` | idle |
 
 Note (review 2026-10-19): E3's live preview would have fitted A (live rendering) better than C; route future live-picture
