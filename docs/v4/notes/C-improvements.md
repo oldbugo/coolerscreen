@@ -57,3 +57,38 @@ PM to verify on hardware: (1) after a real store, check twice: no banner (is `i_
 restart? if it wobbles by more than 64 blocks, raise TOLERANCE_BLOCKS in outside.rs); (2) the banner would only be seen after
 another program writes to the screen, so a cheap proof is to read `screenBaseline` in settings.json against the value `cs2` info
 reports. Not verified: any of this on the real screen; the banner look in the app (reuses the existing banner classes).
+
+## C3: preview on the real screen (My themes and Browse)
+
+User request 2026-10-19 (after 4.7.1). What changed:
+- **My themes:** selecting a theme card shows it on the real screen at once (the theme as it is now: picture + live layer, streamed
+  even when it would not need streaming). Selecting another swaps the picture in the same stream (no reconnect; the page
+  debounces 150 ms so rapid clicking sends only the last one). The selection bar says "Previewing on the screen"; a ghost
+  "Preview" button appears when the selected theme is not being previewed (after the idle end, or a selection made elsewhere).
+- **Browse:** a click on a card (not on its buttons) selects it and previews its **thumbnail picture**, full screen, as a still
+  (cover fit). Online thumbnails are fetched once over https (max 6 MB) into `<app folder>\preview\`, cached for a day; local
+  thumbs (Wallpaper Engine / Lively) are read directly. Items without a thumbnail (e.g. scenes with none) say "This item has no
+  picture to preview." in a toast. Videos/scenes are NOT played or recorded for a preview (that would need recording first); only
+  their picture is shown. A bar at the bottom shows the title, "Previewing on the screen" and Stop. Previewing never adds anything.
+- **Leaving ends it:** going to another view (On screen, Settings opens a drawer and does not leave My themes: preview stays until
+  the user leaves the view), clearing the selection, "Use this theme", closing the window (the close handler ends it), the page
+  closing, 2 minutes with no pointer/keyboard activity ("Preview ended." toast), and a backend safety timer: a preview the page
+  has not refreshed (30 s keepalive) for 150 s ends by itself, so it can never keep running unseen. Tray Quit stops everything.
+- **Live off:** a temporary stream starts (like Screen fit tuning); ending it uses the normal stop, which is an instant
+  switch back to Embedded when the previewed picture is not the Embedded one (the preview theme is marked `not_embedded`) and the
+  usual fade when it is. The Live setting is never touched (checked). **Live on:** the running stream is given the preview
+  theme and gets the live theme back afterwards (same pipeline, no reconnect).
+- **Use this theme:** sets it as the live theme (as before), ends the preview, goes to On screen. With Live off the toast says
+  "Theme: “X”. Store it as Embedded here when you are happy." The "Store as Embedded" / "Update Embedded" button and "Use and
+  store as Embedded" are gone from My themes (the On screen editor keeps "Embedded: X · Store this as Embedded").
+- **Nothing is saved by a preview:** no settings.json, no theme.json, no stale mark, no live-theme change (tested: files byte-identical,
+  `baseStale` false). A device task (upload/check) pauses a preview like live and it carries on afterwards (tested).
+- Code: `live_host.rs` (preview_start / preview_end / preview_keepalive, watcher, `status.previewing`), `core/preview_screen.rs`,
+  commands `screen_preview` / `screen_preview_end`, `public/js/screenpreview.js`, hooks in `public/app.js`
+  (`SP`, setView, theme card, renderSelBar, Browse card + bar). Window close hook in `live_app.rs`.
+- Verified: unit tests (host with Live off/on, swap without reconnect, live theme change during a preview, device task pause,
+  forgotten preview timeout, stop forgets; App-level "saves nothing"; picture preview fills the canvas); full suite; a quiet DEBUG
+  fake-device instance driven through the real page (`tools/ui-shots/preview-flow.mjs`: 14 checks incl. rapid clicks, Use this
+  theme, Live on/off) with no page errors; screenshot of the selection bar. Not verified: on the real screen (first frame time,
+  instant switch back), Browse in the running app (no sources enabled in my scratch home; only the backend and the picture
+  renderer are tested), the window-close and idle-timeout paths in a real window, and the 2-minute page timer.

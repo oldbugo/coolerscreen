@@ -53,6 +53,13 @@ pub fn attach_close_handler(win: &WebviewWindow) {
     let w2 = win.clone();
     win.on_window_event(move |e| {
         if let WindowEvent::CloseRequested { api, .. } = e {
+            // a preview on the screen never outlives the window (the page cannot end it any more)
+            let live = w2.app_handle().state::<Core>().0.live.clone();
+            if live.previewing() {
+                std::thread::spawn(move || {
+                    live.preview_end();
+                });
+            }
             if tray_on() {
                 crate::window::clear_force_close();
                 let destroy = w2.app_handle().state::<Core>().0.settings.load().live_destroy_window();
