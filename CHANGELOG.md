@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.2.0 - 2026-10-19 (stream B: more widgets, first batch)
+
+Six new widgets, added from the editor palette (World clocks and Timer under Time, the rest under Sensors):
+- **Meters:** your own list of 1 to 8 readings (any sensor), each with a big value and a coloured bar.
+- **CPU cores:** every core as bars or a heat grid, with the average load as a big number.
+- **Down + up:** download and upload speeds together, with one two-colour graph.
+- **All disks:** every drive's used space as bars ("used / size" or "free").
+- **World clocks:** 1 to 4 cities, 24h or 12h, with a Tomorrow / Yesterday tag; daylight saving from Windows, no network.
+- **Timer:** stopwatch, countdown or Pomodoro, started and paused from the editor; keeps time with the window closed.
+
+Existing widgets and themes are unchanged. Theme contract v1.10.
+
 ## 4.1.0 - 2026-10-19 (stream A: live effects, first milestone)
 
 - **Live effect backgrounds:** a theme's background can now be a live effect drawn by the app instead of a video:
