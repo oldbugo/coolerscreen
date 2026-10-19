@@ -343,3 +343,18 @@ More types and metrics, all additive (code: `live/extsensors.rs`, `live/ping.rs`
   `allDay` bool (true), `color`. Link fetched every 15 minutes (file re-read when it changes) only while shown. Recurrence:
   DAILY / WEEKLY(BYDAY) / MONTHLY / YEARLY with INTERVAL, COUNT, UNTIL, EXDATE. The link is stored in theme.json (it may be a secret
   address: a future theme-sharing export should drop `agenda.source`).
+
+### 4.0 E2: per-item corner radius, notch-aware gap (added 2026-10-19; contract version assigned by the PM)
+
+- **Item field `radius`** (widget level, next to `x`, `y`, `w`, `h`; number, px on the 2400x1080 canvas, 0-400). **Absent by default** = the
+  item follows the theme's corner radius: the theme's `corners` (or the global default) when that is above 0, otherwise the card's
+  built-in radius (40 px), so a theme without rounded corners looks exactly as before. Set = the item's own radius (0 = square).
+  Removing the field (the editor's reset arrow) goes back to following the theme. Applies to every card background (clock,
+  music, stats, sensor, info, date, weather, the 4.0 widgets...) and, only when the item has its own `radius`, it clips the picture of
+  `image` and `slideshow` items. It is capped at half the item's short side. Live-only; for an `onBase` image or text it is part of
+  the item's base signature, so changing it marks Embedded as needing an update.
+- **Gap and snapping start from the visible area.** The editor measures `gap`, snap lines, and the default place of new items from the
+  notch band (its real width, after the 16 px block rounding) and the screen fit, not from the panel edge: the band's edge is the
+  start line (no line at the panel edge under the band), the gap lines start one gap after it, and a new item or a "Use the Standard
+  layout" item is moved (or shrunk) so it is not under the band. Only a left/right/top/bottom band counts (not the circle notch).
+  Nothing in theme.json changes for this.

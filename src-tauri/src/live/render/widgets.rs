@@ -66,7 +66,7 @@ impl Renderer {
             return self.draw_clock_style(b, p, n);
         }
         let col = parse_color(&p.color, [255, 255, 255]);
-        let rad = (28.0 * self.scale()).min(b.w.min(b.h) / 6.0);
+        let rad = self.card_radius(b, (28.0 * self.scale()).min(b.w.min(b.h) / 6.0));
         round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, SCRIM);
         let twelve = p.format == "12h";
         let hhmm = if twelve {
@@ -130,7 +130,7 @@ impl Renderer {
             return;
         }
         let u = (b.h / 220.0).min(b.w / 890.0).clamp(0.2, 4.0);
-        let rad = (24.0 * u).min(b.h / 4.0);
+        let rad = self.card_radius(b, (24.0 * u).min(b.h / 4.0));
         round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, [SCRIM[0], SCRIM[1], SCRIM[2], (SCRIM[3] as f32 * a) as u8]);
         round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, [255, 255, 255, (26.0 * a) as u8]);
         let fade = (a * 255.0) as u32;
@@ -214,7 +214,8 @@ impl Renderer {
         let items: Vec<usize> = p.items.iter().filter_map(|i| IDS.iter().position(|k| k == i)).collect();
         let n = items.len().max(1) as f32;
         let u = (b.w / 592.0).min(b.h / (72.0 + 104.0 * n)).clamp(0.2, 4.0);
-        round_rect(&mut self.layer, b.x, b.y, b.w, b.h, (28.0 * u).min(b.h / 6.0), [8, 10, 18, 120]);
+        let rad = self.card_radius(b, (28.0 * u).min(b.h / 6.0));
+        round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, [8, 10, 18, 120]);
         let pad = 36.0 * u;
         let pitch = (b.h - 2.0 * pad) / n;
         let gpu = s.gpu.as_ref();

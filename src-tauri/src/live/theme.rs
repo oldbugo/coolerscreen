@@ -63,19 +63,22 @@ pub struct Widget {
     pub hidden: bool,
     /// Id of the group this widget belongs to.
     pub group: Option<String>,
+    /// This item's own corner radius in px on the 2400x1080 canvas (4.0 E2). None = follows the theme's corner radius.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
     /// Per-type properties (see the typed structs below; unknown keys ignored, missing = default).
     pub props: Value,
 }
 
 impl Default for Widget {
     fn default() -> Self {
-        Widget { id: String::new(), kind: "text".into(), x: 0.0, y: 0.0, w: 0.2, h: 0.2, on_base: false, hidden: false, group: None, props: json!({}) }
+        Widget { id: String::new(), kind: "text".into(), x: 0.0, y: 0.0, w: 0.2, h: 0.2, on_base: false, hidden: false, group: None, radius: None, props: json!({}) }
     }
 }
 
 impl Widget {
     pub fn new(id: &str, kind: &str, x: f32, y: f32, w: f32, h: f32, props: Value) -> Widget {
-        Widget { id: id.into(), kind: kind.into(), x, y, w, h, on_base: false, hidden: false, group: None, props }
+        Widget { id: id.into(), kind: kind.into(), x, y, w, h, on_base: false, hidden: false, group: None, radius: None, props }
     }
     /// Typed view of `props`; a prop of the wrong type or a malformed object gives the defaults.
     pub fn clock(&self) -> ClockProps {
@@ -656,6 +659,7 @@ impl Theme {
                     *f = 0.0;
                 }
             }
+            w.radius = w.radius.filter(|r| r.is_finite()).map(|r| r.clamp(0.0, 400.0));
             w.w = w.w.clamp(MIN_BOX, 1.0);
             w.h = w.h.clamp(MIN_BOX, 1.0);
             w.x = w.x.clamp(0.0, 1.0 - w.w);

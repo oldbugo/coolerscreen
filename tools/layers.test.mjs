@@ -64,3 +64,28 @@ s = L.snapMove({ x: 24 / 2400 - .1 + .001, y: .5, w: .1, h: .1 }, L.snapLines([]
 // resize to the gap
 r = L.snapResize({ x: .1, y: .1, w: 1 - .1 - 24 / 2400 - .001, h: .1 }, 'e', L.snapLines([], none, 24), [], .003, .006); assert.ok(near(r.x + r.w, 1 - 24 / 2400), 'right edge to the inside gap');
 console.log('layers ok');
+// 4.0 E2: the visible area (notch band + screen fit) decides gaps, snap lines and where new items go
+import * as S from '../public/js/safearea.js';
+const band = { mode: 'band', band: { edge: 'left', px: 96 } }; // bandPx rounds to the 16 px grid: 96
+assert.deepEqual(S.insets({ mask: band }), { left: 96, right: 0, top: 0, bottom: 0 });
+assert.deepEqual(S.insets({ mask: { mode: 'off' } }), { left: 0, right: 0, top: 0, bottom: 0 });
+assert.deepEqual(S.insets(null), { left: 0, right: 0, top: 0, bottom: 0 });
+// the screen fit hides 9 px at the left: the band's visible part is 87 panel px, scaled into the design canvas
+assert.equal(S.insets({ mask: band, screenFit: { left: 9 } }).left, Math.round(87 * 2400 / 2391));
+assert.equal(S.insets({ mask: { mode: 'band', band: { edge: 'right', px: 96 } } }).right, 96);
+// safe rectangle with a 24 px gap: band + gap from the left, gap elsewhere
+const sr = S.safeRect({ mask: band }, 24);
+assert.ok(Math.abs(sr.x0 - 120 / 2400) < 1e-9 && Math.abs(sr.y0 - 24 / 1080) < 1e-9 && Math.abs(sr.x1 - (1 - 24 / 2400)) < 1e-9);
+// placing: a box at x = 0 moves out from under the band; a preset box is shrunk when it does not fit
+let pb = S.placeInside({ x: 0, y: 0, w: .2, h: .2 }, { mask: band }, 24);
+assert.ok(Math.abs(pb.x - 0.05) < 1e-9 && Math.abs(pb.y - 24 / 1080) < 1e-9);
+pb = S.placeInside({ x: .0, y: .0, w: 1, h: 1 }, { mask: band }, 24, { shrink: true });
+assert.ok(pb.x + pb.w <= 1 - 24 / 2400 + 1e-9 && pb.x >= .05 - 1e-9);
+// snap lines start at the band's edge, not the panel edge; the gap lines start after it
+const noG = { left: { size: 0 }, right: { size: 0 }, curve: { offset: 0, left: 0, right: 0 } };
+const L0 = L.snapLines([], noG, 24, null), L1 = L.snapLines([], noG, 24, { left: 96 });
+assert.ok(L0.xs.some(l => l.v === 0) && L0.xs.some(l => Math.abs(l.v - 24 / 2400) < 1e-9 && l.k === 's'));
+assert.ok(!L1.xs.some(l => l.v === 0), 'no line at the panel edge under the band');
+assert.ok(L1.xs.some(l => Math.abs(l.v - 96 / 2400) < 1e-9 && l.k === 'a') && L1.xs.some(l => Math.abs(l.v - 120 / 2400) < 1e-9 && l.k === 's'));
+assert.ok(L1.xs.some(l => Math.abs(l.v - (1 - 24 / 2400)) < 1e-9 && l.k === 'e'), 'the right side still has its gap line');
+console.log('layers + safearea tests ok');

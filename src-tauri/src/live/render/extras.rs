@@ -44,7 +44,8 @@ fn civil_days_in_month(y: i32, m: u32) -> u32 {
 impl Renderer {
     fn card(&mut self, b: Rect) {
         let sc = (self.cw as f32 / 1680.0).max(0.1);
-        round_rect(&mut self.layer, b.x, b.y, b.w, b.h, (28.0 * sc).min(b.w.min(b.h) / 5.0), [0, 0, 0, 96]);
+        let rad = self.card_radius(b, (28.0 * sc).min(b.w.min(b.h) / 5.0));
+        round_rect(&mut self.layer, b.x, b.y, b.w, b.h, rad, [0, 0, 0, 96]);
     }
 
     /// Centre `s` horizontally in `b`, baseline `base`.

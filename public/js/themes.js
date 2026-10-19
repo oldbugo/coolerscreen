@@ -7,6 +7,7 @@
 import { styleNotch, styleCorners, makeCornersOverlay } from './frame.js';
 import { openDialog } from './dialog.js';
 import * as Ly from './layers.js';
+import * as Safe from './safearea.js';
 import * as Wd from './widgets.js';
 import { backgroundSection, effectSpeed } from './effects.js';
 import { icon, widgetIcon } from './icons.js';
@@ -405,7 +406,7 @@ export function createThemes(ctx) {
     const orig = moving.map(m => ({ m, x: m.x, y: m.y, w: m.w, h: m.h }));
     const ids = new Set(moving.map(m => m.id));
     const others = widgets().filter(o => !ids.has(o.id) && shownOnStage(o));
-    const lines = Ly.snapLines(others, guidesNow(), E.theme.gap ?? Ly.DEFAULT_GAP);
+    const lines = Ly.snapLines(others, guidesNow(), E.theme.gap ?? Ly.DEFAULT_GAP, Safe.insets(S.app)); // from the visible area (E2)
     const thrX = SNAP_PX / sr.width, thrY = SNAP_PX / sr.height;
     const ux0 = Math.min(...orig.map(o => o.x)), uy0 = Math.min(...orig.map(o => o.y));
     const ux1 = Math.max(...orig.map(o => o.x + o.w)), uy1 = Math.max(...orig.map(o => o.y + o.h));
@@ -531,7 +532,8 @@ export function createThemes(ctx) {
     const [w, h] = Wd.defaultSize(k.type, props);
     let x, y;
     if (cx != null) { x = cx - w / 2; y = cy - h / 2; } else { x = 0.1 + 0.04 * (n % 8); y = 0.12 + 0.05 * (n % 8); }
-    const wd = { id: nextId(), type: k.type, x: r4(clamp(x, 0, 1 - w)), y: r4(clamp(y, 0, 1 - h)), w, h, onBase: false, hidden: false, group: null, props };
+    const at = Safe.placeInside({ x: clamp(x, 0, 1 - w), y: clamp(y, 0, 1 - h), w, h }, S.app, E.theme.gap ?? Ly.DEFAULT_GAP); // never under the notch band (E2)
+    const wd = { id: nextId(), type: k.type, x: r4(at.x), y: r4(at.y), w, h, onBase: false, hidden: false, group: null, props };
     widgets().push(wd);
     E.theme.liveLayer = true; // adding an item shows the live layer again
     E.selIds = [wd.id]; E.selGroup = null; E.anchor = wd.id;
@@ -889,7 +891,7 @@ export function createThemes(ctx) {
         actions: [{ label: 'Cancel', value: false, kind: 'secondary' }, { label: 'Use Standard layout', value: true, kind: 'primary' }] });
       if (!ok) return;
     }
-    try { const t = await call('theme_standard'); E.theme.widgets = t.widgets; E.theme.groups = []; E.selIds = []; E.selGroup = null; E.theme.liveLayer = true; paintBar(); paintLayerList(); paintStage(); paintProps(); edited(); }
+    try { const t = await call('theme_standard'); E.theme.widgets = t.widgets.map(w => Object.assign(w, Safe.placeInside(w, S.app, E.theme.gap ?? Ly.DEFAULT_GAP, { shrink: true }))); E.theme.groups = []; E.selIds = []; E.selGroup = null; E.theme.liveLayer = true; paintBar(); paintLayerList(); paintStage(); paintProps(); edited(); }
     catch (e) { toast(e.message, true); }
   }
 
