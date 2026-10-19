@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.1.0 - 2026-10-19 (stream A: live effects, first milestone)
+
+- **Live effect backgrounds:** a theme's background can now be a live effect drawn by the app instead of a video:
+  **Aurora**, **Plasma**, **Drift** (soft particles) and **Clouds**. Each has colours, speed, brightness and two
+  effect settings, chosen in the editor under Theme settings > Background. Effects move sideways or fade (never up and
+  down, which tears on this panel) and repeat seamlessly, ready for recording an Embedded loop later.
+- **Cost:** about 3.3 to 4.2% of the PC's CPU at 60 fps with an effect (about 2% at 30 fps), measured on this PC.
+- Nothing changes for existing themes; no theme gets an effect by itself. Theme contract v1.9.
+- Not yet: effect themes do not record their Embedded loop (next effects milestone); when live stops the screen
+  switches to whatever Embedded loop is stored.
+- **Design documents (stream D):** UI audit with screenshots and a style guide (`docs/v4/`); no app change.
+
 ## 4.0.0 - 2026-10-19 (stream C: small improvements, first batch)
 
 - **Frame rate counter:** Settings > Live screen shows the frames per second actually sent ("59.8 of 60"). A new switch

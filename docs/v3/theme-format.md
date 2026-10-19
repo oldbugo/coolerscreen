@@ -261,7 +261,7 @@ clip or version) mark the base as needing to be stored again, using the full not
   says "Live is off · the screen shows Embedded".
 - The "App responsibilities" Apply description above (3 steps) is superseded by this section.
 
-## v4 effects (stream A, milestone A1; the PM assigns the contract version at merge)
+## v1.9 (4.1.0, stream A1): live effect backgrounds
 
 A theme's background can be a **live effect** the engine draws itself instead of the theme's picture (like Wallpaper Engine's
 generated scenes, not a video). New optional theme field `background`; missing, `null` or any `kind` other than `"effect"` = the
