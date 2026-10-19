@@ -18,7 +18,9 @@ const closeOverlays = () => js(`(() => { for (const b of document.querySelectorA
 await c.size(1280, 860);
 await closeOverlays();
 
-// My themes
+// Start from the same state: "Test pattern" live (storing a theme can make it the live one).
+await click('#navMine'); await js('document.querySelectorAll(".g-card.sel").forEach(e => e.click()); 1');
+await click('.g-card', 'Test pattern'); await click('.sel-bar button', 'Use this theme'); await wait(1500);
 await click('#navMine'); await js('document.querySelectorAll(".g-card.sel").forEach(e => e.click()); 1');
 await shot('01-my-themes');
 await click('.g-card', 'Coast'); await shot('02-my-themes-selected');
