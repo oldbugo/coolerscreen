@@ -26,6 +26,7 @@ pub mod sunmoon;
 pub mod todo;
 pub mod headlines;
 pub mod webpicture;
+pub mod lyrics;
 pub mod preview;
 pub mod render;
 pub mod sensors;
