@@ -821,7 +821,6 @@ export function createThemes(ctx) {
       }, 'Drawn into the picture on the screen, so it stays when the app is closed. Changing it means updating Embedded.'));
     }
     const hit = Ly.bandHit(w, guidesNow());
-    u.props.append(Wd.cornerRow(w, { el, field, numInput, edited, themeRadius: radius })); // per-item corner radius (morewidgets.js)
     if (hit && E.guides) u.props.append(el('p', { class: 'warn-text small', text: `⚠ Overlaps ${hit}` }));
     // rows for every item kind (E2 adds "Corner radius" through js/edhooks.js)
     for (const fn of itemControls) { try { fn(w, u.props, { el, h: { field, select2, range, numInput, swRow }, set, edited, repaint: () => paintProps(), S, theme: E.theme }); } catch (e) { console.error(e); } }

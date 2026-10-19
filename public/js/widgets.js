@@ -326,4 +326,3 @@ export function paintTypeProps(w, host, api) {
 
 /** The 4.0 item types have their property panels in morewidgets.js. */
 export const hasMorePanel = More.isMore;
-export const cornerRow = More.cornerRow;

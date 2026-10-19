@@ -336,3 +336,13 @@ export function paintProps(w, host, api, ctx) {
     return true;
   }
 }
+
+// "Corner radius" for every item kind, through the editor's item-controls hook (js/edhooks.js): it runs at the end of each item's
+// Properties, above the pinned Delete bar.
+import { addItemControls } from './edhooks.js';
+addItemControls((w, host, api) => {
+  host.append(cornerRow(w, {
+    el: api.el, field: api.h.field, numInput: api.h.numInput, edited: api.edited,
+    themeRadius: () => (api.theme && api.theme.corners) ?? (api.S && api.S.app && api.S.app.cornerRadius) ?? 0,
+  }));
+});
