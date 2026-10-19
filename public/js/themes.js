@@ -8,7 +8,7 @@ import { styleNotch, styleCorners, makeCornersOverlay } from './frame.js';
 import { openDialog } from './dialog.js';
 import * as Ly from './layers.js';
 import * as Wd from './widgets.js';
-import { backgroundSection } from './effects.js';
+import { backgroundSection, effectSpeed } from './effects.js';
 
 const MIN_BOX = 0.02;
 const SNAP_PX = 6; // weak snapping: about 6 px at the size the preview is drawn
@@ -242,7 +242,7 @@ export function createThemes(ctx) {
     const run = () => ctx.storeTheme(E.oid, E.info.name);
     const row = (text, btn) => u.banner.append(el('div', { class: 'base-banner', role: 'status' }, el('p', { text }), el('button', { class: 'btn primary', text: btn, onclick: run })));
     if (E.info.baseUnstored) row(`Embedded is out of date (new picture chosen)${S.app?.live?.settings?.inApp ? '' : ''}`, 'Update Embedded');
-    else if (E.info.baseStale) row('Embedded is out of date (screen fit/corners/notch/text/pictures changed)', 'Update Embedded');
+    else if (E.info.baseStale) row('Embedded is out of date (effect/screen fit/corners/notch/text/pictures changed)', 'Update Embedded');
     else if (E.info.embeddedDiffers) row(`Embedded: ${E.info.embeddedTheme ? E.info.embeddedTheme.name : 'none'}`, 'Store this as Embedded');
   }
 
@@ -290,10 +290,11 @@ export function createThemes(ctx) {
     const seq = ++E.pvSeq, oid = E.oid;
     const theme = JSON.parse(JSON.stringify(E.theme));
     const wantLive = E.theme.liveLayer !== false;
-    const live = wantLive ? call('theme_preview', { originalId: oid, theme, withLive: true, w: 1200, h: 540 }) : Promise.resolve(null);
+    const ph = E.phase != null ? { phase: E.phase } : {}; // an effect background animates: the preview is drawn at this loop phase
+    const live = wantLive ? call('theme_preview', { originalId: oid, theme, withLive: true, w: 1200, h: 540, ...ph }) : Promise.resolve(null);
     const sig = baseSigOf();
-    const needBase = E.baseSig !== sig || !E.baseUrl;
-    const base = needBase ? call('theme_preview', { originalId: oid, theme, withLive: false, w: 1200, h: 540 }) : Promise.resolve(null);
+    const needBase = E.phase != null ? !wantLive : (E.baseSig !== sig || !E.baseUrl);
+    const base = needBase ? call('theme_preview', { originalId: oid, theme, withLive: false, w: 1200, h: 540, ...ph }) : Promise.resolve(null);
     const [l, b] = await Promise.allSettled([live, base]);
     if (seq !== E.pvSeq || E.oid !== oid || !E.ui) return;
     E.previewOk = (l.status === 'fulfilled' && (!wantLive || l.value)) || (b.status === 'fulfilled' && !!b.value) || (!needBase && b.status === 'fulfilled');
@@ -302,6 +303,18 @@ export function createThemes(ctx) {
     await Promise.all([setImg(E.ui.imgLive, E.liveUrl), setImg(E.ui.imgBase, E.baseUrl || fallbackFrame())]);
     paintImages();
   }
+  // Effect backgrounds move: while the editor is showing and nothing is being edited, the preview is redrawn a few times a second
+  // at the effect's own pace (each redraw is a normal preview call; edits and drags pause it).
+  let animating = false;
+  setInterval(async () => {
+    if (animating || !E.ui || !E.oid || document.hidden || root.offsetParent === null) return;
+    const fx = E.theme && E.theme.background && E.theme.background.kind === 'effect' ? E.theme.background : null;
+    if (!fx) { if (E.phase != null) { E.phase = null; schedulePreview(0); } return; }
+    if (E.dragging || E.saving || E.rev !== E.saved) return;
+    animating = true;
+    E.phase = ((performance.now() / 1000) * effectSpeed(fx) / 10) % 1;
+    try { await refreshPreview(); } finally { animating = false; }
+  }, 400);
   const fallbackFrame = () => (S.originals.find(o => o.id === E.oid) || {}).frameUrl || null;
   function setImg(img, url) {
     return new Promise(res => {

@@ -338,14 +338,14 @@ impl App {
     }
 
     /// One rendered frame of the theme for the editor: `theme` is the unsaved edit (default: the saved one).
-    pub fn theme_preview(&self, oid: &str, theme: Option<&Value>, with_live: bool, w: u32, h: u32) -> CoreResult<Value> {
+    pub fn theme_preview(&self, oid: &str, theme: Option<&Value>, with_live: bool, w: u32, h: u32, phase: Option<f64>) -> CoreResult<Value> {
         self.lib.read_original(oid).ok_or_else(gone)?;
         let t = match theme.filter(|t| t.is_object()) {
             Some(v) => self.clean_theme(oid, v)?,
             None => self.load_theme(oid),
         };
         let (w, h) = (w.clamp(160, 2400), h.clamp(72, 1080));
-        let png = crate::live::preview::render_preview(&self.theme_live_of(oid, t), w, h, with_live).map_err(CoreError::new)?;
+        let png = crate::live::preview::render_preview_at(&self.theme_live_of(oid, t), w, h, with_live, phase).map_err(CoreError::new)?;
         let name = if with_live { "theme-preview.png" } else { "theme-preview-base.png" };
         write_atomic(&self.theme_dir(oid).join(name), &png)?;
         Ok(json!({ "url": self.lib.url(&format!("/media/o/{oid}/{name}?t={}", super::scheduler::now_ms())), "withLive": with_live, "w": w, "h": h }))
