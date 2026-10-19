@@ -371,3 +371,82 @@ mod measure {
         }
     }
 }
+
+#[cfg(test)]
+mod pipeline_tests {
+    use crate::live::pipeline::{Pipeline, Sink};
+    use crate::live::{Config, Theme, ThemeLive};
+    use std::time::{Duration, Instant};
+
+    fn effect_theme(effect: &str) -> ThemeLive {
+        let mut th = Theme::default();
+        th.background = Some(super::Background { kind: "effect".into(), effect: effect.into(), ..Default::default() });
+        ThemeLive::new(th, std::path::PathBuf::new())
+    }
+
+    /// An effect theme with no widgets still streams (a plain picture theme would idle), moves every frame, and stops at once.
+    #[test]
+    fn an_effect_theme_streams_every_frame_and_stops_at_once() {
+        let mut cfg = Config::default();
+        cfg.music.enabled = false;
+        cfg.notch = "off".into();
+        cfg.fps = 30;
+        let p = Pipeline::start(&cfg, Sink::Null);
+        let th = effect_theme("aurora");
+        assert!(!th.nothing_to_stream(Default::default()) && th.has_live_items());
+        p.set_theme(th);
+        std::thread::sleep(Duration::from_millis(1500));
+        let s = p.shared.stats.snap();
+        assert!(s.sent >= 20, "about 30 frames a second are sent, got {}", s.sent);
+        assert_eq!(s.gradient_frames, 0);
+        assert_eq!(s.unchanged_skipped, 0, "every frame of an effect is new");
+        let t = Instant::now();
+        p.stop();
+        assert!(t.elapsed() < Duration::from_millis(300), "no hand-over fade for an effect: {:?}", t.elapsed());
+    }
+
+    /// An old theme (no background field) is unchanged by the effect code: still the 3.0 behaviour and the same JSON.
+    #[test]
+    fn a_theme_without_a_background_is_untouched() {
+        let t = Theme::from_json(r#"{"widgets":[{"type":"clock"}]}"#).unwrap();
+        assert!(t.background.is_none() && t.effect().is_none());
+        assert!(!t.to_json().contains("background"));
+        assert!(ThemeLive::new(Theme::default(), Default::default()).theme.effect().is_none());
+        // a damaged background is ignored, not an error
+        let bad = Theme::from_json(r#"{"background":"oops"}"#).unwrap();
+        assert!(bad.background.is_none());
+        let kept = Theme::from_json(r##"{"background":{"kind":"effect","effect":"clouds","speed":0.7,"colors":["#112233","#445566"]}}"##).unwrap();
+        assert_eq!(kept.effect().unwrap().speed, 0.7);
+        assert_eq!(Theme::from_json(&kept.to_json()).unwrap(), kept);
+    }
+}
+
+#[cfg(test)]
+mod dump {
+    use crate::live::pipeline::{Pipeline, Sink};
+    use crate::live::{Config, Theme, ThemeLive};
+    use std::time::Duration;
+
+    /// CS_DUMP_DIR=<dir>: run each effect with the Standard widgets through the real pipeline (null sink) and keep the JPEGs
+    /// exactly as they would be sent (portrait 756x1680), to look at.
+    #[test]
+    #[ignore]
+    fn dump_pipeline_frames() {
+        let Some(dir) = std::env::var_os("CS_DUMP_DIR") else { return };
+        for k in super::Kind::ALL {
+            let d = std::path::Path::new(&dir).join(k.name());
+            let _ = std::fs::remove_dir_all(&d);
+            std::env::set_var("COOLERSCREEN_DUMP_FRAMES", &d);
+            let mut cfg = Config::default();
+            cfg.music.enabled = false;
+            cfg.notch = "off".into();
+            let p = Pipeline::start(&cfg, Sink::Null);
+            std::env::remove_var("COOLERSCREEN_DUMP_FRAMES");
+            let mut th = Theme::standard_preset();
+            th.background = Some(super::Background { kind: "effect".into(), effect: k.name().into(), ..Default::default() });
+            p.set_theme(ThemeLive::new(th, Default::default()));
+            std::thread::sleep(Duration::from_millis(2500));
+            p.stop_fast(crate::live::session::Ending::LoopClip);
+        }
+    }
+}

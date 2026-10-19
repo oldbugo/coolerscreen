@@ -68,7 +68,7 @@ impl Effect for Clouds {
             let cx = (2.0 + 6.0 * (1.0 - self.p.scale)).round() as usize;
             let s = self.p.seed;
             self.fields = [fbm_field(self.gw, self.gh, cx, s), fbm_field(self.gw, self.gh, cx + 1, s ^ 0x5bd1), fbm_field(self.gw, self.gh, cx + 2, s ^ 0x1234)];
-            self.grid = vec![0.0; self.gw * self.gh * 3];
+            self.grid = vec![0.0; self.gw * self.gh * 4];
         }
         let (gw, gh) = (self.gw, self.gh);
         // sideways lookups: layer 0 slides right one picture width per loop, layer 1 slides left
@@ -97,10 +97,8 @@ impl Effect for Clouds {
                 let v = 0.46 * a + 0.34 * b + 0.2 * (c * fade + (1.0 - c) * (1.0 - fade));
                 let t = smoothstep(thr - 0.30, thr + 0.45, v);
                 let col = self.pal.at(t);
-                let o = (row + gx) * 3;
-                self.grid[o] = col[0] * gain;
-                self.grid[o + 1] = col[1] * gain;
-                self.grid[o + 2] = col[2] * gain;
+                let o = (row + gx) * 4;
+                self.grid[o..o + 4].copy_from_slice(&[col[0] * gain, col[1] * gain, col[2] * gain, 255.0]);
             }
         }
         self.up.draw(sp, &self.grid, gw, gh, data);

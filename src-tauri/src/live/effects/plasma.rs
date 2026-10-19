@@ -49,7 +49,7 @@ impl Effect for Plasma {
             self.key = (w, h);
             self.gw = (w / 5).max(8);
             self.gh = (h / 5).max(8);
-            self.grid = vec![0.0; self.gw * self.gh * 3];
+            self.grid = vec![0.0; self.gw * self.gh * 4];
             self.warp = self
                 .layers
                 .iter()
@@ -78,10 +78,8 @@ impl Effect for Plasma {
                 }
                 let pos = 0.5 + 0.5 * s / total * 1.1;
                 let c = self.pal.at(pos * bands);
-                let o = (gy * gw + gx) * 3;
-                self.grid[o] = c[0] * gain;
-                self.grid[o + 1] = c[1] * gain;
-                self.grid[o + 2] = c[2] * gain;
+                let o = (gy * gw + gx) * 4;
+                self.grid[o..o + 4].copy_from_slice(&[c[0] * gain, c[1] * gain, c[2] * gain, 255.0]);
             }
         }
         self.up.draw(sp, &self.grid, gw, gh, data);

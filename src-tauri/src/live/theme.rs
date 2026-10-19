@@ -775,7 +775,7 @@ impl ThemeLive {
     }
 
     pub fn has_live_items(&self) -> bool {
-        self.theme.has_live_items(self.base_video.is_some())
+        (self.theme.live_layer && self.theme.effect().is_some()) || self.theme.has_live_items(self.base_video.is_some())
     }
 
     pub fn new(theme: Theme, theme_dir: PathBuf) -> ThemeLive {

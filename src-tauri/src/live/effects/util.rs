@@ -134,7 +134,9 @@ impl Palette {
     }
 }
 
-/// Bilinear upscale of a float RGB grid (`gw` x `gh`, channels 0..255) into the span, dithered.
+/// Bilinear upscale of a float RGBA grid (`gw` x `gh`, four floats per cell: channels 0..255 and alpha 255) into the span, dithered.
+/// The crate is built for size (opt-level "s"), where the compiler does not vectorise, so the hot loops use SSE2 directly
+/// (x86_64 always has it); other targets get the plain loops.
 pub struct Upscaler {
     xs: Vec<(usize, usize, f32)>,
     key: (usize, usize, usize, usize),
@@ -157,24 +159,59 @@ impl Upscaler {
                 })
                 .collect();
         }
-        self.row.resize(gw * 3, 0.0);
+        self.row.resize(gw * 4, 0.0);
         let dz = dither();
         for y in sp.y0..sp.y1 {
             let g = (sp.v(y) * gh as f32 - 0.5).clamp(0.0, (gh - 1) as f32);
             let j0 = (g as usize).min(gh - 1);
             let j1 = (j0 + 1).min(gh - 1);
             let fy = g - j0 as f32;
-            let (r0, r1) = (&grid[j0 * gw * 3..][..gw * 3], &grid[j1 * gw * 3..][..gw * 3]);
-            for ((o, a), b) in self.row.iter_mut().zip(r0).zip(r1) {
-                *o = a + (b - a) * fy;
-            }
+            lerp_rows(&grid[j0 * gw * 4..][..gw * 4], &grid[j1 * gw * 4..][..gw * 4], fy, &mut self.row);
             let out = &mut data[(y * sp.cw + sp.x0) * 4..(y * sp.cw + sp.x1) * 4];
             let nrow = &dz[(y & 63) << 6..][..64];
-            for (k, (px, &(i0, i1, fx))) in out.chunks_exact_mut(4).zip(&self.xs).enumerate() {
-                let (a, b) = (&self.row[i0 * 3..i0 * 3 + 3], &self.row[i1 * 3..i1 * 3 + 3]);
-                put(px, a[0] + (b[0] - a[0]) * fx, a[1] + (b[1] - a[1]) * fx, a[2] + (b[2] - a[2]) * fx, nrow[(sp.x0 + k) & 63]);
-            }
+            hrow(out, &self.row, &self.xs, nrow, sp.x0);
         }
+    }
+}
+
+fn lerp_rows(r0: &[f32], r1: &[f32], fy: f32, out: &mut [f32]) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use std::arch::x86_64::*;
+        let f = _mm_set1_ps(fy);
+        let mut i = 0;
+        while i + 4 <= out.len() {
+            let a = _mm_loadu_ps(r0.as_ptr().add(i));
+            let b = _mm_loadu_ps(r1.as_ptr().add(i));
+            _mm_storeu_ps(out.as_mut_ptr().add(i), _mm_add_ps(a, _mm_mul_ps(_mm_sub_ps(b, a), f)));
+            i += 4;
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    for ((o, a), b) in out.iter_mut().zip(r0).zip(r1) {
+        *o = a + (b - a) * fy;
+    }
+}
+
+/// One output row: horizontal blend of two grid cells per pixel, dither, round to bytes.
+fn hrow(out: &mut [u8], row: &[f32], xs: &[(usize, usize, f32)], nrow: &[f32], x0: usize) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use std::arch::x86_64::*;
+        for (k, (px, &(i0, i1, fx))) in out.chunks_exact_mut(4).zip(xs).enumerate() {
+            let a = _mm_loadu_ps(row.as_ptr().add(i0 * 4));
+            let b = _mm_loadu_ps(row.as_ptr().add(i1 * 4));
+            let v = _mm_add_ps(a, _mm_mul_ps(_mm_sub_ps(b, a), _mm_set1_ps(fx)));
+            let v = _mm_add_ps(v, _mm_set1_ps(0.5 + nrow[(x0 + k) & 63]));
+            let i = _mm_cvttps_epi32(v);
+            let p = _mm_packus_epi16(_mm_packs_epi32(i, i), _mm_setzero_si128());
+            (px.as_mut_ptr() as *mut i32).write_unaligned(_mm_cvtsi128_si32(p));
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    for (k, (px, &(i0, i1, fx))) in out.chunks_exact_mut(4).zip(xs).enumerate() {
+        let (a, b) = (&row[i0 * 4..i0 * 4 + 4], &row[i1 * 4..i1 * 4 + 4]);
+        put(px, a[0] + (b[0] - a[0]) * fx, a[1] + (b[1] - a[1]) * fx, a[2] + (b[2] - a[2]) * fx, nrow[(x0 + k) & 63]);
     }
 }
 
