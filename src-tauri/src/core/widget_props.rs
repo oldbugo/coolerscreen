@@ -6,9 +6,9 @@ use serde_json::{json, Map, Value};
 /// Every widget type the app accepts (the engine draws them; unknown ones are refused by `theme_set`).
 pub const TYPES: [&str; 11] = ["clock", "music", "stats", "text", "image", "weather", "sensor", "date", "visualizer", "slideshow", "info"];
 
-pub const METRICS: [&str; 15] = [
+pub const METRICS: [&str; 18] = [
     "cpu.load", "cpu.core", "cpu.temp", "cpu.clock", "gpu.load", "gpu.temp", "gpu.clock", "gpu.vram", "gpu.power", "gpu.fan", "ram.used",
-    "net.down", "net.up", "disk.used", "disk.activity",
+    "net.down", "net.up", "disk.used", "disk.activity", "cpu.power", "cpu.fan", "board.temp",
 ];
 pub const SENSOR_STYLES: [&str; 6] = ["number", "bar", "ring", "gauge", "graph", "sparkline"];
 pub const CLOCK_STYLES: [&str; 3] = ["digital", "analog", "minimal"];

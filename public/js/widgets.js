@@ -11,15 +11,15 @@ const sq = h => r4(h * 1080 / 2400);
 // ---------------------------------------------------------------------- sensors
 // [id, group, name]
 export const METRICS = [
-  ['cpu.load', 'CPU', 'CPU load'], ['cpu.core', 'CPU', 'CPU core'], ['cpu.temp', 'CPU', 'CPU temperature'], ['cpu.clock', 'CPU', 'CPU speed'],
+  ['cpu.load', 'CPU', 'CPU load'], ['cpu.core', 'CPU', 'CPU core'], ['cpu.temp', 'CPU', 'CPU temperature'], ['cpu.clock', 'CPU', 'CPU speed'], ['cpu.power', 'CPU', 'CPU power'], ['cpu.fan', 'CPU', 'CPU fan'],
   ['gpu.load', 'GPU', 'GPU load'], ['gpu.temp', 'GPU', 'GPU temperature'], ['gpu.clock', 'GPU', 'GPU speed'], ['gpu.vram', 'GPU', 'GPU memory'],
   ['gpu.power', 'GPU', 'GPU power'], ['gpu.fan', 'GPU', 'GPU fan'],
-  ['ram.used', 'Memory', 'RAM'],
+  ['board.temp', 'Board', 'Board temperature'], ['ram.used', 'Memory', 'RAM'],
   ['net.down', 'Network', 'Download'], ['net.up', 'Network', 'Upload'],
   ['disk.used', 'Disk', 'Disk used'], ['disk.activity', 'Disk', 'Disk activity'],
 ];
 export const metricName = id => (METRICS.find(m => m[0] === id) || [])[2] || 'Sensor';
-const isTemp = m => m === 'cpu.temp' || m === 'gpu.temp';
+const isTemp = m => m === 'cpu.temp' || m === 'gpu.temp' || m === 'board.temp';
 
 const ICON_SVG = {
   number: '<text x="24" y="23" text-anchor="middle" font-size="17" font-weight="700" fill="currentColor">42</text>',
@@ -207,7 +207,7 @@ export function paintTypeProps(w, host, api) {
       og.append(el('option', { value: id, text: name }));
     }
     sel.value = metric;
-    host.append(field('Metric', sel, 'pMetric'));
+    host.append(field('Metric', sel, 'pMetric'), More.extNote(api, metric));
     if (metric === 'cpu.core') host.append(field('Core', num('pCore', 'core', { min: 0, max: 255 }), 'pCore'));
     if (metric === 'disk.used') {
       const d = el('input', { type: 'text', id: 'pDrive', maxLength: 2, spellcheck: false, placeholder: 'C:', onchange: e => { const v = e.target.value.trim().toUpperCase(); api.set('drive', /^[A-Z]:?$/.test(v) ? v.replace(/:?$/, ':') : 'C:'); e.target.value = p.drive; } });

@@ -10,6 +10,7 @@
 //!   pipeline  render -> encode -> send threads with latest-frame slots, pacing and reconnect
 pub mod effects;
 pub mod encode;
+pub mod extsensors;
 pub mod audio;
 pub mod fitcal;
 pub mod gif;

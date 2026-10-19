@@ -64,6 +64,18 @@ export const ZONES = [
 ];
 const cityOf = tz => (ZONES.find(z => z[0] === tz) || [])[1] || '';
 
+/** Readings that need a tool the user runs (HWiNFO / LibreHardwareMonitor). */
+export const EXT_METRICS = ['cpu.temp', 'cpu.power', 'cpu.fan', 'board.temp'];
+
+/** A muted line saying where the metric is read from, or why it is unavailable (empty for ordinary metrics). */
+export function extNote(api, metric) {
+  const p = api.el('p', { class: 'muted small' });
+  if (!EXT_METRICS.includes(metric)) { p.hidden = true; return p; }
+  p.textContent = 'Checking…';
+  api.backend.call('ext_sensor_status').then(s => { p.textContent = s.message; p.classList.toggle('warn-text', !s.ok); }, () => { p.hidden = true; });
+  return p;
+}
+
 export function hasPanel(type) { return isMore(type); }
 
 /**
@@ -162,7 +174,8 @@ export function paintProps(w, host, api, ctx) {
     };
     draw();
     const add = el('button', { type: 'button', class: 'btn secondary', text: 'Add a row', disabled: rows.length >= 8, onclick: () => restructure(() => { rows.push({ metric: 'cpu.load' }); }) });
-    host.append(el('p', { class: 'small muted', text: 'Rows' }), list, el('div', { class: 'row' }, add),
+    const ext = rows.map(r => r.metric).find(m => EXT_METRICS.includes(m));
+    host.append(el('p', { class: 'small muted', text: 'Rows' }), list, ext ? extNote(api, ext) : el('span'), el('div', { class: 'row' }, add),
       swRow('Bars', p.bars !== false, v => api.set('bars', v)));
     if (rows.some(r => r.metric === 'cpu.temp' || r.metric === 'gpu.temp')) {
       host.append(field('Unit', select2('pUnit', p.unit || ctx.tempUnit(), [['C', '°C'], ['F', '°F']], v => api.set('unit', v)), 'pUnit'));

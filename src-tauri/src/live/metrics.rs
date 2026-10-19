@@ -251,7 +251,8 @@ impl Sources {
                 }
             }
             "cpu.clock" => s.value = cpu_clock_mhz(),
-            "cpu.temp" => s.value = None, // no source without a kernel driver
+            // no source without a kernel driver: only through a tool the user runs (HWiNFO shared memory / LibreHardwareMonitor)
+            "cpu.temp" | "cpu.power" | "cpu.fan" | "board.temp" => s.value = super::extsensors::read(metric),
             "ram.used" => {
                 if let Some((used, total)) = memory_bytes() {
                     s.value = Some(used as f32 / 1073741824.0);
