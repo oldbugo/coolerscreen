@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.8.0 - 2026-10-19 (stream C: preview on the screen)
+
+- **Preview by selecting:** clicking a theme in My themes shows it on the real screen at once, with its live layer;
+  clicking a Browse item shows its picture. Leaving the page, clearing the selection, closing the window or two
+  minutes without activity puts back what was showing before. Nothing is saved by a preview.
+- **Works with Live off too:** a temporary preview stream starts and the screen returns to Embedded afterwards; the
+  Live setting is not changed.
+- **Use this theme** makes it the live theme and takes you to On screen. "Store as Embedded" and "Use and store as
+  Embedded" are no longer in My themes: storing happens from On screen.
+- Browse previews show the item's picture only; videos and scenes are not played before they are added.
+
 ## 4.7.1 - 2026-10-19 (stream D: UI polish)
 
 - The new widget panels and the effects Background section now use the same switches, buttons and fields as the rest
