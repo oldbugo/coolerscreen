@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.12.0 - 2026-10-19 (stream C: live editor preview, smooth dragging)
+
+- **Digital twin:** the On screen editor shows the live picture as it is on the screen (music, processes, sensors and
+  effects move), about 15 frames a second while the editor is visible. With Live off it is drawn for the editor only.
+- **Smooth dragging:** items follow the mouse every frame; the screen catches up just after.
+
 ## 4.11.0 - 2026-10-19 (stream B: corner radius per item, notch-aware gaps)
 
 - **Corner radius on every widget:** Properties has a Corner radius row. By default an item follows the theme's corner
