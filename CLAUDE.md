@@ -41,6 +41,9 @@
 - 2026-10-18: Every milestone gets its own version, numbered in the order it lands on `main` (4.0.0, 4.1.0, 4.2.0, ...;
   fixes 4.2.1), each with a tag, changelog entry, build and install ("we don't have those micro versions ... let's
   ensure we do that"). 4.0 is run by a PM session with worker sessions: see `docs/v4/plan.md`.
+- 2026-10-19: Install new builds without asking: "just install it if it's idle. If not, just don't do it and then do it
+  when it is idle." Idle = no upload, conversion, store/apply or recording running (device.log). Quit with
+  `CoolerScreen.exe --quit` (4.9.1+; exit 2 = busy, try later), install `/S`, restart with `--background`, all quiet.
 
 Start-of-work reading: `docs/v4/plan.md` (4.0 plan and session rules), `docs/roadmap/2026-10-18-v3-release-and-v4.md`
 (3.0 state and the 4.0 brief).
