@@ -547,6 +547,11 @@ impl Renderer {
             rects.push((x0, y0, x1, y1));
         }
         self.rects = merge_rects(rects);
+        // The widget layer outlives theme changes and a cluster clears only its own rectangle when it is redrawn. The fitted
+        // resample reads a pixel or two beyond that rectangle, and what lies there is whatever an item left at an earlier place:
+        // translucent cards then show stacked, offset edges and copies ("ghosts") after an item was moved. A new layout starts from an
+        // empty layer (every cluster is redrawn right after, see `set_theme`).
+        self.layer.data_mut().fill(0);
         // one cluster per merged rectangle: the widgets inside it and the fastest refresh any of them needs
         let mut clusters: Vec<Cluster> = self.rects.iter().map(|&rect| Cluster { rect, fit: None, widgets: Vec::new(), hz: 10, key: None, last_tick: 0 }).collect();
         for (i, w) in self.theme.theme.widgets.iter().enumerate() {
@@ -618,6 +623,13 @@ impl Renderer {
         };
         let rects = self.rects.iter().filter_map(map).collect();
         self.fit_rects = merge_rects(rects);
+        // The fitted layer outlives theme changes, but a cluster only clears its own region when it is redrawn, while the merged
+        // fit rectangles that are composited can be larger than any one cluster's region (neighbouring clusters grow into each other
+        // by the interpolation margin) and can cover places an item used to be in: those old pixels showed up as ghost copies of a moved
+        // item. A changed layout starts from an empty layer (every cluster is redrawn right after, see `set_theme`).
+        if let Some(l) = self.fit_layer.as_mut() {
+            l.data_mut().fill(0);
+        }
         for c in self.clusters.iter_mut() {
             c.fit = map(&c.rect);
         }
@@ -1311,6 +1323,51 @@ mod tests {
         t.theme.widgets.clear();
         let base = crate::live::render_preview(&t, 320, 144, true).unwrap();
         assert_eq!(png_size(&live), png_size(&base));
+    }
+
+    /// Moving an item (the editor sends the theme again at every step) must leave nothing of it at the earlier places: the frame after a
+    /// series of moves equals the frame of a fresh renderer given only the final theme. Checked for translucent cards and bars
+    /// (meters, cores, stats, network, disks), alone and next to a fixed neighbour (their rectangles merge and split while one is
+    /// dragged past the other), with and without a screen fit. (With a fit, stale layer pixels beside an item's rectangle were read by
+    /// the resample and showed as ghost edges and copies on the real screen.)
+    #[test]
+    fn a_moved_item_leaves_no_ghosts() {
+        use crate::live::theme::Widget;
+        for fit in [crate::core::fit::Fit::default(), crate::core::fit::Fit::new(4, 0, 0, 9)] {
+            // (no clocks: their colon blinks with the time of day, so two draws a moment apart differ by design)
+            for kind in ["meters", "cores", "stats", "network", "disks"] {
+                for neighbour in [false, true] {
+                    let theme_at = |x: f32, y: f32| {
+                        let mut t = Theme::default();
+                        t.widgets = vec![Widget::new("m", kind, x, y, 0.30, 0.45, serde_json::json!({}))];
+                        if neighbour {
+                            t.widgets.push(Widget::new("n", "stats", 0.55, 0.30, 0.30, 0.45, serde_json::json!({})));
+                        }
+                        ThemeLive::new(t, PathBuf::new())
+                    };
+                    let mk = || {
+                        let mut r = Renderer::new(Arc::new(Mutex::new(Sensors::default())), None);
+                        r.set_sample_mode(true);
+                        r.set_fit(fit);
+                        r
+                    };
+                    let mut moving = mk();
+                    // the item is dragged across the picture (past the neighbour) in big steps, a frame is drawn after each one
+                    for i in 0..9 {
+                        moving.set_theme(theme_at(0.03 + i as f32 * 0.08, 0.10 + i as f32 * 0.04));
+                        moving.render();
+                    }
+                    let last = theme_at(0.03 + 8.0 * 0.08, 0.10 + 8.0 * 0.04);
+                    moving.set_theme(last.clone());
+                    let a = moving.render().0.to_vec();
+                    let mut fresh = mk();
+                    fresh.set_theme(last);
+                    let b = fresh.render().0.to_vec();
+                    let bad = a.chunks_exact(4).zip(b.chunks_exact(4)).filter(|(x, y)| x[..3].iter().zip(&y[..3]).any(|(p, q)| p.abs_diff(*q) > 6)).count();
+                    assert_eq!(bad, 0, "{kind} (fit {fit:?}, neighbour {neighbour}): {bad} pixels differ from a fresh draw after moving");
+                }
+            }
+        }
     }
 
     #[test]
