@@ -304,3 +304,29 @@ the wait is over), that this first gradient frame came after at least 2 s (the w
 Not weakened: a pipeline that sent during the hold would still fail (sent would move before the first gradient frame). 16 of 16
 full-suite runs with two copies running at once passed; the version before this change failed 14 of 16 runs once I had first tightened it
 the wrong way (my first draft broke on the gradient frame before it was sent; fixed by waiting for the send).
+
+## Ghost copies of a moved item (user bug on 4.15.0)
+
+**Cause (in the engine, so the frames themselves were wrong, not only the editor's display):** with a screen fit set (the user has
+one), the engine keeps two persistent layers: the widget layer and the fitted layer. A cluster of widgets clears only its own
+rectangle when it is redrawn; the fitted resample reads a pixel or two BEYOND that rectangle, and the merged fitted rectangles that are
+composited can be larger than any one cluster's region. What lay there was whatever an item had left at an earlier place, so every
+move deposited stale translucent pixels that were blended into the picture again (stacked, offset edges and copies of cards and meter
+bars; the effect grows with how often the theme is re-sent while dragging, which E3's throttled live updates made frequent). Without a
+fit the cluster rectangle is the composited one, so it never showed.
+**Fix (render.rs):** a changed layout (`update_bbox` on every theme change, and `update_fit_rects` also for a fit change) starts from an
+empty widget layer and an empty fitted layer; every cluster is redrawn right after (`set_theme` resets the layer key). Cost: a 5 MB
+memset per theme change (a few per second while dragging), nothing per frame.
+**Test:** `a_moved_item_leaves_no_ghosts`: an item (meters, cores, stats, network, disks: translucent cards and bars; clocks are left out, their colon blinks with the time) is dragged across the
+picture in 9 big steps, alone and next to a fixed neighbour (rectangles merge and split), with and without a fit; the frame after the
+moves must equal the frame of a fresh renderer with only the final theme (0 differing pixels). Checked that it fails without the fix
+(1,069 differing pixels for meters with the fit) and passes with it. Without a fit it passed before too.
+**Real screen:** yes, it could have shown the ghosts: they were in the rendered frames (the picture that is JPEG-encoded and sent), for
+any user with a screen fit (the user's top 4 / left 9) whenever a widget was moved or resized and the theme re-sent, in the editor
+with Live on. The editor's twin showed the same frames.
+**Quiet DEBUG instance (fit top 4 / left 9, Meters dragged with the pointer through the real page):** the twin shows one clean copy
+under the box mid-drag and while held (screenshot checked); no page errors. I could not show the *before* picture in the app (the
+check is on the fixed build), the unit test is the before/after evidence. Not verified: on the real screen, and the user's exact
+scenario of 3 to 4 big offset copies: my pre-fix measurement shows edge pixels differing by up to about a quarter of the card colour,
+so the visible copies the user saw may be larger than what the test reproduces; if ghosts remain on a build with this fix, a frame dump
+(COOLERSCREEN_DUMP_FRAMES) of the moving item is the next step.

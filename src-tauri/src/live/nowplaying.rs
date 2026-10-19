@@ -170,24 +170,39 @@ fn run(data: Arc<Mutex<Option<NowPlaying>>>, preferred: Arc<Mutex<Option<String>
     Ok(())
 }
 
-/// Preferred app (substring of its AppUserModelId) if present; otherwise a playing session; otherwise Windows' current one.
-fn pick(mgr: &Manager, preferred: Option<&str>) -> Option<Session> {
-    let list = mgr.GetSessions().ok()?;
-    let n = list.Size().ok()?;
-    let mut playing: Option<Session> = None;
-    for i in 0..n {
-        let Ok(s) = list.GetAt(i) else { continue };
-        if let Some(p) = preferred.filter(|p| !p.is_empty()) {
-            let id = s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
-            if id.to_lowercase().contains(&p.to_lowercase()) {
-                return Some(s);
-            }
-        }
-        if playing.is_none() && s.GetPlaybackInfo().and_then(|i| i.PlaybackStatus()).is_ok_and(|st| st == Status::Playing) {
-            playing = Some(s);
+/// Which candidate to follow, as `(AppUserModelId, playing, is Windows' current session)`: the preferred app (substring,
+/// case-insensitive) if present; else Windows' current session if it is playing; else the first playing one; else the current one.
+fn choose(cands: &[(String, bool, bool)], preferred: Option<&str>) -> Option<usize> {
+    if let Some(p) = preferred.filter(|p| !p.is_empty()) {
+        let p = p.to_lowercase();
+        if let Some(i) = cands.iter().position(|c| c.0.to_lowercase().contains(&p)) {
+            return Some(i);
         }
     }
-    playing.or_else(|| mgr.GetCurrentSession().ok())
+    cands
+        .iter()
+        .position(|c| c.2 && c.1)
+        .or_else(|| cands.iter().position(|c| c.1))
+        .or_else(|| cands.iter().position(|c| c.2))
+}
+
+fn pick(mgr: &Manager, preferred: Option<&str>) -> Option<Session> {
+    let list = mgr.GetSessions().ok()?;
+    let current = mgr.GetCurrentSession().ok();
+    let cur_id = current.as_ref().and_then(|s| s.SourceAppUserModelId().ok()).map(|h| h.to_string());
+    let mut sessions = Vec::new();
+    let mut cands = Vec::new();
+    for i in 0..list.Size().ok()? {
+        let Ok(s) = list.GetAt(i) else { continue };
+        let id = s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
+        let playing = s.GetPlaybackInfo().and_then(|i| i.PlaybackStatus()).is_ok_and(|st| st == Status::Playing);
+        cands.push((id.clone(), playing, cur_id.as_deref() == Some(id.as_str())));
+        sessions.push(s);
+    }
+    match choose(&cands, preferred) {
+        Some(i) => sessions.into_iter().nth(i),
+        None => current,
+    }
 }
 
 fn read(s: &Session, app: &str) -> windows::core::Result<NowPlaying> {
@@ -283,5 +298,47 @@ impl NowPlaying {
             cover: Some(Arc::new(Cover { w, h, rgba })),
             track_id: 1,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::choose;
+
+    fn c(id: &str, playing: bool, current: bool) -> (String, bool, bool) {
+        (id.to_string(), playing, current)
+    }
+
+    #[test]
+    fn preferred_wins_even_when_paused() {
+        let l = [c("Spotify.exe", true, true), c("chrome.exe", false, false)];
+        assert_eq!(choose(&l, Some("CHROME")), Some(1));
+        assert_eq!(choose(&l, Some("")), Some(0));
+        assert_eq!(choose(&l, Some("vlc")), Some(0));
+    }
+
+    #[test]
+    fn two_playing_the_current_one_wins() {
+        let l = [c("a", true, false), c("b", true, true)];
+        assert_eq!(choose(&l, None), Some(1));
+    }
+
+    #[test]
+    fn current_paused_other_playing_the_playing_one() {
+        let l = [c("a", false, true), c("b", true, false)];
+        assert_eq!(choose(&l, None), Some(1));
+    }
+
+    #[test]
+    fn none_playing_the_current_one() {
+        let l = [c("a", false, false), c("b", false, true)];
+        assert_eq!(choose(&l, None), Some(1));
+        assert_eq!(choose(&[c("a", false, false)], None), None);
+    }
+
+    #[test]
+    fn empty_is_none() {
+        assert_eq!(choose(&[], None), None);
+        assert_eq!(choose(&[], Some("x")), None);
     }
 }

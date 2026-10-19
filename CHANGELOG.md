@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.15.2 - 2026-10-19 (stream C: ghost copies fixed)
+
+- **No more ghost copies when moving items:** with a screen fit set, moving or resizing a widget left faint copies of it in
+  the live picture (on the screen and in the editor), worst with see-through cards like Meters. A changed layout now
+  starts from clean layers.
+
+## 4.15.1 - 2026-10-19 (stream E: music fix)
+
+- **Play/pause sign fixed:** the music card showed a play triangle while playing, which read as reversed; it now shows
+  like a player's button (two bars while playing, a triangle while paused).
+- **Several players open:** the card follows the player Windows shows as current when it is playing, then any playing one.
+
 ## 4.15.0 - 2026-10-19 (stream B: headlines and web picture)
 
 - **Headlines:** the latest 3 to 5 titles from an RSS or Atom link you paste, with the source and how old each one is;

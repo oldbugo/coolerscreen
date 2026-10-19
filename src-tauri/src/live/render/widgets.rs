@@ -170,11 +170,12 @@ impl Renderer {
         // play / pause icon and times
         let (ix, iy) = (tx, y0 + 156.0 * u);
         let col = [220, 226, 240, (255.0 * a) as u8];
-        if n.playing {
-            self.fill_path(&[(ix, iy), (ix, iy + 20.0 * u), (ix + 18.0 * u, iy + 10.0 * u)], col);
-        } else {
-            round_rect(&mut self.layer, ix, iy, 6.0 * u, 20.0 * u, 1.0, col);
-            round_rect(&mut self.layer, ix + 10.0 * u, iy, 6.0 * u, 20.0 * u, 1.0, col);
+        match transport_icon(n.playing) {
+            TransportIcon::Play => self.fill_path(&[(ix, iy), (ix, iy + 20.0 * u), (ix + 18.0 * u, iy + 10.0 * u)], col),
+            TransportIcon::Pause => {
+                round_rect(&mut self.layer, ix, iy, 6.0 * u, 20.0 * u, 1.0, col);
+                round_rect(&mut self.layer, ix + 10.0 * u, iy, 6.0 * u, 20.0 * u, 1.0, col);
+            }
         }
         let ksz = (24.0 * u).round().max(6.0) as u32;
         let base = y0 + 176.0 * u;
@@ -579,5 +580,71 @@ impl Renderer {
         self.composite(1.0);
         self.rects = saved;
         self.layer_key = None;
+    }
+}
+
+/// Which transport glyph the music card shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransportIcon {
+    Play,
+    Pause,
+}
+
+/// Player-button convention, like every player: two bars while playing, a triangle while paused.
+fn transport_icon(playing: bool) -> TransportIcon {
+    if playing { TransportIcon::Pause } else { TransportIcon::Play }
+}
+
+#[cfg(test)]
+mod music_icon_tests {
+    use super::*;
+    use crate::live::{LH, LW};
+    use crate::live::sensors::Sensors;
+    use crate::live::theme::{Theme, ThemeLive};
+    use std::sync::Mutex;
+
+    #[test]
+    fn bars_while_playing_triangle_while_paused() {
+        assert_eq!(transport_icon(true), TransportIcon::Pause);
+        assert_eq!(transport_icon(false), TransportIcon::Play);
+    }
+
+    fn frame(playing: bool) -> Vec<u8> {
+        let mut t = ThemeLive::new(Theme::default(), PathBuf::new());
+        t.theme.widgets.push(Widget { id: "m".into(), kind: "music".into(), ..Widget::default() });
+        let mut r = Renderer::new(Arc::new(Mutex::new(Sensors::default())), None);
+        r.set_sample_mode(true);
+        r.set_theme(t);
+        let np = NowPlaying::demo("Midnight City", "M83", playing, 241.0, 241.0); // at the end: the elapsed time reads the same in both states
+        r.set_music_source(Some(Arc::new(Mutex::new(Some(np)))));
+        r.render().0.to_vec()
+    }
+
+    /// Runs of bright icon-coloured pixels along the middle row of the changed area.
+    fn runs(f: &[u8], rows: (usize, usize), cols: (usize, usize)) -> usize {
+        let y = (rows.0 + rows.1) / 2;
+        let mut n = 0;
+        let mut prev = false;
+        for x in cols.0..=cols.1 {
+            let i = (y * LW + x) * 4;
+            let on = f[i] > 200 && f[i + 1] > 200 && f[i + 2] > 215;
+            if on && !prev {
+                n += 1;
+            }
+            prev = on;
+        }
+        n
+    }
+
+    #[test]
+    fn the_card_draws_bars_when_playing_and_a_triangle_when_paused() {
+        let (a, b) = (frame(true), frame(false));
+        let diff: Vec<usize> = (0..LW * LH).filter(|i| a[i * 4..i * 4 + 3] != b[i * 4..i * 4 + 3]).collect();
+        assert!(!diff.is_empty(), "the two states differ");
+        let (x0, x1) = (diff.iter().map(|i| i % LW).min().unwrap(), diff.iter().map(|i| i % LW).max().unwrap());
+        let (y0, y1) = (diff.iter().map(|i| i / LW).min().unwrap(), diff.iter().map(|i| i / LW).max().unwrap());
+        assert!(x1 - x0 < 120 && y1 - y0 < 120, "only the icon changes: {x0}-{x1} x {y0}-{y1}");
+        assert_eq!(runs(&a, (y0, y1), (x0, x1)), 2, "playing: two bars with a gap");
+        assert_eq!(runs(&b, (y0, y1), (x0, x1)), 1, "paused: one solid triangle row");
     }
 }
