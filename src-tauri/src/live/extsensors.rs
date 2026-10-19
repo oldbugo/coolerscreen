@@ -19,6 +19,8 @@ pub enum Cat {
     Temp,
     Fan,
     Power,
+    /// Frame-rate / frame-time sensors (HWiNFO PresentMon integration); never used by the four metrics.
+    Fps,
     Other,
 }
 
@@ -90,20 +92,22 @@ pub fn parse_hwinfo(b: &[u8]) -> Option<Vec<Reading>> {
         let o = ro + i * rs;
         let (Some(t), Some(si)) = (u32_at(o), u32_at(o + 4)) else { break };
         let val = b.get(o + 284..o + 292).map(|s| f64::from_le_bytes(s.try_into().unwrap()))?;
-        let cat = match t {
-            1 => Cat::Temp,
-            3 => Cat::Fan,
-            5 => Cat::Power,
-            _ => Cat::Other,
-        };
-        if cat == Cat::Other {
-            continue;
-        }
         let unit = cstr(o + 268, 16);
         let label = {
             let u = cstr(o + 140, 128);
             if u.is_empty() { cstr(o + 12, 128) } else { u }
         };
+        let cat = match t {
+            1 => Cat::Temp,
+            3 => Cat::Fan,
+            5 => Cat::Power,
+            // type 8 = "other": the PresentMon frame-rate / frame-time readings
+            _ if unit.trim().eq_ignore_ascii_case("fps") || has(&label, &["framerate", "frame time"]) => Cat::Fps,
+            _ => Cat::Other,
+        };
+        if cat == Cat::Other {
+            continue;
+        }
         // a Fahrenheit install: convert so every temperature is Celsius
         let value = if cat == Cat::Temp && unit.contains('F') { (val - 32.0) * 5.0 / 9.0 } else { val };
         out.push(Reading { cat, label, group: sensors.get(si as usize).cloned().unwrap_or_default(), value });
@@ -283,6 +287,33 @@ pub fn read(metric: &str) -> Option<f32> {
     pick(metric, &s.readings)
 }
 
+/// The frame rate of the game in front, from HWiNFO's PresentMon sensors: (fps, frame time in ms). None when HWiNFO is not the
+/// source, has no such sensor, or the value is 0 (no game). Registers demand like `read()`.
+pub fn game_fps() -> Option<(f32, Option<f32>)> {
+    state().lock().unwrap().asked = true;
+    refresh();
+    let s = state().lock().unwrap();
+    pick_game_fps(&s.readings)
+}
+
+/// Pure choice for `game_fps`.
+pub fn pick_game_fps(all: &[Reading]) -> Option<(f32, Option<f32>)> {
+    const SKIP: &[&str] = &["low", "%", "avg", "average", "min", "max"];
+    let fps_rows: Vec<&Reading> = all.iter().filter(|r| r.cat == Cat::Fps && r.value.is_finite() && r.value > 0.0 && has(&r.label, &["framerate"])).collect();
+    let fps = fps_rows
+        .iter()
+        .find(|r| has(&r.label, &["(presented)"]))
+        .or_else(|| fps_rows.iter().find(|r| has(&r.label, &["(displayed)"])))
+        .or_else(|| fps_rows.iter().find(|r| !has(&r.label, SKIP)))
+        .or_else(|| fps_rows.first())?;
+    let ms = all
+        .iter()
+        .filter(|r| r.cat == Cat::Fps && r.value.is_finite() && r.value > 0.0 && has(&r.label, &["frame time"]) && !has(&r.label, SKIP))
+        .map(|r| r.value as f32)
+        .next();
+    Some((fps.value as f32, ms))
+}
+
 /// What to tell the user (editor). Probes right now if nothing has asked yet.
 pub fn status() -> Status {
     let asked = state().lock().unwrap().asked;
@@ -362,6 +393,37 @@ mod tests {
         assert!(parse_hwinfo(&[0u8; 64]).is_none());
         assert!(parse_hwinfo(&[]).is_none());
         assert_eq!(pick("cpu.temp", &[]), None);
+    }
+
+    #[test]
+    fn game_fps_is_found_and_old_metrics_unchanged() {
+        let mut b = fake_shm();
+        let (ro, rs) = (44 + 2 * 264, 316usize);
+        b.resize(ro + 8 * rs, 0);
+        b[40..44].copy_from_slice(&8u32.to_le_bytes());
+        let rows: [(u32, &str, &str, f64); 3] = [(8, "Framerate (Displayed)", "FPS", 58.0), (8, "Framerate (Presented)", "FPS", 61.5), (8, "Frame Time", "ms", 16.2)];
+        for (i, (t, label, unit, v)) in rows.iter().enumerate() {
+            let o = ro + (5 + i) * rs;
+            b[o..o + 4].copy_from_slice(&t.to_le_bytes());
+            b[o + 12..o + 12 + label.len()].copy_from_slice(label.as_bytes());
+            b[o + 268..o + 268 + unit.len()].copy_from_slice(unit.as_bytes());
+            b[o + 284..o + 292].copy_from_slice(&v.to_le_bytes());
+        }
+        let r = parse_hwinfo(&b).unwrap();
+        assert_eq!(r.len(), 7);
+        assert_eq!(pick("cpu.temp", &r), Some(58.5));
+        assert_eq!(pick("board.temp", &r), Some(36.0));
+        assert_eq!(pick("cpu.power", &r), Some(71.2));
+        assert_eq!(pick("cpu.fan", &r), Some(1180.0));
+        assert_eq!(pick_game_fps(&r), Some((61.5, Some(16.2))));
+        // 0 means no game
+        let z: Vec<Reading> = r.iter().cloned().map(|mut x| { if x.cat == Cat::Fps { x.value = 0.0; } x }).collect();
+        assert_eq!(pick_game_fps(&z), None);
+        assert_eq!(pick_game_fps(&parse_hwinfo(&fake_shm()).unwrap()), None);
+        // only a displayed rate: used
+        let d: Vec<Reading> = r.iter().filter(|x| !x.label.contains("Presented")).cloned().collect();
+        assert_eq!(pick_game_fps(&d).map(|x| x.0), Some(58.0));
+        let _ = game_fps();
     }
 
     #[test]
