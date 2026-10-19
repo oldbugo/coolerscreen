@@ -157,4 +157,30 @@ mod tests {
             assert!(seam <= worst * 1.5 + 0.3, "{}: the loop does not join up (seam {seam:.2} vs steps up to {worst:.2})", kind.name());
         }
     }
+
+    /// Where the time of storing an effect goes before the upload (`--ignored --nocapture`): recording and converting a default
+    /// (speed 1, 180 frame) loop with a 10.6 MB budget.
+    #[test]
+    #[ignore]
+    fn time_the_steps_before_the_upload() {
+        use crate::media::{encode::Engine, encode::VersionRequest, CancelToken, MediaConfig};
+        let ffmpeg = crate::media::ffmpeg::locate();
+        if !ffmpeg.exists() {
+            return;
+        }
+        for kind in [Kind::Aurora, Kind::Plasma, Kind::Drift, Kind::Retro] {
+            let dir = tempfile::tempdir().unwrap();
+            let p = kind.defaults();
+            let frames = loop_frames(&p, 1.0);
+            let clip = dir.path().join("loop.mkv");
+            let t = std::time::Instant::now();
+            render_loop(&p, frames, &clip, &mut |_| true).unwrap();
+            let rec = t.elapsed();
+            let eng = Engine::new(MediaConfig { ffmpeg: ffmpeg.clone(), base_dir: dir.path().join("base"), work_dir: dir.path().join("work") });
+            let req = VersionRequest { start: 0.0, length: Some(loop_seconds(frames)), quality: None, detail: 0.0, frame: Default::default(), mask: Default::default(), corners: Default::default(), blend: 0.0, budget_bytes: 10_600_000, max_seconds: Some(20.0), overlay: None };
+            let t = std::time::Instant::now();
+            let r = eng.convert(&clip, None, &req, &dir.path().join("out"), &CancelToken::new(), &|_, _| {}).unwrap();
+            println!("{}: record {:.1} s, convert + quality search {:.1} s -> {} KB at quality {} (upload at 50 KB/s: {:.0} s)", kind.name(), rec.as_secs_f64(), t.elapsed().as_secs_f64(), r.size / 1000, r.quality, r.size as f64 / 50_000.0);
+        }
+    }
 }

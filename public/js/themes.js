@@ -962,7 +962,7 @@ async function runApply(oid, name) {
   };
   try {
     ({ jobId } = await call('theme_apply', { originalId: oid }));
-    await backend.job(jobId, j => {
+    const res = await backend.job(jobId, j => {
       const m = /^Step (\d) of 2: (.*)$/.exec(j.message || '');
       if (m) setStep(Number(m[1]));
       shown = Math.max(shown, j.progress || 0); // the bar never goes back
@@ -975,10 +975,11 @@ async function runApply(oid, name) {
     });
     rows.forEach(r => { r.li.className = 'done'; r.mark.textContent = '✓'; });
     setBar(1);
-    note.textContent = 'Done.';
+    const same = !!(res && res.alreadyOnScreen); // the screen already held exactly this picture: nothing was sent
+    note.textContent = same ? 'Already on the screen. Nothing was sent.' : 'Done.';
     stop.hidden = true;
     result = 'done';
-    await new Promise(r => setTimeout(r, 900));
+    await new Promise(r => setTimeout(r, same ? 1800 : 900));
   } catch (e) {
     if (e.code === 'cancelled' || (e.data && e.data.state === 'cancelled')) {
       result = 'stopped';

@@ -196,6 +196,10 @@ fn clean_slot(v: Option<&Value>) -> Value {
     if super::js::truthy(v.get("incomplete")) {
         r.insert("incomplete".into(), json!(true));
     }
+    // 4.x: SHA-1 of the stored clip (40 hex characters), so an identical clip is not sent again
+    if let Some(h) = v.get("hash").and_then(Value::as_str).filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit())) {
+        r.insert("hash".into(), json!(h));
+    }
     Value::Object(r)
 }
 
