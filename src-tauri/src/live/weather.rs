@@ -194,6 +194,20 @@ pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// Inverse of `days_from_civil`: (year, month, day) of a day count since 1970-01-01.
+pub fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = (yoe + era * 400) as i32 + if m <= 2 { 1 } else { 0 };
+    (y, m, d)
+}
+
 /// Fixed example data for previews and tests.
 pub fn sample() -> WeatherData {
     let hrs = [(15, 18.0, 2), (17, 17.0, 3), (19, 15.0, 61), (21, 13.0, 63), (23, 12.0, 3), (1, 11.0, 0)];

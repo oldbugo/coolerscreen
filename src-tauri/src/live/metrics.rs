@@ -209,7 +209,7 @@ impl Hub {
 unsafe impl Send for Pdh {}
 
 struct Sources {
-    nvml: Option<Option<super::sensors::Nvml>>,
+    nvml: Option<super::sensors::GpuSource>,
     pdh: Option<Option<Pdh>>,
 }
 
@@ -219,10 +219,7 @@ impl Sources {
     }
 
     fn gpu(&mut self) -> Option<super::sensors::Gpu> {
-        if self.nvml.is_none() {
-            self.nvml = Some(super::sensors::Nvml::load());
-        }
-        self.nvml.as_mut().and_then(|n| n.as_mut()).and_then(|n| n.read())
+        self.nvml.get_or_insert_with(super::sensors::GpuSource::new).read()
     }
 
     /// Poll one metric into its slot. Returns the GPU name when a GPU metric was read.
