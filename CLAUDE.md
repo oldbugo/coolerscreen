@@ -42,8 +42,13 @@
   fixes 4.2.1), each with a tag, changelog entry, build and install ("we don't have those micro versions ... let's
   ensure we do that"). 4.0 is run by a PM session with worker sessions: see `docs/v4/plan.md`.
 - 2026-10-19: Install new builds without asking: "just install it if it's idle. If not, just don't do it and then do it
-  when it is idle." Idle = no upload, conversion, store/apply or recording running (device.log). Quit with
-  `CoolerScreen.exe --quit` (4.9.1+; exit 2 = busy, try later), install `/S`, restart with `--background`, all quiet.
+  when it is idle." Idle = no upload, conversion, store/apply or recording running. Quit with
+  `CoolerScreen.exe --quit` (4.9.1+); if the app is still running afterwards it is busy: never force, try later.
+  Install `/S` quietly with `tools/install-when-idle.ps1`.
+- 2026-10-19: Do NOT restart CoolerScreen after an install: "don't restart CoolerScreen afterwards; tell me and I'll
+  reopen it from the Start menu." Reason: anything launched from a Claude shell runs inside the Claude app's private
+  copy of %APPDATA% (MSIX), so the app would save its settings and library into a hidden folder. For the same reason,
+  reads of %APPDATA%\CoolerScreen from a Claude shell may be stale.
 
 Start-of-work reading: `docs/v4/plan.md` (4.0 plan and session rules), `docs/roadmap/2026-10-18-v3-release-and-v4.md`
 (3.0 state and the 4.0 brief).
