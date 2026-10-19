@@ -185,8 +185,12 @@ export function bandHit(w, g) {
  * Exact alignment: canvas edges and centre, other boxes' edges and centres, guide band edges.
  * Gap (px on the 2400x1080 canvas, 0 = none): inside the canvas edges, outside each band, and between boxes.
  */
-export function snapLines(others, guides, gap = 0) {
-  const xs = [{ v: 0, k: 'a' }, { v: 0.5, k: 'a' }, { v: 1, k: 'a' }], ys = [...xs];
+export function snapLines(others, guides, gap = 0, insets = null) {
+  // `insets` (px, { left, right, top, bottom }): the notch band and screen fit. Lines start from the visible area, not the panel edge:
+  // a side with an inset has no line at the canvas edge (nothing snaps under the band), its edge line is the band's edge.
+  const ins = { left: 0, right: 0, top: 0, bottom: 0, ...(insets || {}) };
+  const ax = [ins.left / GW, 1 - ins.right / GW], ay = [ins.top / GH, 1 - ins.bottom / GH];
+  const xs = [{ v: ax[0], k: 'a' }, { v: (ax[0] + ax[1]) / 2, k: 'a' }, { v: ax[1], k: 'a' }], ys = [{ v: ay[0], k: 'a' }, { v: (ay[0] + ay[1]) / 2, k: 'a' }, { v: ay[1], k: 'a' }];
   const bands = bandRects(guides || { left: { size: 0 }, right: { size: 0 }, curve: { offset: 0, left: 0, right: 0 } });
   for (const b of others) {
     xs.push({ v: b.x, k: 'a' }, { v: b.x + b.w / 2, k: 'a' }, { v: b.x + b.w, k: 'a' });
@@ -196,8 +200,8 @@ export function snapLines(others, guides, gap = 0) {
   gap = Math.max(0, num(gap));
   if (gap > 0) {
     const gx = gap / GW, gy = gap / GH;
-    xs.push({ v: gx, k: 's' }, { v: 1 - gx, k: 'e' });
-    ys.push({ v: gy, k: 's' }, { v: 1 - gy, k: 'e' });
+    xs.push({ v: ax[0] + gx, k: 's' }, { v: ax[1] - gx, k: 'e' });
+    ys.push({ v: ay[0] + gy, k: 's' }, { v: ay[1] - gy, k: 'e' });
     for (const r of bands) {
       if (r.x1 + gx < 1) xs.push({ v: r.x1 + gx, k: 's' });
       if (r.x0 - gx > 0) xs.push({ v: r.x0 - gx, k: 'e' });
