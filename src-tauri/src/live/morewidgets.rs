@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-pub const TYPES: [&str; 6] = ["meters", "cores", "network", "disks", "worldclock", "timer"];
+pub const TYPES: [&str; 8] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume"];
 
 pub fn is_more(kind: &str) -> bool {
     TYPES.contains(&kind)
@@ -162,7 +162,86 @@ impl Default for TimerProps {
     }
 }
 
+/// What a new "Live text" says until the user types their own.
+pub const DEFAULT_LIVETEXT: &str = "{time}  CPU {cpu}  GPU {gpu}";
+
+/// Words usable in a live text: (word, what it shows). The editor lists the same words.
+pub const WORDS: [(&str, &str); 19] = [
+    ("time", "Time (24-hour)"),
+    ("time12", "Time (12-hour)"),
+    ("seconds", "Time with seconds"),
+    ("date", "Date"),
+    ("weekday", "Weekday"),
+    ("cpu", "CPU load"),
+    ("cputemp", "CPU temperature"),
+    ("cpupower", "CPU power"),
+    ("cpufan", "CPU fan"),
+    ("gpu", "GPU load"),
+    ("gputemp", "GPU temperature"),
+    ("vram", "GPU memory"),
+    ("ram", "RAM used"),
+    ("down", "Download speed"),
+    ("up", "Upload speed"),
+    ("diskread", "Disk read speed"),
+    ("diskwrite", "Disk write speed"),
+    ("uptime", "Uptime"),
+    ("volume", "Volume"),
+];
+
+/// Replace `{word}` with `value(word)`; a word the resolver does not know is left as typed, a missing value shows a dash.
+pub fn expand(text: &str, mut value: impl FnMut(&str) -> Option<Option<String>>) -> String {
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut rest = text;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('}') {
+            Some(j) if after[..j].chars().all(|c| c.is_ascii_alphanumeric()) && j > 0 => {
+                match value(&after[..j]) {
+                    Some(Some(v)) => out.push_str(&v),
+                    Some(None) => out.push('\u{2013}'),
+                    None => out.push_str(&rest[i..i + j + 2]),
+                }
+                rest = &after[j + 1..];
+            }
+            _ => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VolumeProps {
+    /// "bar" | "ring"
+    pub style: String,
+    pub color: String,
+}
+impl Default for VolumeProps {
+    fn default() -> Self {
+        VolumeProps { style: "bar".into(), color: "#5ac8ff".into() }
+    }
+}
+
 impl Widget {
+    pub fn volume(&self) -> VolumeProps {
+        serde_json::from_value(self.props.clone()).unwrap_or_default()
+    }
+    pub fn livetext(&self) -> super::theme::TextProps {
+        let mut p = self.props.clone();
+        if let Some(o) = p.as_object_mut() {
+            o.remove("text");
+        }
+        serde_json::from_value(p).unwrap_or_default()
+    }
+    pub fn livetext_source(&self) -> String {
+        self.props.get("text").and_then(Value::as_str).unwrap_or(DEFAULT_LIVETEXT).chars().take(200).collect()
+    }
     pub fn meters(&self) -> MetersProps {
         serde_json::from_value(self.props.clone()).unwrap_or_default()
     }
@@ -319,6 +398,21 @@ pub fn clean(kind: &str, props: &mut Value) {
             o.insert("zones".into(), Value::Array(zones));
             word(o, "format", &["24h", "12h"], "24h");
             colour(o, "color", "#ffffff", false);
+        }
+        "volume" => {
+            word(o, "style", &["bar", "ring"], "bar");
+            colour(o, "color", "#5ac8ff", false);
+        }
+        "livetext" => {
+            if !o.get("text").is_some_and(Value::is_string) {
+                o.insert("text".into(), json!(DEFAULT_LIVETEXT));
+            }
+            short(o, "text", 200, false);
+            number(o, "size", 0.08, 0.02, 0.3);
+            colour(o, "color", "#ffffff", false);
+            number(o, "opacity", 1.0, 0.0, 1.0);
+            word(o, "align", &["left", "center", "right"], "left");
+            word(o, "weight", &["light", "regular", "bold"], "regular");
         }
         "timer" => {
             word(o, "mode", &["stopwatch", "timer", "pomodoro"], "stopwatch");
@@ -550,6 +644,25 @@ mod tests {
         clean("clock", &mut p);
         assert_eq!(p, json!({ "x": 1 }));
     }
+
+    #[test]
+    fn live_words_expand() {
+        let f = |w: &str| match w {
+            "cpu" => Some(Some("34 %".to_string())),
+            "cputemp" => Some(None),
+            _ => None,
+        };
+        assert_eq!(expand("CPU {cpu} {cputemp} {nope} {} { cpu } {unclosed", f), "CPU 34 % \u{2013} {nope} {} { cpu } {unclosed");
+        assert_eq!(expand("no words", f), "no words");
+        assert_eq!(expand("{cpu}{cpu}", f), "34 %34 %");
+        let mut p = json!({ "size": 9, "align": "up" });
+        clean("livetext", &mut p);
+        assert_eq!((p["size"].clone(), p["align"].clone(), p["text"].clone()), (json!(0.3), json!("left"), json!(DEFAULT_LIVETEXT)));
+        let mut p = json!({ "text": "hello {time}" });
+        clean("livetext", &mut p);
+        assert_eq!(p["text"], "hello {time}");
+    }
+
 
     #[test]
     fn timer_modes() {

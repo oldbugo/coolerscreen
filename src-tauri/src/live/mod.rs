@@ -25,6 +25,7 @@ pub mod sensors;
 pub mod session;
 pub mod theme;
 pub mod video;
+pub mod volume;
 pub mod weather;
 
 pub use preview::{render_base_overlay, render_preview};

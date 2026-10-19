@@ -627,7 +627,7 @@ impl Renderer {
     }
 }
 
-fn uptime_secs() -> u64 {
+pub(super) fn uptime_secs() -> u64 {
     use windows_sys::Win32::System::SystemInformation::GetTickCount64;
     unsafe { GetTickCount64() / 1000 }
 }

@@ -1,10 +1,10 @@
 //! The 4.0 stream B widgets: `meters`, `cores`, `network`, `disks`, `worldclock`, `timer` (props and data helpers live in
 //! `live/morewidgets.rs`). Same look as the other widgets (dark rounded card, Segoe UI, a missing reading is a greyed dash).
 //! Nothing moves up and down: bars grow sideways, a finished timer pulses its opacity.
-use super::sensors::{fill, info, line, mix, nice_ceil, stroke, Kind, GREY};
+use super::sensors::{arc, fill, info, line, mix, nice_ceil, stroke, Kind, GREY};
 use super::{round_rect, LocalTime, Rect, Renderer, Weight};
 use crate::live::metrics;
-use crate::live::morewidgets::{self as mw, CoresProps, DisksProps, MetersProps, NetworkProps, TimerProps, WorldClockProps};
+use crate::live::morewidgets::{self as mw, CoresProps, DisksProps, MetersProps, NetworkProps, TimerProps, VolumeProps, WorldClockProps};
 use crate::live::theme::{parse_color, SensorProps, Widget};
 use tiny_skia::PathBuilder;
 
@@ -44,6 +44,8 @@ impl Renderer {
             "disks" => self.draw_disks(b, &w.id, &w.disks()),
             "worldclock" => self.draw_worldclock(b, &w.worldclock()),
             "timer" => self.draw_timer(b, &w.timer(), now),
+            "livetext" => self.draw_livetext(b, w, now),
+            "volume" => self.draw_volume(b, &w.volume()),
             _ => {}
         }
     }
@@ -67,6 +69,90 @@ impl Renderer {
             round_rect(&mut self.layer, x, y, (w * frac).max(h), h, h / 2.0, [col[0], col[1], col[2], 255]);
         }
     }
+
+    // ------------------------------------------------------------ volume
+
+    fn draw_volume(&mut self, b: Rect, p: &VolumeProps) {
+        let inner = self.mcard(b);
+        let v = if self.sample { Some(crate::live::volume::Vol { level: 0.42, muted: false }) } else { crate::live::volume::read() };
+        let col = parse_color(&p.color, CYAN);
+        let (frac, muted, present) = match v {
+            Some(v) => (v.level, v.muted, true),
+            None => (0.0, false, false),
+        };
+        let shown = self.eased("volume".to_string(), frac);
+        let accent = if !present || muted { GREY } else { col };
+        let txt = if !present { "\u{2013}".to_string() } else if muted { "Muted".to_string() } else { format!("{:.0} %", frac * 100.0) };
+        if p.style == "ring" {
+            let lab = inner.h * 0.14;
+            let d = inner.w.min(inner.h - lab * 1.3).max(10.0);
+            let (cx, cy) = (inner.x + inner.w / 2.0, inner.y + (inner.h - lab * 1.3) / 2.0);
+            let width = d * 0.11;
+            let r = (d - width) / 2.0;
+            arc(&mut self.layer, cx, cy, r, 135.0, 270.0, [255, 255, 255, 40], width);
+            if present && !muted && shown > 0.004 {
+                arc(&mut self.layer, cx, cy, r, 135.0, 270.0 * shown, [accent[0], accent[1], accent[2], 255], width);
+            }
+            let sz = self.fit_px(&txt, Weight::Bold, d * 0.62, d * 0.26);
+            let tw = self.fonts.width(&txt, sz, Weight::Bold);
+            self.text(&txt, cx - tw / 2.0, cy + sz as f32 * 0.3, sz, Weight::Bold, accent, 1.0);
+            let lsz = (lab * 0.85).round().max(8.0) as u32;
+            let lw = self.fonts.width("Volume", lsz, Weight::Regular);
+            self.text("Volume", inner.x + (inner.w - lw) / 2.0, inner.y + inner.h - lab * 0.15, lsz, Weight::Regular, LAB, 1.0);
+        } else {
+            let row = inner.h * 0.55;
+            let vsz = self.fit_px(&txt, Weight::Bold, inner.w * 0.55, row * 0.95);
+            let lsz = ((vsz as f32) * 0.66).round().max(8.0) as u32;
+            let base = inner.y + row * 0.82;
+            self.text("Volume", inner.x, base, lsz, Weight::Regular, LAB, 1.0);
+            self.text_r(&txt, inner.x + inner.w, base, vsz, Weight::Bold, accent, 1.0);
+            let bh = (inner.h * 0.2).clamp(4.0, 30.0);
+            self.track_and_fill(inner.x, inner.y + inner.h - bh - inner.h * 0.08, inner.w, bh, if muted { 0.0 } else { shown }, accent, present);
+        }
+    }
+
+
+    // ------------------------------------------------------------ live text
+
+    /// The text widget with `{words}` replaced by live values (same look and options as the plain text).
+    fn draw_livetext(&mut self, b: Rect, w: &Widget, now: &LocalTime) {
+        let src = w.livetext_source();
+        let mut props = w.livetext();
+        let (h12, hh) = (if now.hour % 12 == 0 { 12 } else { now.hour % 12 }, now.hour);
+        let text = mw::expand(&src, |word| {
+            let metric = match word {
+                "time" => return Some(Some(format!("{hh:02}:{:02}", now.minute))),
+                "time12" => return Some(Some(format!("{h12}:{:02} {}", now.minute, if hh >= 12 { "PM" } else { "AM" }))),
+                "seconds" => return Some(Some(format!("{hh:02}:{:02}:{:02}", now.minute, now.second))),
+                "date" => return Some(Some(format!("{} {}", now.day, super::MONTHS[(now.month as usize).clamp(1, 12) - 1]))),
+                "weekday" => return Some(Some(super::DAYS[(now.weekday as usize) % 7].to_string())),
+                "uptime" => return Some(Some(super::extras::uptime_text(if self.sample { 3 * 86400 + 4 * 3600 } else { super::extras::uptime_secs() }))),
+                "volume" => return Some(if self.sample { Some("42 %".to_string()) } else { crate::live::volume::read().map(|v| format!("{:.0} %", v.level * 100.0)) }),
+                "cpu" => "cpu.load",
+                "cputemp" => "cpu.temp",
+                "cpupower" => "cpu.power",
+                "cpufan" => "cpu.fan",
+                "gpu" => "gpu.load",
+                "gputemp" => "gpu.temp",
+                "vram" => "gpu.vram",
+                "ram" => "ram.used",
+                "down" => "net.down",
+                "up" => "net.up",
+                "diskread" => "disk.read",
+                "diskwrite" => "disk.write",
+                _ => return None,
+            };
+            let sp = SensorProps { metric: metric.into(), ..SensorProps::default() };
+            let r = self.read_metric(&sp, false);
+            Some(r.value.map(|v| {
+                let (n, u) = super::sensors::format_value(metric, v, false, None);
+                if u.is_empty() || u.starts_with('%') || u.starts_with('\u{00B0}') { format!("{n}{u}") } else { format!("{n} {u}") }
+            }))
+        });
+        props.text = text;
+        self.draw_text(b, &props);
+    }
+
 
     // ------------------------------------------------------------ meters
 
