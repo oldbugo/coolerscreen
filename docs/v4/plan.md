@@ -67,6 +67,34 @@ Each milestone gets its own version in the order it lands on `main`: the first i
 fixes get a patch number (4.2.1). Every version gets a tag `vX.Y.Z`, a changelog entry naming its stream, a build and an
 install. Only the PM sets versions.
 
+## Editor refinement round (user, 2026-10-19; vault user flows C1, "User requests 2026-10-19")
+
+Sequenced so two sessions never rewrite the same editor code at once (`public/js/themes.js` is the hot file):
+- **E1 (stream D) editor shell, first:** resizable left and right panels; Layers moved from the bottom into the tall left
+  panel under the palette with a draggable divider; palette groups as accordions; consistent alignment in every group
+  (Sensors looked misaligned); the deselect rule; Properties clean-up (remove "Position and size"; "Delete this item"
+  pinned bottom-right of the panel).
+- **E2 (stream B) per-item corner radius + notch-aware gap:** engine, contract and a small control hook in Properties
+  (after E1 lands, or coordinate the hook); snapping and gap measured from the notch band and the visible area.
+- **E3 (stream C) digital twin + smooth dragging:** the editor preview shows the live picture as it is on the screen;
+  dragged boxes follow the pointer every frame. Backend work can start at once; the editor-side changes wait for E1.
+- **More widgets:** after E2; the user said "maybe", so stream B proposes a short list first.
+
+Defaults (user approved 2026-10-19 "go ahead with the plan and the defaults"; change freely if the user asks):
+- Panel resize follows the vault pattern [[Interactions/Panel width snapping on release]]: width follows the drag
+  continuously, eases to the nearest preset on release, small resisted overshoot at the bounds. Presets: right panel
+  280 / 360 / 480 px, left panel 220 / 300 / 380 px (bounds about 200 to 560). The Layers/palette divider uses the same feel
+  vertically. Sizes are remembered (per viewer, no Save button).
+- Accordion: several groups may be open at once; open/closed is remembered; all open on first run.
+- Deselect: a click anywhere outside the selected item and outside the right-hand panel deselects (empty canvas, left
+  panel blank areas, top bar). Kept: clicks in the right panel, on the item itself, and moving/resizing the app window.
+  Esc also deselects.
+- Radius per item: off by default = follows the theme's corner radius; turning it on sets the item's own radius; a reset
+  arrow returns it to the theme value (same pattern as the theme corner field). Live-only: never marks Embedded stale
+  unless the item is drawn on Embedded.
+- Twin: the preview shows the real live frames at about 15 fps while the editor is open (with Live on, the frames sent to
+  the screen; with Live off, rendered for the editor only, nothing sent); the editable boxes stay as outlines on top.
+
 ## Milestones (initial; the PM may reorder)
 
 - **C1** FPS counter + quick fixes (flaky tests, dirty hash, countdown DST, GPU power dash).
