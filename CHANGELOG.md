@@ -1,5 +1,39 @@
 # Changelog
 
+## 4.17.1 - 2026-10-19 (stream C: test copies can never use the real screen)
+
+- Development (debug) builds of CoolerScreen, cs2 and cs-companion never open the real screen unless explicitly told to;
+  they say "(debug, fake screen)" in the window title and log. Your installed app is unchanged.
+
+## 4.17.0 - 2026-10-19 (stream B: game FPS)
+
+- **Game FPS widget:** the game in front, its frame rate as a big number, optional 1% low and a frame-time graph. It reads
+  Windows' own graphics timing events (like Intel PresentMon), so it never touches the game (DirectX 9 to 12; Vulkan and
+  OpenGL are not covered yet). Falls back to RivaTuner or HWiNFO if they run.
+- **One-time Windows setting:** until your account is in "Performance Log Users", the widget says so and shows the exact
+  command, with Copy and Check again. CoolerScreen never asks for administrator rights itself.
+- Runs only while a Game FPS widget is on the live picture; stops 30 s after it is gone and on quit.
+- Not yet checked with a real game. Theme contract v1.17.
+
+## 4.16.0 - 2026-10-19 (stream E: music looks)
+
+- **Four new music looks** besides the current card, which stays the default: **Cover** (large cover with text),
+  **Line** (one line that slides sideways and fades), **Disc** (a record that turns while playing; can be switched off)
+  and **Blur** (the cover blurred behind the text). Pick one in Properties > Music.
+- Theme contract v1.16.
+
+## 4.15.2 - 2026-10-19 (stream C: ghost copies fixed)
+
+- **No more ghost copies when moving items:** with a screen fit set, moving or resizing a widget left faint copies of it in
+  the live picture (on the screen and in the editor), worst with see-through cards like Meters. A changed layout now
+  starts from clean layers.
+
+## 4.15.1 - 2026-10-19 (stream E: music fix)
+
+- **Play/pause sign fixed:** the music card showed a play triangle while playing, which read as reversed; it now shows
+  like a player's button (two bars while playing, a triangle while paused).
+- **Several players open:** the card follows the player Windows shows as current when it is playing, then any playing one.
+
 ## 4.15.0 - 2026-10-19 (stream B: headlines and web picture)
 
 - **Headlines:** the latest 3 to 5 titles from an RSS or Atom link you paste, with the source and how old each one is;

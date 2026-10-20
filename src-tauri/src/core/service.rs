@@ -102,7 +102,7 @@ impl App {
         let b = budgets(&s, self.lib.splash_size());
         let key = format!("{}{}", notch_key(s.mask()), s.screen_fit().key());
         json!({
-            "appVersion": self.app_version, "build": { "hash": super::buildinfo::HASH, "commitDate": super::buildinfo::COMMIT_DATE, "builtAt": super::buildinfo::built_at() }, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
+            "appVersion": self.app_version, "build": { "screen": super::buildinfo::screen_note(), "hash": super::buildinfo::HASH, "commitDate": super::buildinfo::COMMIT_DATE, "builtAt": super::buildinfo::built_at() }, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
             "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(), "weather": s.weather_value(),

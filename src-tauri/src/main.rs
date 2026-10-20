@@ -136,6 +136,7 @@ fn main() {
             cc::ext_sensor_status,
             cc::lyrics_status,
             cc::lyrics_offset_set,
+            cc::game_fps_status,
             cc::screen_preview,
             cc::screen_preview_end,
             cc::twin_watch
@@ -238,6 +239,7 @@ fn main() {
             live_app::arm_exit_watchdog("exit");
             app.state::<Core>().0.live.stop(); // ends the live stream: the screen plays its loop clip again
             app.state::<Core>().0.shutdown();
+            cs_core::live::gamefps::shutdown(); // stops our ETW session (it would outlive the process otherwise)
             // ffmpeg children (Job Object) and the media scratch files (raw intermediates)
             cs_core::media::shutdown();
         }

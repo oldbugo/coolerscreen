@@ -76,9 +76,9 @@ to Sonnet players and to report "Helpers used", "Verified", "Not verified".
 | Principal | Area | Files it knows | Branch | Status |
 |---|---|---|---|---|
 | A: live effects | live rendering engine, effect backgrounds, Embedded recording, store speed | `live/effects/`, `live/render.rs`, `live/pipeline.rs`, `live/effects/record.rs`, `core/themes.rs` (store path) | `claude/determined-greider-88a800` | idle |
-| B: widgets | widget kinds and data sources, per-item corner radius, snap/gap rules | `live/morewidgets.rs`, `live/render/more.rs`, `live/extsensors.rs`, `ping.rs`, `agenda.rs`, `volume.rs`, `public/js/morewidgets.js`, `layers.js` snap | `claude/recursing-matsumoto-31e4c5` | idle (W1, W2 done) |
+| B: widgets | widget kinds and data sources, per-item corner radius, snap/gap rules | `live/morewidgets.rs`, `live/render/more.rs`, `live/extsensors.rs`, `ping.rs`, `agenda.rs`, `volume.rs`, `public/js/morewidgets.js`, `layers.js` snap | `claude/recursing-matsumoto-31e4c5` | idle (G2 built; real check with the user pending) |
 | C: app plumbing | live host, preview on select, digital twin, screen checks, budgets, `--quit`, single instance | `core/live_host.rs`, `core/outside.rs`, `core/settings.rs` budgets, `quit_cmd.rs`, `instance_id.rs`, `public/js/screenpreview.js`, twin | `claude/vibrant-proskuriakova-d382db` | busy: drag ghosting bug |
-| E: music | music and media widgets: now playing, music styles, lyrics (research first) | `live/nowplaying.rs`, the music renderer and panel, new lyrics files | its own worktree branch | busy: M1 play/pause bug, M2 lyrics research, then M3 styles |
+| E: music | music and media widgets: now playing, music styles, lyrics (research first) | `live/nowplaying.rs`, the music renderer and panel, new lyrics files | its own worktree branch | busy: M4 karaoke lyrics (M3 looks in 4.16.0) |
 | D: UI | look and layout of `public/`, style guide, editor shell, UI flow checks | `public/css/*`, `public/js/edshell.js`, `edhooks.js`, `icons.js`, `themes.js` layout, `tools/ui-shots/` | `claude/zealous-swanson-66219d` | idle |
 
 Note (review 2026-10-19): E3's live preview would have fitted A (live rendering) better than C; route future live-picture

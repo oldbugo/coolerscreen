@@ -239,3 +239,27 @@ only `GET /feed.xml` and `GET /pic.png`, and the live frame shows the four headl
 (`B-pictures/w2-live-frame.png`).
 Not verified: a real internet feed/picture (https, redirects, timeouts, gzip); JPEG/WebP/BMP through ffmpeg on a real link (the worker's JPEG test passes silently
 if ffmpeg is absent here); non-Latin feeds; EXIF-rotated JPEGs; the palette icons are still the generic glyph; real screen.
+
+
+## G2 (2026-10-19): Game FPS widget
+
+Branch `claude/recursing-matsumoto-31e4c5`, main merged (a72ac08). Contract: "4.0 G2". User chose method 1 (own ETW present counter) with RTSS and HWiNFO as fallbacks;
+research in `B-game-fps.md`.
+Structure (`src-tauri/src/live/gamefps/`): `counter.rs` (pure statistics: fps, 1 % low = fps of the mean of the slowest 1 % of frames over 5 s, frame time history; one provider
+counted per process), `etw.rs` (our session "CoolerScreen-GameFPS", real-time, never the kernel logger, created EMPTY then providers enabled, DXGI Present_Start id 42 and D3D9 Present_Start
+id 1 from PresentMon's headers, orphan of our own name cleaned before start, stopped on quit and when no widget asks for 30 s), `rtss.rs` (RTSSSharedMemoryV2 reader),
+`foreground.rs` (foreground process, fullscreen test, "Performance Log Users" membership), `mod.rs` (sampler thread, source order ETW -> RTSS -> HWiNFO, reason lines, props, status),
+`render/gamefps.rs` + `public/js/w-gamefps.js` (drawing and panel with the status block, the exact command, Copy, Check again). HWiNFO fps comes from `extsensors::game_fps()`.
+Rules kept: opt-in (nothing runs unless a Game FPS widget is drawn live), no elevation or prompts by the app, ignore dwm/explorer/own pid, never the PresentMon service or FrameView SDK.
+Scope cut: Vulkan/OpenGL (DxgKrnl events) are not covered; DX9-12 are (Monster Hunter Wilds is DX12). PresentMon (MIT, Intel) was only read for event ids; no code copied.
+Choices: the session is created on the first live draw of the widget (so it exists before a game starts when Live is already on); a program counts as a game when it covers its monitor or shows 20+ fps;
+"Blocked" is shown when the user is in the group but the session cannot start, or a full-screen program has been in front 6 s with no frames seen.
+Helpers: four Sonnet workers (counter, ETW, RTSS+foreground+HWiNFO, widget), reviewed and merged by me; I replaced the ETW worker's hand-written OpenTraceW structs by the windows crate's own
+(features Win32_System_Time, Win32_System_Performance) and wrote the sampler/status.
+Verified: `cargo test --release --lib -- --test-threads=4`: 372 passed, 0 failed, 19 ignored (counter with synthetic events: 60/144 fps, stutter, pause, two providers, memory bounds, extreme timestamps; ETW pure
+parts and the AccessDenied start on this PC; RTSS with synthetic buffers incl. hostile ones; foreground/group calls; HWiNFO frame readings; reasons; every widget state drawn). Quiet DEBUG instance
+(port 9766) on this PC where the user is NOT in the group: the real path ran: ETW start denied -> the widget shows "Needs a one-time Windows setting" in the live frame and the editor panel shows the
+message, the exact command (`net localgroup "Performance Log Users" "pc" /add`), Copy, the plain explanation and Check again (`B-pictures/g2-live-needs-group.png`, `g2-editor-panel.png`).
+Not verified (needs the user in the group and a game; the PM runs it with the user): a real event stream, `EnableTraceEx2` success, the consumer callback with real records, frame generation, borderless
+vs fullscreen, anti-cheat behaviour (MHW), session cleanup after a crash, RTSS entry offsets (UNCONFIRMED in the sources: pid at 0, times at 268/272, frames at 276), HWiNFO frame sensors against a real HWiNFO,
+the Copy button's clipboard in the real window.

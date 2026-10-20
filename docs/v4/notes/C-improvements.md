@@ -304,3 +304,49 @@ the wait is over), that this first gradient frame came after at least 2 s (the w
 Not weakened: a pipeline that sent during the hold would still fail (sent would move before the first gradient frame). 16 of 16
 full-suite runs with two copies running at once passed; the version before this change failed 14 of 16 runs once I had first tightened it
 the wrong way (my first draft broke on the gradient frame before it was sent; fixed by waiting for the send).
+
+## Ghost copies of a moved item (user bug on 4.15.0)
+
+**Cause (in the engine, so the frames themselves were wrong, not only the editor's display):** with a screen fit set (the user has
+one), the engine keeps two persistent layers: the widget layer and the fitted layer. A cluster of widgets clears only its own
+rectangle when it is redrawn; the fitted resample reads a pixel or two BEYOND that rectangle, and the merged fitted rectangles that are
+composited can be larger than any one cluster's region. What lay there was whatever an item had left at an earlier place, so every
+move deposited stale translucent pixels that were blended into the picture again (stacked, offset edges and copies of cards and meter
+bars; the effect grows with how often the theme is re-sent while dragging, which E3's throttled live updates made frequent). Without a
+fit the cluster rectangle is the composited one, so it never showed.
+**Fix (render.rs):** a changed layout (`update_bbox` on every theme change, and `update_fit_rects` also for a fit change) starts from an
+empty widget layer and an empty fitted layer; every cluster is redrawn right after (`set_theme` resets the layer key). Cost: a 5 MB
+memset per theme change (a few per second while dragging), nothing per frame.
+**Test:** `a_moved_item_leaves_no_ghosts`: an item (meters, cores, stats, network, disks: translucent cards and bars; clocks are left out, their colon blinks with the time) is dragged across the
+picture in 9 big steps, alone and next to a fixed neighbour (rectangles merge and split), with and without a fit; the frame after the
+moves must equal the frame of a fresh renderer with only the final theme (0 differing pixels). Checked that it fails without the fix
+(1,069 differing pixels for meters with the fit) and passes with it. Without a fit it passed before too.
+**Real screen:** yes, it could have shown the ghosts: they were in the rendered frames (the picture that is JPEG-encoded and sent), for
+any user with a screen fit (the user's top 4 / left 9) whenever a widget was moved or resized and the theme re-sent, in the editor
+with Live on. The editor's twin showed the same frames.
+**Quiet DEBUG instance (fit top 4 / left 9, Meters dragged with the pointer through the real page):** the twin shows one clean copy
+under the box mid-drag and while held (screenshot checked); no page errors. I could not show the *before* picture in the app (the
+check is on the fixed build), the unit test is the before/after evidence. Not verified: on the real screen, and the user's exact
+scenario of 3 to 4 big offset copies: my pre-fix measurement shows edge pixels differing by up to about a quarter of the card colour,
+so the visible copies the user saw may be larger than what the test reproduces; if ghosts remain on a build with this fix, a frame dump
+(COOLERSCREEN_DUMP_FRAMES) of the moving item is the next step.
+
+## Fake-screen guard for DEBUG builds (after two incidents of a worker's test instance taking the user's real screen)
+
+Rule, enforced in code: a DEBUG build never uses the real screen unless `COOLERSCREEN_REAL_DEVICE=1` is set explicitly. Release builds are
+unchanged (real unless `COOLERSCREEN_FAKE_DEVICE` asks for a fake).
+- **Lowest level** (`device/mod.rs`): `Screen::open_usb()` and `Screen::open_serial()` refuse in a debug build without the flag
+  ("This is a debug build: it never uses the real screen (set COOLERSCREEN_REAL_DEVICE=1 to allow it)."), so the app, `cs2` (every
+  command, including recovery tools) and `cs-companion` (its live session) are all covered, whatever else goes wrong.
+- **The app** (`device_service::fake_mode_name`): a debug build with no `COOLERSCREEN_FAKE_DEVICE` uses the fake screen "winusb" (a value
+  given is kept; both variables set: the fake one wins), so live runs on the null sink and the page shows the fake state instead of
+  errors. Anything but `1` in `COOLERSCREEN_REAL_DEVICE` ("0", "true", ...) stays fake.
+- **Visible:** debug builds append " (debug, fake screen: winusb)" or " (debug, REAL screen)" to the window title (also in `app_state.build.screen`
+  and the page's `document.title`) and to the first line of device.log; release builds show nothing new.
+- Tests: `debug_builds_use_the_fake_screen_unless_the_real_one_is_asked_for` (the whole rule table) and
+  `the_real_screen_is_closed_to_debug_builds_at_the_lowest_level` (in a debug test run, open_usb / open_serial / open_any are refused).
+**Verified:** both tests in a debug test run (so the refusal really ran) and the suite in release; a debug app instance started with NO fake
+variable and NO real variable (the exact mistake): title "CoolerScreen 4.17.0 (4262a4e+) (debug, fake screen: winusb)", app_state fake
+"winusb", live on the null sink, device.log has the note on its first line and no "opened over WinUSB"; a debug `cs2 info` with no
+variable answered "Screen not found" without touching USB. **Not verified:** a debug build WITH `COOLERSCREEN_REAL_DEVICE=1` (never done:
+it would use the real screen), a release build (unchanged by design), `cs-companion` run by hand (covered by the open_usb guard).

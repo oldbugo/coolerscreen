@@ -14,6 +14,7 @@ pub mod extsensors;
 pub mod agenda;
 pub mod audio;
 pub mod fitcal;
+pub mod gamefps;
 pub mod gif;
 pub mod metrics;
 pub mod morewidgets;
