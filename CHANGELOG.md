@@ -1,5 +1,13 @@
 # Changelog
 
+## 4.18.0 - 2026-10-21 (stream E: lyrics)
+
+- **Lyrics widget:** synced lyrics of what is playing. The current line fills left to right in time, with the previous
+  and next lines dim around it, and a soft fade between lines; dots during instrumental parts.
+- **Off until you choose a source:** switch on "Find lyrics online" (lrclib.net, free; sends only the title, artist and
+  length once per song) or pick a folder of .lrc files. Results are cached; a per-song timing offset can be nudged.
+- Theme contract v1.18.
+
 ## 4.17.1 - 2026-10-19 (stream C: test copies can never use the real screen)
 
 - Development (debug) builds of CoolerScreen, cs2 and cs-companion never open the real screen unless explicitly told to;

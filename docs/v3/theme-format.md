@@ -416,7 +416,7 @@ Additive; old themes load and look exactly as before (a `music` item without `st
   game runs: restart CoolerScreen before the game", "Frame rate unavailable", "No game in front". Editor command `game_fps_status` returns
   `{ ok, state, message, command }` (state "ok"|"noGame"|"needsGroup"|"blocked"|"unavailable"|"ready"; `command` is the one-time PowerShell command).
 
-## v1.x (stream E M4; the PM numbers it): lyrics
+## v1.18 (4.18.0, stream E M4): lyrics
 
 New widget `type` `lyrics`: synced lyrics of what is playing (the same Windows media session as `music`). Code: `live/lyrics.rs` (data),
 `live/render/lyrics.rs` (drawing), `public/js/w-lyrics.js` (editor). Old themes are unaffected.
