@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-pub const TYPES: [&str; 16] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume", "ping", "agenda", "progress", "sunmoon", "todo", "headlines", "webpicture", "gamefps"];
+pub const TYPES: [&str; 17] = ["meters", "cores", "network", "disks", "worldclock", "timer", "livetext", "volume", "ping", "agenda", "progress", "sunmoon", "todo", "headlines", "webpicture", "gamefps", "lyrics"];
 
 pub fn is_more(kind: &str) -> bool {
     TYPES.contains(&kind)
@@ -463,6 +463,7 @@ pub fn clean(kind: &str, props: &mut Value) {
         "todo" => super::todo::clean(o),
         "headlines" => super::headlines::clean(o),
         "webpicture" => super::webpicture::clean(o),
+        "lyrics" => super::lyrics::clean(o),
         "gamefps" => super::gamefps::clean(o),
         "livetext" => {
             if !o.get("text").is_some_and(Value::is_string) {

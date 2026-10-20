@@ -134,6 +134,8 @@ fn main() {
             cc::weather_search,
             cc::weather_set_place,
             cc::ext_sensor_status,
+            cc::lyrics_status,
+            cc::lyrics_offset_set,
             cc::game_fps_status,
             cc::screen_preview,
             cc::screen_preview_end,

@@ -415,3 +415,22 @@ Additive; old themes load and look exactly as before (a `music` item without `st
   Nothing is injected, installed or elevated by the app. Reason lines instead of a number: "Needs a one-time Windows setting", "Blocked while the
   game runs: restart CoolerScreen before the game", "Frame rate unavailable", "No game in front". Editor command `game_fps_status` returns
   `{ ok, state, message, command }` (state "ok"|"noGame"|"needsGroup"|"blocked"|"unavailable"|"ready"; `command` is the one-time PowerShell command).
+
+## v1.x (stream E M4; the PM numbers it): lyrics
+
+New widget `type` `lyrics`: synced lyrics of what is playing (the same Windows media session as `music`). Code: `live/lyrics.rs` (data),
+`live/render/lyrics.rs` (drawing), `public/js/w-lyrics.js` (editor). Old themes are unaffected.
+
+- Props (unknown ignored, missing = default, cleaned on `theme_set`): `online` bool (false: never contacts the network), `folder` string|null
+  (a folder of `.lrc` files, checked first; empty = none), `neighbours` bool (true: the previous and next line small and dim), `background`
+  "card"|"gradient"|"none" ("card"; "gradient" = 2-3 cover colours drifting sideways), `accent` "#rrggbb"|null (null = a colour from the cover,
+  else #5ac8ff).
+- Look: the current line centred, bold, at most 2 rows, filled left to right in the accent colour over the line's time; on a line change the
+  old and new lines cross-fade (~250 ms) in the same places; instrumental gaps (also "♪" lines) show three dots that fade. Nothing moves
+  up or down. Hidden when nothing plays (follows `handover.musicIdle`). Without lyrics: "Title · Artist" in grey with "No synced lyrics" /
+  "Lyrics lookup is off" / "Instrumental".
+- Source: an `.lrc` file from `folder`, else (only when `online`) LRCLIB (`lrclib.net`, `/api/get`, then `/api/search` with strict title,
+  artist and ±3 s duration checks; a wrong song is never shown). One lookup per track change, only while the item is drawn; sends title,
+  artist and length; honours `Retry-After`, backs off 30 s to 10 min. Results are cached in `<data>/lyrics/` (found: kept; not found: 7 days).
+- Per-track timing offset (−10 to +10 s, 0.25 s steps in the editor) in `<data>/lyrics/offsets.json`, not in theme.json. Commands
+  `lyrics_status` → `{ track, key, state, source, offset }` and `lyrics_offset_set { key, seconds }`.

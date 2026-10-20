@@ -67,6 +67,8 @@
     "allow-weather-search",
     "allow-weather-set-place",
     "allow-ext-sensor-status",
+    "allow-lyrics-status",
+    "allow-lyrics-offset-set",
     "allow-game-fps-status",
     "allow-screen-preview",
     "allow-screen-preview-end",

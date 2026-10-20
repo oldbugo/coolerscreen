@@ -293,8 +293,8 @@ impl Pipeline {
                     was_active = active;
                     if force_apply {
                         force_apply = false;
-                        // Music: start/stop the watcher, or just change the preferred app. Only when the theme has a music widget.
-                        match (cfg.music.enabled && r.has_widget("music"), music.is_some()) {
+                        // Music: start/stop the watcher, or just change the preferred app. Only when the theme has a music or lyrics widget.
+                        match (cfg.music.enabled && (r.has_widget("music") || r.has_widget("lyrics")), music.is_some()) {
                             (true, false) => {
                                 let m = MusicWatcher::start(cfg.music.preferred_app.clone());
                                 r.set_music_source(Some(m.data.clone()));
