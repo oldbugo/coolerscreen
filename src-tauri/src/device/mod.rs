@@ -224,7 +224,10 @@ impl Screen {
     }
 
     pub fn info(&mut self) -> Result<Value, DevErr> {
-        self.cmd(KEY_INFO, None, true, REPLY_TIMEOUT)
+        self.cmd(KEY_INFO, None, false, REPLY_TIMEOUT)?;
+        let value = wait_info(&self.rx, REPLY_TIMEOUT, &|| false)?;
+        log(&format!("verified info reply: {value}"));
+        Ok(value)
     }
 
     /// Restart (0x01): the only command that still works when the screen stops answering. No reply.
@@ -321,15 +324,31 @@ pub fn ack_refused(v: &Value) -> bool {
 /// and live traffic is far too frequent for the per-MB log line `raw` writes, so this path skips it.
 impl Screen {
     pub fn live_write(&mut self, buf: &[u8]) -> Result<(), DevErr> {
+        self.live_write_timeout(buf, Duration::from_secs(1))
+    }
+
+    pub fn live_write_timeout(&mut self, buf: &[u8], timeout: Duration) -> Result<(), DevErr> {
+        let deadline = Instant::now() + timeout;
         for chunk in buf.chunks(CHUNK) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() { return Err(DevErr::new("The screen stopped accepting data (USB write timed out).")); }
             let r = match &mut self.link {
-                Link::Usb(u) => u.write(chunk, WRITE_TIMEOUT),
-                Link::Serial(s) => s.write(chunk, WRITE_TIMEOUT),
+                Link::Usb(u) => u.write(chunk, remaining),
+                Link::Serial(s) => s.write(chunk, remaining),
             };
             r.map_err(|e| DevErr::new(if e == "TIMEOUT" { "The screen stopped accepting data (USB write timed out).".to_string() } else { format!("USB write failed: {e}") }))?;
             self.sent += chunk.len() as u64;
         }
         Ok(())
+    }
+
+    /// Confirm firmware answers before entering live mode. Ignore stale acknowledgements; unlike info(),
+    /// only a genuine info response establishes health. Cancellable waits keep device-job holds bounded.
+    pub fn live_info(&mut self, cancelled: &dyn Fn() -> bool) -> Result<(), DevErr> {
+        if cancelled() { return Err(DevErr::new("Live connection paused")); }
+        while self.rx.try_recv().is_ok() {}
+        self.live_write_timeout(&frame::frame(KEY_INFO, &[]), Duration::from_millis(500))?;
+        wait_info(&self.rx, REPLY_TIMEOUT, cancelled).map(|_| ())
     }
 
     /// The only framed keys live mode sends: 0x11 enter/keepalive, 0x15 [00 0A] (do not switch the display off after
@@ -349,6 +368,40 @@ impl Screen {
             n += 1;
         }
         n
+    }
+}
+
+fn wait_info(rx: &Receiver<Value>, timeout: Duration, cancelled: &dyn Fn() -> bool) -> Result<Value, DevErr> {
+    let end = Instant::now() + timeout;
+    loop {
+        if cancelled() { return Err(DevErr::new("Live connection paused")); }
+        let remaining = end.saturating_duration_since(Instant::now());
+        if remaining.is_zero() { return Err(DevErr::coded("noReply", "The screen did not answer its information request.")); }
+        if let Ok(v) = rx.recv_timeout(remaining.min(Duration::from_millis(25))) {
+            if v.get("cmd").and_then(Value::as_str) == Some("info") && v.get("data").is_some_and(Value::is_object) { return Ok(v); }
+        }
+    }
+}
+
+#[cfg(test)]
+mod live_info_tests {
+    use super::*;
+    #[test]
+    fn acknowledgements_are_not_health_but_real_info_is() {
+        let (tx, rx) = channel();
+        tx.send(json!({ "key": 17, "hex": "00" })).unwrap();
+        assert_eq!(wait_info(&rx, Duration::from_millis(5), &|| false).unwrap_err().code.as_deref(), Some("noReply"));
+        tx.send(json!({ "key": 21, "hex": "00" })).unwrap();
+        tx.send(json!({ "cmd": "info", "data": { "version": "3.6" } })).unwrap();
+        assert!(wait_info(&rx, Duration::from_millis(50), &|| false).is_ok());
+    }
+    #[test]
+    fn hold_during_handshake_cancels_without_no_reply_recovery() {
+        let (_tx, rx) = channel();
+        let start = Instant::now();
+        let e = wait_info(&rx, Duration::from_secs(1), &|| start.elapsed() >= Duration::from_millis(10)).unwrap_err();
+        assert!(start.elapsed() < Duration::from_millis(200));
+        assert_eq!(e.code, None);
     }
 }
 

@@ -22,6 +22,7 @@ pub mod mask;
 pub mod nowplaying;
 pub mod ping;
 pub mod pipeline;
+pub mod connection;
 pub mod progress;
 pub mod sunmoon;
 pub mod todo;

@@ -50,6 +50,7 @@
     "allow-gallery-sync",
     "allow-device-state",
     "allow-device-check",
+    "allow-device-presence",
     "allow-device-restart",
     "allow-device-setup",
     "allow-device-restore",

@@ -187,6 +187,16 @@ impl DeviceService {
         v
     }
 
+    /// No-open enumeration for recovery UI. Fake states never touch the machine's devices.
+    pub fn presence(&self) -> Value {
+        if let Some(f) = &self.fake {
+            let t = f.lock().unwrap().transport.clone();
+            let present = matches!(t.as_str(), "winusb" | "serial" | "busy" | "noreply" | "noreply-stuck");
+            return json!({ "present": present, "transport": if !present { "none" } else if t == "serial" { "serial" } else { "winusb" }, "needsSetup": t == "serial" });
+        }
+        ops::presence()
+    }
+
     /// One read-only info answer, never restarting the screen (the skip-identical-send check: when this fails the caller just sends).
     pub fn read_info(&self) -> CoreResult<Value> {
         self.check_once()
@@ -622,6 +632,19 @@ mod tests {
         assert_eq!(f.reconnect(&mut |_, _| {}).unwrap()["already"], json!(false));
         let n = DeviceService::fake("none", 0.01, false);
         assert!(n.reconnect(&mut |_, _| {}).is_err());
+    }
+
+    #[test]
+    fn presence_is_enumeration_only_and_fake_missing_stays_missing() {
+        for mode in ["none", "failedusb"] {
+            let d = DeviceService::fake(mode, 0.01, false);
+            assert_eq!(d.presence()["present"], false);
+            assert!(d.check_once().is_err(), "presence must not recover or restart anything");
+        }
+        let d = DeviceService::fake("noreply", 0.01, false);
+        assert_eq!(d.presence()["present"], true);
+        assert!(d.check_once().unwrap_err().code_is("noReply"), "presence does not establish firmware health");
+        assert_eq!(DeviceService::fake("serial", 0.01, false).presence()["needsSetup"], true);
     }
 
     /// A debug build never uses the real screen unless COOLERSCREEN_REAL_DEVICE=1 is set (a test instance once took the user's).

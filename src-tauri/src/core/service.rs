@@ -868,6 +868,30 @@ impl App {
         self.run_task(TaskSpec::new("state", "Screen state", Resources::one(Res::Device)), move |_| Ok(app.device.state()))
     }
 
+    pub fn device_presence(&self) -> Value { self.device.presence() }
+
+    /// One automatic firmware recovery request per pipeline lifetime. The normal device scheduler pauses
+    /// Live and excludes uploads/checks. Recheck first: a disappeared or recovered screen is never reset.
+    pub(crate) fn recover_live_no_reply(&self) -> bool {
+        if self.sched.device_active() || !wants_live_recovery(&self.live.status()) { return false; }
+        let app = self.arc();
+        self.sched.submit(TaskSpec::new("recovery", "Recovering the screen", Resources::one(Res::Device)).priority(Priority::Background).visible(), move |ctx| {
+            ctx.check()?;
+            if !wants_live_recovery(&app.live.status()) { return Ok(json!({ "skipped": true })); }
+            match app.device.read_info() {
+                Ok(info) => Ok(info),
+                Err(e) if e.code_is("noReply") => {
+                    ctx.check()?;
+                    if !wants_live_recovery(&app.live.status()) { return Ok(json!({ "skipped": true })); }
+                    crate::device::log("live: confirmed no reply; one scheduler-owned firmware restart (no USB power cycle)");
+                    app.device.restart(&mut |p, m| ctx.progress(p, m))
+                }
+                Err(e) => Err(e),
+            }
+        });
+        true
+    }
+
     /// Before a store: read the screen's real room (read-only info, never a restart). Unlike the page's own check this steps live
     /// aside for a moment when live holds the screen (a store pauses it for minutes anyway), because with live on nothing else ever
     /// reads the screen. The answer updates the budget everything below converts against and runs the outside-change check.
@@ -893,14 +917,8 @@ impl App {
         if self.sched.device_active() {
             return Err(updating());
         }
-        // Live on the screen: it is connected, so the last answer stands (no second open, no pause of the picture).
-        if self.live_holds_screen() {
-            // the last answer of a real check, or (nothing checked yet) what a live session proves: a WinUSB screen that answers
-            let mut info = self.last_info.lock().unwrap().clone().unwrap_or_else(|| json!({ "model": "(live)", "_transport": "winusb", "_needsSetup": false }));
-            info["_live"] = json!(true);
-            info.as_object_mut().map(|o| o.remove("_capacity"));
-            return Ok(info);
-        }
+        // This is an explicit check: pause live through the scheduler and ask the firmware, even when
+        // outbound Live writes still succeed. Routine status/presence snapshots never come through here.
         let app = self.arc();
         let mut info = self.run_task(TaskSpec::new("check", "Checking the screen", Resources::one(Res::Device)), move |ctx| {
             app.device.check(&mut |p, m| ctx.progress(p, m))
@@ -953,7 +971,7 @@ impl App {
 
     /// True while something is being written to the screen (close guard).
     pub fn uploading(&self) -> bool {
-        self.sched.running_kind(&["send", "setup"])
+        self.sched.running_kind(&["send", "setup", "recovery"])
     }
 
     // ---------- gallery folder ----------
@@ -1180,6 +1198,24 @@ impl App {
             }
             _ => None,
         }
+    }
+}
+
+fn wants_live_recovery(status: &Value) -> bool {
+    status["running"] == true && status["paused"] != true && status["systemHold"] != true && status["idle"] != true
+}
+
+#[cfg(test)]
+mod connection_recovery_tests {
+    use super::*;
+    #[test]
+    fn firmware_recovery_respects_user_and_system_holds_but_its_own_device_hold_is_expected() {
+        let mut s = json!({ "running": true, "paused": false, "systemHold": false, "idle": false, "deviceHold": true });
+        assert!(wants_live_recovery(&s));
+        for key in ["paused", "systemHold", "idle"] {
+            s[key] = json!(true); assert!(!wants_live_recovery(&s)); s[key] = json!(false);
+        }
+        s["running"] = json!(false); assert!(!wants_live_recovery(&s));
     }
 }
 

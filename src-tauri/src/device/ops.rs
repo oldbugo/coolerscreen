@@ -6,6 +6,12 @@ use serde_json::{json, Value};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
+const USB_PORT_MATCH: &str = r#"
+function Test-CoolerUsbPort($Parent, $Location, $History) {
+  [bool]($Parent -and $Location -and @($History | Where-Object { $_.Parent -eq $Parent -and $_.Location -eq $Location }).Count -gt 0)
+}
+"#;
+
 pub fn open_any() -> Result<Screen, DevErr> {
     let usb_err = match Screen::open_usb() {
         Ok(s) => return Ok(s),
@@ -18,7 +24,46 @@ pub fn open_any() -> Result<Screen, DevErr> {
     if !claim && failed_usb_present() {
         return Err(DevErr::coded("failedUsb", MSG_FAILED_USB));
     }
-    Err(friendly(if claim { usb_err } else { DevErr::new("Screen not found") }))
+    Err(friendly(usb_err))
+}
+
+/// Live failures must not block ownership release on a slow PowerShell process. Probe at most once per
+/// 30 seconds in the background. A missing device is reported as notFound until the first result arrives.
+pub fn failed_usb_cached() -> bool {
+    #[cfg(test)]
+    { return false; }
+    #[cfg(not(test))]
+    {
+        use std::sync::{Arc, Mutex, OnceLock};
+        static CACHE: OnceLock<Arc<Mutex<(Option<Instant>, bool)>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| Arc::new(Mutex::new((None, false))));
+        let mut g = cache.lock().unwrap_or_else(|p| p.into_inner());
+        if g.0.map_or(true, |t| t.elapsed() >= Duration::from_secs(30)) {
+            g.0 = Some(Instant::now());
+            let c = cache.clone();
+            std::thread::spawn(move || {
+                let found = failed_usb_present();
+                c.lock().unwrap_or_else(|p| p.into_inner()).1 = found;
+            });
+        }
+        g.1
+    }
+}
+
+pub fn live_open_error(e: DevErr) -> DevErr {
+    let e = friendly(e);
+    if e.code.as_deref() == Some("notFound") && failed_usb_cached() {
+        DevErr { code: Some("failedUsb".into()), message: MSG_FAILED_USB.into(), failed_usb: true }
+    } else { e }
+}
+
+/// Enumeration only: never opens or claims the screen. Transport is a driver hint, not a health check.
+pub fn presence() -> Value {
+    if serial::find_port().is_some() {
+        json!({ "present": true, "transport": "serial", "needsSetup": true })
+    } else if super::usb::find().is_some() {
+        json!({ "present": true, "transport": "winusb", "needsSetup": false })
+    } else { json!({ "present": false, "transport": "none", "needsSetup": false }) }
 }
 
 /// Open with retries (the screen can restart and re-enumerate after an upload).
@@ -38,9 +83,23 @@ pub fn failed_usb_present() -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let cmd = "@(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\\\VID_0000&PID_000' }).Count";
+        // A failed descriptor has lost its VID/PID. Only attribute it to the screen when BOTH parent
+        // and port location match the SAME remembered screen node (also the reconnect script's rule).
+        // An unrelated broken USB device must not become a CoolerScreen diagnosis.
+        let cmd = format!("{USB_PORT_MATCH}\n{}", r#"
+function Prop($id, $key) { try { (Get-PnpDeviceProperty -InstanceId $id -KeyName $key -ErrorAction Stop).Data } catch { $null } }
+$all = @(Get-PnpDevice -ErrorAction SilentlyContinue)
+$history = @($all | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' -and -not $_.Present } | ForEach-Object {
+  [pscustomobject]@{ Parent = Prop $_.InstanceId 'DEVPKEY_Device_Parent'; Location = Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo' }
+})
+$matchedPorts = @($all | Where-Object { $_.Present -and $_.InstanceId -match '^USB\\VID_0000&PID_000[0-9A-F]\\' } | Where-Object {
+  $parent = Prop $_.InstanceId 'DEVPKEY_Device_Parent'; $location = Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo'
+  Test-CoolerUsbPort $parent $location $history
+})
+$matchedPorts.Count
+"#);
         let child = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", cmd])
+            .args(["-NoProfile", "-Command", &cmd])
             .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -308,6 +367,24 @@ pub fn state() -> State {
 #[cfg(test)]
 mod guard_tests {
     use super::*;
+
+    #[test]
+    #[cfg(windows)]
+    fn failed_usb_diagnosis_matches_one_complete_remembered_port_not_unrelated_or_crossed_nodes() {
+        use std::os::windows::process::CommandExt;
+        let fixtures = r#"
+$h = @([pscustomobject]@{Parent='hubA';Location='port1'},[pscustomobject]@{Parent='hubB';Location='port2'})
+if (-not (Test-CoolerUsbPort 'hubA' 'port1' $h)) { throw 'exact match rejected' }
+if (Test-CoolerUsbPort 'hubA' 'port2' $h) { throw 'crossed pair accepted' }
+if (Test-CoolerUsbPort 'hubC' 'port1' $h) { throw 'unrelated hub accepted' }
+if (Test-CoolerUsbPort 'hubA' '' $h) { throw 'missing location accepted' }
+if (Test-CoolerUsbPort 'hubA' 'port1' @()) { throw 'no history accepted' }
+'OK'
+"#;
+        let command = format!("{USB_PORT_MATCH}\n{fixtures}");
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &command]).creation_flags(0x0800_0000).output().unwrap();
+        assert!(out.status.success() && String::from_utf8_lossy(&out.stdout).contains("OK"), "{}", String::from_utf8_lossy(&out.stderr));
+    }
 
     #[test]
     fn the_loop_limit_follows_the_flash_and_refuses_what_broke_the_screen() {

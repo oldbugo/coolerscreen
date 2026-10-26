@@ -141,6 +141,10 @@ pub struct Shared {
     pub show_seconds: AtomicBool,
     pub max_kb: AtomicU32,
     pub connected: AtomicBool,
+    pub connection: Mutex<super::connection::Connection>,
+    /// Requested only after a verified noReply and after releasing the connection. The app queues recovery
+    /// through its exclusive device scheduler; the sender never performs a restart itself.
+    pub recover: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     /// True only while a live session is open on the screen (false while paused, connecting or disconnected).
     pub session_active: AtomicBool,
     /// How the stream ends on stop: 0 = loop clip, 1 = screen off. Set before `quit`.
@@ -192,6 +196,8 @@ impl Pipeline {
             show_seconds: AtomicBool::new(cfg.show_seconds),
             max_kb: AtomicU32::new(cfg.max_kb),
             connected: AtomicBool::new(sink == Sink::Null),
+            connection: Mutex::new(super::connection::Connection::new(sink == Sink::Null)),
+            recover: Mutex::new(None),
             session_active: AtomicBool::new(false),
             ending: AtomicU8::new(0),
             fast_stop: AtomicBool::new(false),
@@ -524,12 +530,12 @@ impl Pipeline {
                     let _ = std::fs::create_dir_all(d);
                 }
                 let mut dump_n = 0u64;
-                let (mut backoff, mut next_try) = (1u64, Instant::now());
                 loop {
                     if sh.quit.load(Relaxed) {
                         break;
                     }
                     if sh.paused.load(Relaxed) {
+                        sh.connection.lock().unwrap().paused();
                         if let Some(s) = session.take() {
                             log("paused: ending the live stream (loop clip plays)");
                             s.stop_with(Ending::LoopClip);
@@ -541,29 +547,43 @@ impl Pipeline {
                         std::thread::sleep(Duration::from_millis(100));
                         continue;
                     }
+                    sh.connection.lock().unwrap().resume();
+                    if sink == Sink::Null { sh.connection.lock().unwrap().connected(); }
                     if sink == Sink::Device && session.is_none() {
-                        if Instant::now() < next_try {
+                        if !sh.connection.lock().unwrap().due(Instant::now()) {
                             std::thread::sleep(Duration::from_millis(100));
                             continue;
                         }
                         // A connect in progress counts as an open session: a device task asking live to step aside waits for it
                         // (and for the pause to end it), instead of opening the screen at the same moment.
                         sh.session_active.store(true, Relaxed);
-                        match LiveSession::connect() {
+                        sh.connection.lock().unwrap().begin();
+                        match LiveSession::connect_checked(&|| sh.paused.load(Relaxed) || sh.quit.load(Relaxed)) {
                             Ok(s) => {
+                                // A hold may have arrived during the final USB write. Never hand it an active stream.
+                                if sh.paused.load(Relaxed) || sh.quit.load(Relaxed) {
+                                    s.cancel_connect();
+                                    sh.session_active.store(false, Relaxed);
+                                    continue;
+                                }
                                 log("connected, live stream started");
                                 dump_n = 0;
                                 session = Some(s);
                                 sh.connected.store(true, Relaxed);
                                 sh.session_active.store(true, Relaxed);
                                 sh.stats.reconnects.fetch_add(1, Relaxed);
-                                backoff = 1;
+                                sh.connection.lock().unwrap().connected();
                             }
                             Err(e) => {
                                 sh.session_active.store(false, Relaxed);
-                                log(&format!("cannot connect ({e}); retry in {backoff} s"));
-                                next_try = Instant::now() + Duration::from_secs(backoff);
-                                backoff = (backoff * 2).min(15);
+                                if sh.paused.load(Relaxed) || sh.quit.load(Relaxed) { continue; }
+                                let recover = sh.recover.lock().unwrap().clone();
+                                let request_recovery = {
+                                    let mut c = sh.connection.lock().unwrap();
+                                    if let Some(line) = c.failed(&e, Instant::now()) { log(&line); }
+                                    recover.is_some() && c.request_recovery(&e)
+                                };
+                                if request_recovery && !recover.unwrap()() { sh.connection.lock().unwrap().recovery_deferred(); }
                                 continue;
                             }
                         }
@@ -595,11 +615,12 @@ impl Pipeline {
                                     log(&format!("send failed ({e}); reconnecting"));
                                     sh.stats.send_errors.fetch_add(1, Relaxed);
                                     sh.connected.store(false, Relaxed);
-                                    sh.session_active.store(false, Relaxed);
                                     if let Some(s) = session.take() {
                                         s.abandon();
                                     }
-                                    next_try = Instant::now() + Duration::from_secs(1);
+                                    sh.session_active.store(false, Relaxed);
+                                    let e = crate::device::friendly(crate::device::DevErr::new(e));
+                                    if let Some(line) = sh.connection.lock().unwrap().failed(&e, Instant::now()) { log(&line); }
                                 }
                             }
                             jpool.put(jpeg);
@@ -609,11 +630,12 @@ impl Pipeline {
                                 if let Err(e) = s.keepalive_if_due() {
                                     log(&format!("keepalive failed ({e}); reconnecting"));
                                     sh.connected.store(false, Relaxed);
-                                    sh.session_active.store(false, Relaxed);
                                     if let Some(s) = session.take() {
                                         s.abandon();
                                     }
-                                    next_try = Instant::now() + Duration::from_secs(1);
+                                    sh.session_active.store(false, Relaxed);
+                                    let e = crate::device::friendly(crate::device::DevErr::new(e));
+                                    if let Some(line) = sh.connection.lock().unwrap().failed(&e, Instant::now()) { log(&line); }
                                 }
                             }
                         }

@@ -373,6 +373,11 @@ pub async fn device_check(core: State<'_, Core>) -> Result<Value, CoreError> {
 }
 
 #[tauri::command]
+pub async fn device_presence(core: State<'_, Core>) -> Result<Value, CoreError> {
+    run(&core, |a| Ok(a.device_presence())).await
+}
+
+#[tauri::command]
 pub async fn device_restart(core: State<'_, Core>) -> Result<Value, CoreError> {
     run(&core, |a| Ok(a.device_restart())).await
 }
@@ -398,7 +403,7 @@ pub const COMMANDS: &[&str] = &[
     "missing_delete", "original_get", "original_patch", "original_delete", "original_reveal", "estimate", "loop_search", "loop_point",
     "version_create", "version_patch", "version_delete", "version_send", "version_remake", "version_retry", "sources_list", "browse_set",
     "link_add", "source_set", "source_items", "source_add", "gallery_set_dir", "gallery_open", "gallery_sync", "device_state",
-    "device_check", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
+    "device_check", "device_presence", "device_restart", "device_setup", "device_restore", "device_reconnect", "theme_get", "theme_set", "theme_standard",
     "theme_preview", "theme_asset_add", "theme_apply", "theme_use", "theme_set_base", "calibration_set", "fit_cal", "weather_search", "weather_set_place", "ext_sensor_status", "game_fps_status", "lyrics_status", "lyrics_offset_set",
     "screen_preview", "screen_preview_end", "twin_watch",
 ];

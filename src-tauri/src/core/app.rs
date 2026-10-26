@@ -141,6 +141,10 @@ impl App {
         // The live host tells the page (and the tray) when its idle state or the live items of the theme change.
         let ev = events.clone();
         app.live.set_on_change(move || ev.app_changed());
+        let weak = Arc::downgrade(&app);
+        app.live.set_on_recovery(move || {
+            weak.upgrade().is_some_and(|app| app.recover_live_no_reply())
+        });
         app
     }
 

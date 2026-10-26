@@ -1196,7 +1196,7 @@ fn a_busy_screen_names_who_holds_it_and_the_check_reports_it() {
 }
 
 #[test]
-fn live_keeps_streaming_through_checks_edits_and_conversions_and_pauses_once_for_an_upload() {
+fn live_status_edits_and_conversions_do_not_pause_but_upload_and_manual_check_do() {
     use crate::live::Config;
     let (_d, app, _rec, gallery) = setup();
     let oid = one_original(&app, &gallery, "Live all along.mp4");
@@ -1207,10 +1207,10 @@ fn live_keeps_streaming_through_checks_edits_and_conversions_and_pauses_once_for
     assert!(app.live.streaming(), "live runs");
     let (p0, r0) = (app.live.pause_count(), app.live.resume_count());
 
-    // routine checks, state, theme edits, a base being made (media work): the stream is never touched
+    // Routine snapshots, presence, theme edits and media work never touch the live stream.
     for i in 0..3 {
-        let c = app.device_check().unwrap();
-        assert_eq!(c["_live"], json!(true), "answered from the live session");
+        assert!(app.device_presence()["present"] == true);
+        assert!(app.app_state()["live"]["status"]["connected"] == true);
         assert_eq!(app.device_state().unwrap()["live"], json!(true));
         app.theme_set(&oid, &json!({ "widgets": [{ "id": "c", "type": "clock", "x": 0.1, "y": 0.1, "w": 0.3, "h": 0.3, "props": { "seconds": i % 2 == 0 } }] })).unwrap();
         app.refresh_live_theme();
@@ -1218,9 +1218,8 @@ fn live_keeps_streaming_through_checks_edits_and_conversions_and_pauses_once_for
     let r = app.version_create(&oid, &json!({ "start": 1, "length": 5, "quality": "auto" })).unwrap();
     let j = wait_job(&app, r["jobId"].as_str().unwrap());
     assert_eq!(j["status"], "done", "{j}");
-    app.device_check().unwrap();
     std::thread::sleep(Duration::from_millis(1500));
-    assert_eq!((app.live.pause_count(), app.live.resume_count()), (p0, r0), "no pause for checks, edits or a conversion");
+    assert_eq!((app.live.pause_count(), app.live.resume_count()), (p0, r0), "no pause for status, presence, edits or a conversion");
     assert!(app.live.streaming());
 
     // an upload is a real device write: exactly one pause and one resume
@@ -1231,8 +1230,45 @@ fn live_keeps_streaming_through_checks_edits_and_conversions_and_pauses_once_for
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!((app.live.pause_count(), app.live.resume_count()), (p0 + 1, r0 + 1), "one pause and one resume for the upload");
     assert!(app.live.streaming(), "live is back");
+    // An explicit Check again verifies firmware rather than recycling cached Live health.
+    let info = app.device_check().unwrap();
+    assert!(info.get("_live").is_none());
+    assert!(info.get("_capacity").is_some());
+    wait_until(|| app.live.streaming());
+    assert_eq!((app.live.pause_count(), app.live.resume_count()), (p0 + 2, r0 + 2));
     let log = std::fs::read_to_string(crate::device::log::base_dir().join("device.log")).unwrap_or_default();
     assert!(log.contains("device task: send"), "the reason is logged");
+    app.live.stop();
+}
+
+#[test]
+fn connection_recovery_rechecks_firmware_and_respects_active_device_jobs() {
+    use super::scheduler::{Res, Resources, TaskSpec};
+    let d = tempfile::tempdir().unwrap();
+    let rec = Arc::new(Rec::default());
+    let app = App::with_device(
+        d.path().join("home"),
+        Backends { media: Arc::new(FakeMedia { delay: Duration::from_millis(20) }), sources: Arc::new(NoSources) },
+        rec.clone(), "test", DeviceService::fake("noreply", 0.01, false),
+    );
+    app.live.set_no_device(true);
+    app.live.set_config_override(Some(crate::live::Config::default()));
+    app.live.start();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let rx = Arc::new(Mutex::new(rx));
+    let job = app.sched.submit(TaskSpec::new("send", "Simulated upload ownership", Resources::one(Res::Device)), move |_| {
+        rx.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap(); Ok(json!({}))
+    });
+    wait_until(|| app.sched.device_active());
+    app.recover_live_no_reply();
+    assert!(!rec.jobs.lock().unwrap().iter().any(|(kind, _)| kind == "recovery"), "no recovery can overlap an existing device job");
+    tx.send(()).unwrap(); job.wait().unwrap();
+    assert!(app.device.read_info().unwrap_err().code_is("noReply"), "skipped recovery did not touch firmware");
+    wait_until(|| !app.sched.device_active());
+    app.recover_live_no_reply();
+    wait_until(|| rec.jobs.lock().unwrap().iter().any(|(kind, state)| kind == "recovery" && state == "done"));
+    assert!(app.device.read_info().is_ok(), "confirmed noReply was recovered by the exclusive device task");
+    assert!(rec.busy.lock().unwrap().contains(&true));
     app.live.stop();
 }
 

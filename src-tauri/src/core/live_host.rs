@@ -62,6 +62,7 @@ pub struct LiveHost {
     twin_watching: AtomicBool,
     /// Called when something the UI and the tray show changes (theme, idle state).
     on_change: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
+    on_recovery: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     /// How many times live was paused (holds went from none to some) and brought back since the app started (tests, log).
     pauses: AtomicU64,
     resumes: AtomicU64,
@@ -112,6 +113,7 @@ impl Default for LiveHost {
             twin_temp: AtomicBool::new(false),
             twin_watching: AtomicBool::new(false),
             on_change: Mutex::new(Vec::new()),
+            on_recovery: Mutex::new(None),
             pauses: AtomicU64::new(0),
             resumes: AtomicU64::new(0),
         }
@@ -126,6 +128,10 @@ impl LiveHost {
     /// Something the tray tooltip or the page shows has changed (live items, idle).
     pub fn set_on_change(&self, f: impl Fn() + Send + Sync + 'static) {
         self.on_change.lock().unwrap().push(Arc::new(f));
+    }
+
+    pub fn set_on_recovery(&self, f: impl Fn() -> bool + Send + Sync + 'static) {
+        *self.on_recovery.lock().unwrap() = Some(Arc::new(f));
     }
 
     fn changed(&self) {
@@ -525,6 +531,7 @@ impl LiveHost {
         let sink = if self.no_device.load(SeqCst) || self.twin_temp.load(SeqCst) { Sink::Null } else { Sink::Device };
         hlog(&format!("start (holds: {})", if self.holds.load(SeqCst) == 0 { "none".to_string() } else { reason(self.holds.load(SeqCst)) }));
         let p = Arc::new(Pipeline::start(&cfg, sink));
+        *p.shared.recover.lock().unwrap() = self.on_recovery.lock().unwrap().clone();
         if self.twin_temp.load(SeqCst) {
             p.lock_rate(15);
         }
@@ -695,9 +702,18 @@ impl LiveHost {
             None => (false, false, self.quiet_fps(), 0.0),
         };
         let h = self.holds.load(SeqCst);
+        let connection = if h != 0 {
+            json!({ "state": "paused", "message": null, "retryInSeconds": 0, "attempts": 0 })
+        } else if let Some(p) = self.pipeline() {
+            let value = p.shared.connection.lock().unwrap().snapshot(Instant::now());
+            value
+        } else {
+            json!({ "state": "off", "message": null, "retryInSeconds": 0, "attempts": 0 })
+        };
         json!({
             "running": running,
             "connected": connected,
+            "connection": connection,
             "fps": fps,
             "previewing": self.previewing(),
             "twinning": self.twinning(),

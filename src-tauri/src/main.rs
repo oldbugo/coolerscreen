@@ -117,6 +117,7 @@ fn main() {
             cc::gallery_sync,
             cc::device_state,
             cc::device_check,
+            cc::device_presence,
             cc::device_restart,
             cc::device_setup,
             cc::device_restore,

@@ -2,7 +2,7 @@
 //! connect: FF D9 FF D9 (end any old stream), 0x15 [00 0A] (stored: do not switch the display off after live), 0x11 (enter live).
 //! Frames: u32LE length | JPEG | u16LE sum. Keepalive 0x11 every 1.5 s. stop: FF D9 FF D9, display on (0x0E [1]),
 //! loop clip (0x14 [1,0]), so the 2.0 behaviour (the loop clip keeps playing) holds when the companion stops.
-use crate::device::Screen;
+use crate::device::{Screen, DevErr};
 use std::time::{Duration, Instant};
 
 pub const KEEPALIVE: Duration = Duration::from_millis(1500);
@@ -26,17 +26,25 @@ pub struct LiveSession {
 
 impl LiveSession {
     pub fn connect() -> Result<LiveSession, String> {
-        let mut scr = Screen::open_usb().map_err(|e| e.to_string())?;
-        let r = (|| -> Result<(), String> {
-            scr.live_write(&END_OF_STREAM).map_err(|e| e.to_string())?;
+        Self::connect_checked(&|| false).map_err(|e| e.to_string())
+    }
+
+    pub fn connect_checked(cancelled: &dyn Fn() -> bool) -> Result<LiveSession, DevErr> {
+        let mut scr = Screen::open_usb().map_err(crate::device::ops::live_open_error)?;
+        let r = (|| -> Result<(), DevErr> {
+            if cancelled() { return Err(DevErr::new("Live connection paused")); }
+            scr.live_write_timeout(&END_OF_STREAM, Duration::from_millis(500))?;
             std::thread::sleep(Duration::from_millis(100));
-            scr.live_key(0x15, &[0x00, 0x0a]).map_err(|e| e.to_string())?;
+            scr.live_info(cancelled)?;
+            if cancelled() { return Err(DevErr::new("Live connection paused")); }
+            scr.live_write_timeout(&crate::device::frame::frame(0x15, &[0x00, 0x0a]), Duration::from_millis(500))?;
             std::thread::sleep(Duration::from_millis(100));
-            scr.live_key(0x11, &[]).map_err(|e| e.to_string())
+            if cancelled() { return Err(DevErr::new("Live connection paused")); }
+            scr.live_write_timeout(&crate::device::frame::frame(0x11, &[]), Duration::from_millis(500))
         })();
         if let Err(e) = r {
             scr.close();
-            return Err(e);
+            return Err(crate::device::friendly(e));
         }
         Ok(LiveSession { scr: Some(scr), last_keep: Instant::now(), wire: Vec::new() })
     }
@@ -108,6 +116,18 @@ impl LiveSession {
     /// Drop the link without the end sequence (the device is gone or erroring).
     pub fn abandon(mut self) {
         if let Some(scr) = self.scr.take() {
+            scr.close();
+        }
+    }
+
+    /// A scheduler hold arrived at the end of the bounded handshake. Release promptly; best-effort
+    /// hand-back uses short transfers so the handshake plus cancellation stays within the hold wait.
+    pub fn cancel_connect(mut self) {
+        if let Some(mut scr) = self.scr.take() {
+            let timeout = Duration::from_millis(100);
+            let _ = scr.live_write_timeout(&END_OF_STREAM, timeout);
+            let _ = scr.live_write_timeout(&crate::device::frame::frame(0x0e, &[1]), timeout);
+            let _ = scr.live_write_timeout(&crate::device::frame::frame(0x14, &[1, 0]), timeout);
             scr.close();
         }
     }
