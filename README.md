@@ -7,6 +7,13 @@ loops forever. You only need the app while you are changing the picture.
 **Optional since 3.0: a live screen.** Turn **Live** on and CoolerScreen also draws a clock, music, PC stats, weather and
 more on top of your picture while it runs. It is **off by default**.
 
+**Connection reliability (4.18.1):** Live reports the current connection failure
+and retries when the screen returns. It checks for a real firmware response before
+starting and permits one safe firmware recovery attempt through the device queue.
+Reconnect needs Windows approval and resets only the screen's identified USB port.
+If Windows still reports a descriptor failure, a physical USB reconnect may be
+needed. See [verification and limits](docs/v4/notes/connection-reliability.md).
+
 **What it does NOT do (by default):** it installs no service, no startup entry and no background program, and never needs
 administrator rights after the one-time setup. With Live off, closing it leaves the screen playing on its own, even after
 you restart or shut down the PC. With Live on it stays visible in the tray and **Quit** in its menu stops it.
@@ -160,8 +167,10 @@ the gear opens **Settings**.
 - **Autosave:** there are no Save buttons. Edits in On screen and in Settings (notch, screen fit, guides, corners, folders)
   are kept as you make them. Only changes that alter the stored clip (screen fit, corners, notch, text or pictures drawn
   into the base) show **Base needs re-storing**; live-only changes never do.
-- **Screen status** is checked once when the app opens (the app talks to the screen for a moment); use Settings >
-  Screen > **Check again** after plugging it in. The app never polls the screen.
+- **Screen status** follows the current Live connection. With Live off, the app
+  checks once when it opens; while a missing-screen warning is visible it watches
+  for the screen to return and checks it once. This does not repeatedly open a
+  healthy screen. Settings > Screen > **Check again** performs a real check.
 
 Settings and versions live in `%APPDATA%\CoolerScreen\`; your original clips are in the Gallery folder.
 
@@ -218,7 +227,7 @@ program closes its port. That is how the vendor software works, which is why it 
 
 | Problem | What to do |
 |---|---|
-| "Windows couldn't connect to the screen at startup" (banner with a Reconnect button), or the screen is missing and Device Manager shows "Unknown USB Device (Device Descriptor Request Failed)" | A known quirk: after a PC boot Windows sometimes fails to enumerate the screen (the screen itself keeps playing its loop). Click **Reconnect** and approve the Windows prompt. It power-cycles only that one USB port, which fixes it immediately. Nothing is installed or changed permanently. |
+| Windows cannot recognise the USB connection, or Device Manager shows "Unknown USB Device (Device Descriptor Request Failed)" | Embedded can keep playing while the USB connection is unavailable. Click **Reconnect** and approve the Windows prompt. It resets only one port matching the screen's remembered location. If the screen still does not return, physically reconnect the screen's USB cable when safe; a port reset may not remove its power. |
 | "Screen not responding" (it keeps playing but doesn't answer) | Seen after the screen has played for a while. Click **Restart screen** (top banner, or Settings > Screen): it sends the screen's restart command, waits for it to come back and checks it. The app also does this by itself once when a check or the start of an upload gets no reply (never in the middle of an upload). If the screen doesn't come back, use **Reconnect**. |
 | "Screen not found" | Check the USB cable/header and that the cooler has power. Unplug and replug USB, then **Check again** (click the status pill at the top). |
 | Banner says the screen "needs setup" again | The driver was reset (moving the internal USB header to another port, or a big Windows update). Click "Set up screen" again. |

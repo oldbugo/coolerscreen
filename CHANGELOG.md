@@ -1,5 +1,20 @@
 # Changelog
 
+## 4.18.1 - 2026-10-26 (connection reliability)
+
+- Screen status follows the current Live connection, with specific USB, missing,
+  busy and unresponsive errors and a retry countdown. Reconnecting clears stale
+  banners. While Live is off, a missing screen is checked once when it returns.
+- Live requires a real firmware info response before starting. A confirmed
+  unresponsive screen can receive one scheduler-owned firmware recovery attempt;
+  uploads keep exclusive ownership. Repeated identical failures are logged less
+  often. Windows approval is still required for a USB port reset.
+- Reconnect resets only one failed port that exactly matches a remembered screen
+  location. It refuses ambiguous targets and reports failure if the screen does
+  not return; unrelated failed USB devices are left alone.
+- A Windows descriptor failure can still require a physical screen USB reconnect.
+  Software tests do not establish sleep/wake, reboot or long-run hardware recovery.
+
 ## 4.18.0 - 2026-10-21 (stream E: lyrics)
 
 - **Lyrics widget:** synced lyrics of what is playing. The current line fills left to right in time, with the previous

@@ -1,7 +1,8 @@
-# Elevated (CoolerScreen launches it via a UAC prompt): reconnect a screen that Windows failed to enumerate at boot
+# Elevated (CoolerScreen launches it via a UAC prompt): reconnect a screen that Windows failed to enumerate
 # ("Unknown USB Device (Device Descriptor Request Failed)", instance USB\VID_0000&PID_0002\...).
 # It power-cycles the single USB hub port the broken device sits on (IOCTL_USB_HUB_CYCLE_PORT), which makes the
-# screen enumerate normally. -DryRun only lists what it would cycle (no admin rights needed). Prefers the port where the screen was seen before; otherwise every failed port.
+# screen enumerate again. -DryRun only lists what it would cycle (no admin rights needed).
+# Only one failed port with an exact remembered screen parent/location pair is eligible. Never reset unrelated USB ports.
 # Log: -Log <file> (CoolerScreen 2 passes a per-run file; default %TEMP%\coolerscreen-setup.log) (last line is "RESULT: OK" or "RESULT: ERROR ...")
 param([string]$Log = (Join-Path $env:TEMP 'coolerscreen-setup.log'), [switch]$DryRun)
 $log = $Log
@@ -53,10 +54,25 @@ public static class Hub {
 
 function Prop($id, $key) { try { (Get-PnpDeviceProperty -InstanceId $id -KeyName $key -ErrorAction Stop).Data } catch { $null } }
 
+function Select-CoolerReconnectTargets($FailedNodes, $ScreenHistory) {
+  # Keep the parent and location together. Separate lists could match the parent of
+  # one remembered screen with the location of a different screen.
+  @($FailedNodes | Where-Object {
+    $candidate = $_
+    $candidate.Parent -and $candidate.Location -and @($ScreenHistory | Where-Object {
+      $_.Parent -eq $candidate.Parent -and $_.Location -eq $candidate.Location
+    }).Count -gt 0
+  })
+}
+
 try {
   $screen = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' } | Select-Object -First 1
   $failed = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_0000&PID_000[0-9A-F]\\' })
-  if ($screen) { Log "screen already present: $($screen.InstanceId)" }
+  if ($screen) {
+    Log "screen already present: $($screen.InstanceId); no USB port reset needed"
+    Log 'RESULT: OK'
+    return
+  }
   if ($DryRun) {
     # Show that the port lookup works on the screen's own node (the same steps a failed node goes through).
     foreach ($d in @($screen) + $failed | Where-Object { $_ }) {
@@ -74,30 +90,38 @@ try {
   }
   # Where was the screen before? Look at remembered (non-present) screen nodes.
   $hist = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' -and -not $_.Present })
-  $histLoc = @($hist | ForEach-Object { Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo' } | Where-Object { $_ })
-  $histPar = @($hist | ForEach-Object { Prop $_.InstanceId 'DEVPKEY_Device_Parent' } | Where-Object { $_ })
-  Log "failed nodes: $($failed.Count); remembered screen locations: $($histLoc -join ', ')"
-  $targets = @($failed | Where-Object {
-    $l = Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo'
-    $p = Prop $_.InstanceId 'DEVPKEY_Device_Parent'
-    ($l -and $histLoc -contains $l -and (-not $histPar -or $histPar -contains $p))
+  $history = @($hist | ForEach-Object {
+    [pscustomobject]@{ Parent = Prop $_.InstanceId 'DEVPKEY_Device_Parent'; Location = Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo' }
   })
-  if (-not $targets) { Log 'no history match, cycling all failed nodes'; $targets = $failed }
+  $candidates = @($failed | ForEach-Object {
+    [pscustomobject]@{ Node = $_; Parent = Prop $_.InstanceId 'DEVPKEY_Device_Parent'; Location = Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo' }
+  })
+  Log "failed nodes: $($failed.Count); remembered screen locations: $(($history | ForEach-Object { $_.Location }) -join ', ')"
+  $targets = @(Select-CoolerReconnectTargets $candidates $history)
+  if ($targets.Count -ne 1) {
+    throw "cannot identify one failed cooler-screen USB port safely (matched $($targets.Count)). No USB ports were reset. Unplug and reconnect the screen's USB cable."
+  }
   foreach ($dev in $targets) {
-    $hub = Prop $dev.InstanceId 'DEVPKEY_Device_Parent'
-    $loc = Prop $dev.InstanceId 'DEVPKEY_Device_LocationInfo'
+    $hub = $dev.Parent
+    $loc = $dev.Location
+    $nodeId = $dev.Node.InstanceId
     $m = [regex]::Match([string]$loc, 'Port_#(\d+)')
-    if (-not $m.Success) { Log "skip $($dev.InstanceId): no port in location '$loc'"; continue }
+    if (-not $m.Success) { throw "no port in screen location '$loc'; no USB port reset" }
     $port = [int]$m.Groups[1].Value
     $path = [Hub]::PathFor($hub)
-    if (-not $path) { Log "skip $($dev.InstanceId): hub interface for $hub not found"; continue }
-    if ($DryRun) { Log "WOULD cycle $($dev.InstanceId) hub $hub port $port"; continue }
-    Log "cycling $($dev.InstanceId) hub $hub port $port : $([Hub]::Cycle($path, $port))"
+    if (-not $path) { throw 'screen USB hub interface not found; no USB port reset' }
+    if ($DryRun) { Log "WOULD cycle $nodeId hub $hub port $port"; continue }
+    $cycleResult = [Hub]::Cycle($path, $port)
+    Log "cycling $nodeId hub $hub port $port : $cycleResult"
+    if ($cycleResult -ne 'ok status=0') { throw "Windows could not reset the screen's USB port ($cycleResult)" }
   }
   if ($DryRun) { Log 'RESULT: OK (dry run, nothing cycled)'; return }
-  Start-Sleep 6
-  $now = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' } | Select-Object -First 1
-  if (-not $now) { throw 'ports were cycled but the screen did not appear (try replugging the USB cable)' }
+  $deadline = [DateTime]::UtcNow.AddSeconds(20)
+  do {
+    Start-Sleep 2
+    $now = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' -and $_.Status -eq 'OK' } | Select-Object -First 1
+  } while (-not $now -and [DateTime]::UtcNow -lt $deadline)
+  if (-not $now) { throw "the screen's USB port was reset once, but Windows still cannot recognise the screen. Unplug and reconnect only the screen's USB cable; a port reset may not remove its power." }
   Log "screen now: $($now.InstanceId) $($now.Status)"
   Log 'RESULT: OK'
 } catch { Log "RESULT: ERROR $_" }
