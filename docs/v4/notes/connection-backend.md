@@ -37,8 +37,15 @@ no screen, running app, user settings, or installation touched by this worker.
 
 Helper used: inherited-model review agent, read-only. Review found and prompted
 fixes for per-chunk timeout accumulation and consumed-but-rejected recovery.
-Initial targeted release compilation passed state/policy tests. Final verification
-results are recorded in the worker handoff after rebuilding the completed source.
+Final source commit `972855b` compiled in the dedicated
+`cs-target-connection-backend` release target. Targeted connection tests: 7 passed.
+The same release library executable then passed the full suite with four test
+threads: **430 passed, 0 failed, 23 ignored**, 453 total, 30.10 seconds. Tests cover
+ACK rejection and handshake cancellation; exact versus crossed/unrelated USB
+port fixtures; fake presence without recovery; backoff, state clearing and log
+suppression; manual-check pause versus routine snapshots; and fake scheduler
+ownership/recovery. The ignored tests retain their existing hardware/live-service
+requirements and were not run.
 
 No physical verification by this worker. Connection-time info proves firmware
 answers then; it does not prove every frame appears or detect all later silent
