@@ -64,4 +64,17 @@ Do not call this fault fixed merely because code tests pass.
   with fake hardware and isolated app-data: rendered failure/recovery, focused
   control preservation, arrival detection and no repeat checks. No page errors;
   failure/recovered screenshots were visually inspected. Test process stopped.
-- Installer and new-release hardware acceptance: pending.
+- Installer and portable package built from clean source `04b0eb3` (4.18.1).
+  The first package attempt found the declared Tauri CLI missing from local
+  dependencies. Restored the declared dependencies without install scripts,
+  preserving the existing ffmpeg binary; no dependency lock changes were needed.
+- Installed through the app's own idle-safe updater. The old app ended Live and
+  returned to Embedded; the updater installed silently and restarted the app in
+  the background at 15:38:38 Sydney. Installed version/build: 4.18.1 / `04b0eb3`.
+- The new real-firmware handshake succeeded and Live started at 15:38:39.
+  Windows reports the normal screen nodes OK. Installed recovery script hash
+  matches the reviewed source; settings file hash is unchanged across the update.
+- The user confirmed live data was still visibly updating after the update.
+  This is physical acceptance of the recovered Live output and new startup,
+  not proof of sleep/wake, PC reboot, all firmware failure modes or long-run
+  reliability. Those checks remain open; the initiating USB fault is unproven.
