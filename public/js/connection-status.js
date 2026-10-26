@@ -3,7 +3,7 @@
 const FAILURES = new Set(['notFound', 'failedUsb', 'busy', 'noReply', 'error']);
 
 export function deviceJobActive(jobs = [], deviceBusy = false) {
-  return deviceBusy || jobs.some(j => ['send', 'setup', 'apply'].includes(j.kind) && ['running', 'waiting'].includes(j.status));
+  return deviceBusy || jobs.some(j => ['send', 'setup', 'apply', 'recovery'].includes(j.kind) && ['running', 'waiting'].includes(j.status));
 }
 
 export function liveUsesDevice(live = {}) {
@@ -79,8 +79,12 @@ export function liveMessage(live = {}, status) {
 // After a failed check, watch only enumeration (no open or commands). A real
 // device check is needed just once when it comes back. Never probe healthy Live.
 export function shouldWatchPresence(screen, live, options = {}) {
+  const st = live?.status || {};
+  // Theme idle/layer flags can remain when no pipeline exists. They describe
+  // dormant Live content, not a reason to ignore a returning Embedded screen.
+  const held = st.deviceHold || st.systemHold || (live?.settings?.inApp && liveHeld(live));
   return !options.checking && !deviceJobActive(options.jobs, options.deviceBusy)
-    && !liveUsesDevice(live) && !liveHeld(live)
+    && !liveUsesDevice(live) && !held
     && ['notFound', 'failedUsb'].includes(screen.state);
 }
 

@@ -43,3 +43,12 @@ connection state and no-open `device_presence` endpoint.
 
 Helpers used: no additional helper slots available during this bounded UI
 implementation; parent/backend workers provide integration review.
+
+## Integration boundary review
+
+Parent review found dormant `layerOff`/`idle` flags can remain with Live off and
+no pipeline. Presence watching now ignores those dormant theme flags (and a
+dormant tray pause), while continuing to respect device/system holds and jobs.
+Queued/running `recovery` jobs are included explicitly before a `deviceBusy`
+event arrives. Added regression checks for each boundary; state and layer tests,
+syntax and diff checks pass. No app or hardware action was performed.

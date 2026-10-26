@@ -23,6 +23,8 @@ assert.equal(screenStatus(manual, live('connected'), { checking: true }).state, 
 assert.equal(screenStatus(manual, live('connected'), { deviceBusy: true }).state, 'updating');
 assert.equal(screenStatus(manual, live('failedUsb'), { jobs: [{ kind: 'send', status: 'waiting' }] }).state, 'updating');
 assert.equal(deviceJobActive([{ kind: 'version', status: 'running' }]), false, 'CPU work is not a device hold');
+assert.equal(deviceJobActive([{ kind: 'recovery', status: 'waiting' }]), true, 'queued recovery blocks checks before deviceBusy arrives');
+assert.equal(screenStatus(manual, live('connected'), { jobs: [{ kind: 'recovery', status: 'running' }] }).state, 'updating');
 for (const hold of ['paused', 'deviceHold', 'systemHold', 'idle', 'layerOff']) {
   assert.equal(screenStatus(manual, live('failedUsb', { [hold]: true })), manual, `ignore old Live failure while ${hold}`);
 }
@@ -49,6 +51,14 @@ assert.equal(shouldWatchPresence(manual, live('failedUsb')), false, 'Live owns r
 assert.equal(shouldWatchPresence(manual, off, { checking: true }), false);
 assert.equal(shouldWatchPresence(manual, off, { deviceBusy: true }), false);
 assert.equal(shouldWatchPresence(manual, { ...off, status: { systemHold: true } }), false);
+assert.equal(shouldWatchPresence(manual, { ...off, status: { deviceHold: true } }), false);
+assert.equal(shouldWatchPresence(manual, off, { jobs: [{ kind: 'recovery', status: 'waiting' }] }), false);
+for (const dormant of ['layerOff', 'idle', 'paused']) {
+  const noPipeline = { ...off, status: { running: false, [dormant]: true } };
+  assert.equal(shouldWatchPresence(manual, noPipeline), true, `Live off + dormant ${dormant} still watches arrival`);
+  assert.equal(shouldWatchPresence({ state: 'notFound' }, noPipeline), true);
+  assert.equal(presenceArrival('none', { present: true, transport: 'winusb' }).arrived, true);
+}
 assert.equal(shouldWatchPresence(manual, { ...off, status: { twinning: true } }), true, 'editor-only preview does not hold USB');
 const arrived = presenceArrival('none', { present: true, transport: 'winusb' });
 assert.equal(arrived.arrived, true);
