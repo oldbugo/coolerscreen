@@ -8,6 +8,7 @@ import { backend } from './js/backend.js';
 import { createBandSlider } from './js/bandslider.js';
 import { createThemes, initApply, runApply, fillGuides, layers as Ly } from './js/themes.js';
 import { createScreenPreview } from './js/screenpreview.js';
+import { screenStatus, rememberedScreen, connectionMessage, liveMessage, shouldWatchPresence, presenceArrival } from './js/connection-status.js';
 
 // ---------- small helpers ----------
 const $ = id => document.getElementById(id);
@@ -92,11 +93,13 @@ const DEFAULT_FRAME = { zoom: 1, x: 0.5, y: 0.5 };
 const PILL = {
   checking: 'Checking screen…', ready: 'Screen ready', setup: 'Needs one-time setup', failedUsb: 'Not connected',
   notFound: 'Screen not found', busy: 'Screen in use', updating: 'Updating screen…', error: 'Screen problem',
-  noReply: 'Screen not responding',
+  noReply: 'Screen not responding', connecting: 'Connecting screen…',
 };
+function currentScreen() {
+  return screenStatus(S.screen, S.app?.live, { checking, deviceBusy: S.deviceBusy, jobs: S.jobs });
+}
 function pillState() {
-  const updating = S.jobs.some(j => (j.kind === 'send' || j.kind === 'setup') && j.status === 'running');
-  return updating ? 'updating' : S.screen.state;
+  return currentScreen().state;
 }
 function renderTop() {
   const st = pillState();
@@ -114,7 +117,7 @@ function renderLiveSwitch() {
   box.dataset.state = !c.inApp ? 'off' : hold ? 'paused' : 'on';
   box.title = !c.inApp ? 'Live is off: the screen shows Embedded.'
     : stt.deviceHold ? 'Live is paused: the screen is being updated.' : stt.systemHold ? 'Live is paused: the PC sleeps or is locked.' : stt.paused ? 'Live is paused from the tray.'
-    : stt.connected ? 'Live is on.' : 'Live is on; connecting…';
+    : liveMessage(l, currentScreen()) || 'Live is on.';
   sw.setAttribute('aria-label', 'Live on the screen: ' + (c.inApp ? 'on' : 'off'));
   // Live is on but the theme draws nothing live: say so, and where to fix it
   const none = !!c.inApp && stt.liveItems === false;
@@ -130,18 +133,24 @@ $('gear').onclick = () => openDrawer();
 function renderBanners() {
   const box = $('banners');
   box.textContent = '';
-  const st = S.screen.state;
-  const add = (kind, text, ...buttons) => box.append(el('div', { class: 'banner ' + kind }, el('p', { text }), ...buttons));
+  const screen = currentScreen(), st = screen.state;
+  const add = (kind, text, ...buttons) => {
+    const row = el('div', { class: 'banner ' + kind }, el('p', { text }), ...buttons);
+    box.append(row); return row;
+  };
+  const connection = (kind, ...buttons) => { add(kind, connectionMessage(screen), ...buttons).dataset.connectionState = st; };
   if (st === 'setup') add('warn', 'Your screen will switch off 30 seconds after this app closes until you run the one-time setup.',
     el('button', { class: 'btn primary', text: 'Set up screen', onclick: runSetup }));
-  if (st === 'failedUsb') add('danger', 'Windows couldn\'t connect to the screen when the PC started. This is a known glitch.',
+  if (st === 'failedUsb') connection('danger',
     el('button', { class: 'btn primary', text: 'Reconnect', title: 'Windows will ask for permission', onclick: runReconnect }));
-  if (st === 'notFound') add('danger', 'Screen not found. Check the cooler\'s USB cable and power, then try again.',
+  if (st === 'notFound') connection('danger',
     el('button', { class: 'btn secondary', text: 'Check again', onclick: checkScreen }));
-  if (st === 'noReply') add('danger', 'Screen not responding: it keeps playing but doesn\'t answer. Restarting it brings it back (about 10 seconds).',
+  if (st === 'noReply') connection('danger',
     el('button', { class: 'btn primary', text: 'Restart screen', onclick: runRestart }));
-  if (st === 'busy') add('warn', S.screen.error || 'Something else is using the screen.',
+  if (st === 'busy') connection('warn',
     el('button', { class: 'btn secondary', text: 'Try again', onclick: () => checkScreen() }));
+  if (st === 'error') connection('danger',
+    el('button', { class: 'btn secondary', text: 'Check again', onclick: checkScreen }));
   const sc = S.app && S.app.screenChanged;
   if (sc) {
     const mb = b => (b / 1e6).toFixed(1) + ' MB';
@@ -176,7 +185,7 @@ async function reviewMissing() {
   renderBanners();
 }
 
-// ---------- screen check (once at launch, after setup/reconnect, or on request; never polled) ----------
+// ---------- screen check (launch, explicit action or device return; healthy streams are never polled) ----------
 let checking = false;
 let busyTimer = 0;
 async function checkScreen(opts) {
@@ -195,16 +204,17 @@ async function checkScreen(opts) {
     else S.screen = { state: e.failedUsb ? 'failedUsb' : e.code === 'notFound' ? 'notFound' : e.code === 'busy' ? 'busy' : e.code === 'noReply' ? 'noReply' : 'error', info: null, error: e.message };
   }
   checking = false;
-  if (S.screen.state === 'busy') busyTimer = setTimeout(() => checkScreen({ quiet: true }), 4000); // clears itself when it frees
+  if (S.screen.state === 'busy' && !S.app?.live?.settings?.inApp) busyTimer = setTimeout(() => checkScreen({ quiet: true }), 4000); // Live already retries on its own
   renderTop(); renderBanners(); renderScreenSettings();
 }
 
 // ---------- data loading ----------
 async function loadApp() {
   S.app = await call('app_state');
+  S.screen = rememberedScreen(S.screen, S.app.live, { checking, deviceBusy: S.deviceBusy, jobs: S.jobs });
   if (S.app.build) document.title = `CoolerScreen ${S.app.appVersion} (${S.app.build.hash})${S.app.build.screen || ''}`;
   backend.setMediaBase(S.app.mediaBase);
-  renderTop(); renderBanners();
+  renderTop(); renderBanners(); renderScreenSettings();
   if (typeof themes !== 'undefined') themes.appChanged();
   paintDetailGuides();
 }
@@ -2412,7 +2422,7 @@ function runRestart() {
 function runReconnect() {
   return runDeviceJob('device_reconnect', {
     title: 'Reconnect the screen', confirmLabel: 'Reconnect',
-    text: ['This resets the USB port the screen is connected to, which fixes the start-up glitch.', 'Windows will ask for permission. Nothing else is changed.'],
+    text: ['This resets the cooler screen’s USB port so Windows can try to recognise it again.', 'Windows will ask for permission. Other USB ports are left alone.'],
   });
 }
 function runRestore() {
@@ -2458,17 +2468,18 @@ $('drawerBack').addEventListener('keydown', e => {
 });
 
 function renderScreenSettings() {
-  const st = S.screen;
+  const st = currentScreen();
   const text = {
     checking: 'Checking…', ready: 'Connected · set up (no background program needed)', setup: 'Connected, but the one-time setup is needed: the screen switches off 30 seconds after this app closes.',
-    failedUsb: 'Not connected: Windows couldn\'t connect to the screen when the PC started.', notFound: 'Screen not found. Check the cooler\'s USB cable and power.',
-    busy: st.error || 'Something else is using the screen.', updating: 'Busy updating the screen.', error: st.error || 'Problem talking to the screen.',
-    noReply: 'Screen not responding: it keeps playing but doesn\'t answer commands. Restart the screen.',
+    failedUsb: connectionMessage(st), notFound: connectionMessage(st),
+    busy: connectionMessage(st), updating: 'Busy updating the screen.', error: connectionMessage(st),
+    noReply: connectionMessage(st), connecting: connectionMessage(st),
   }[pillState()];
   $('scrStatus').textContent = text;
   $('scrSetup').hidden = st.state !== 'setup';
   $('scrSetupAgain').hidden = st.state !== 'ready';
-  $('scrCheck').disabled = st.state === 'checking';
+  $('scrCheck').disabled = st.state === 'checking' || st.state === 'updating';
+  $('scrRestart').disabled = st.state === 'checking' || st.state === 'updating';
   $('scrInfo').textContent = st.info ? Object.entries(st.info).filter(([k, v]) => typeof v !== 'object').map(([k, v]) => `${k}: ${v}`).join('\n') : (st.error || '–');
 }
 $('scrCheck').onclick = checkScreen;
@@ -2484,12 +2495,48 @@ $('scrSetupAgain').onclick = runSetup;
 $('aRestore').onclick = runRestore;
 
 // ---------- Settings > Live screen ----------
-// While the Live settings are on screen, the measured frame rate is refreshed every 2 s (cheap: one status read).
-setInterval(async () => {
-  const m = $('lvMsg');
-  if (!m || !m.offsetParent || document.hidden || !(S.app && S.app.live && S.app.live.settings && S.app.live.settings.inApp)) return;
-  try { S.app = await call('app_state'); renderLiveSettings(); } catch (e) { /* next tick */ }
-}, 2000);
+// Read current Live status without opening USB. It also drives the top status
+// when Settings is closed. Change only status text, preserving focused inputs.
+let connectionRefreshBusy = false, nextPresenceWatch = 0, lastPresenceKey = '';
+async function refreshConnection() {
+  if (connectionRefreshBusy || document.hidden || !S.app) return;
+  connectionRefreshBusy = true;
+  try {
+    const previousApp = S.app, previousLive = S.app.live, before = currentScreen();
+    const app = await call('app_state');
+    // A setting or app event may have returned while this read was in flight.
+    if (S.app !== previousApp || S.app.live !== previousLive) return;
+    S.app.live = app.live;
+    const now = currentScreen();
+    if (now.source === 'live' && now.state === 'ready') {
+      // Keep the last real recovery when Live is then turned off: an old failed
+      // manual check must not become the banner again.
+      S.screen = rememberedScreen(S.screen, S.app.live, { checking, deviceBusy: S.deviceBusy, jobs: S.jobs });
+      clearTimeout(busyTimer);
+    }
+    renderTop(); renderScreenSettings(); renderLiveMessage();
+    if (before.state !== now.state || before.source !== now.source || before.error !== now.error) renderBanners();
+    else {
+      // Retry countdown text can change without replacing a focused button.
+      const text = $('banners').querySelector('[data-connection-state] p');
+      if (text) text.textContent = connectionMessage(now);
+    }
+    if (Date.now() >= nextPresenceWatch && shouldWatchPresence(S.screen, S.app.live, { checking, deviceBusy: S.deviceBusy, jobs: S.jobs })) {
+      nextPresenceWatch = Date.now() + 10000;
+      const presence = await call('device_presence'); // enumeration only: never claims an interface
+      const { key, arrived } = presenceArrival(lastPresenceKey, presence);
+      lastPresenceKey = key;
+      if (arrived && shouldWatchPresence(S.screen, S.app.live, { checking, deviceBusy: S.deviceBusy, jobs: S.jobs })) await checkScreen({ quiet: true });
+    } else if (!shouldWatchPresence(S.screen, S.app.live, { checking, deviceBusy: S.deviceBusy, jobs: S.jobs })) lastPresenceKey = '';
+  } catch (e) { /* the next tick retries status; never infer a USB fault from an IPC error */ }
+  finally { connectionRefreshBusy = false; }
+}
+setInterval(refreshConnection, 2000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshConnection(); });
+function renderLiveMessage() {
+  const l = S.app?.live || {};
+  $('lvMsg').textContent = liveMessage(l, currentScreen());
+}
 function renderLiveSettings() {
   const l = (S.app && S.app.live) || {};
   const c = l.settings || {};
@@ -2506,14 +2553,14 @@ function renderLiveSettings() {
   for (const id of ['lvFps', 'lvDestroy', 'lvSleep', 'lvLock', 'lvShut']) $(id).disabled = !c.inApp;
   $('lvFpsOv').checked = !!c.fpsOverlay;
   $('lvFpsOv').disabled = !c.inApp;
-  const mf = Number(st.measuredFps) || 0;
-  $('lvMsg').textContent = !c.inApp ? '' : st.deviceHold ? 'Paused: the screen is busy.' : st.systemHold ? 'Paused: the PC sleeps or is locked.' : st.paused ? 'Paused from the tray.' : st.connected ? (mf > 0 ? `Running: ${mf.toFixed(1)} of ${st.fps >= 45 || !st.fps ? 60 : 30} frames per second sent.` : 'Running.') : 'Connecting…';
+  renderLiveMessage();
 }
 async function liveSet(patch) {
   try { S.app = await call('live_set', { patch }); }
   catch (e) { toast(e.message, true); }
+  S.screen = rememberedScreen(S.screen, S.app?.live, { checking, deviceBusy: S.deviceBusy, jobs: S.jobs });
   renderLiveSettings();
-  renderLiveSwitch();
+  renderTop(); renderBanners(); renderScreenSettings();
   if (typeof themes !== 'undefined') themes.appChanged();
   renderSelBar();
 }
@@ -2851,5 +2898,5 @@ initSettingsNav();
   else if (!S.userNavigated && S.view === 'mine' && !S.originals.length && !S.adding.length && enabledSources().length) setView('browse');
   renderActivity();
   backend.start();
-  checkScreen(); // once at launch (opens the screen briefly); never polled
+  checkScreen(); // once at launch; presence watches only resume a failed check when the device returns
 })().catch(e => toast(e.message, true, 10000));
