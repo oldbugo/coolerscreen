@@ -604,8 +604,9 @@ fn shutdown(app: &App) {
 }
 
 fn jobs_busy(app: &App) -> bool {
-    let (queued, running) = app.sched.counts();
-    queued > 0 || running > 0
+    // Preserve CoolerScreen's user-work contract. Thumbnail/preview jobs are
+    // cancellable background work; shutdown cancels them through App::shutdown.
+    app.busy_for_quit() || app.uploading()
 }
 
 #[cfg(windows)]
