@@ -948,7 +948,7 @@ impl App {
             let mut p = |f: f64, m: &str| ctx.progress(f, m);
             match w.as_str() {
                 "setup" => app.device.setup_winusb(&mut p),
-                "reconnect" => app.device.reconnect(&mut p),
+                "reconnect" => app.device.reconnect_unresponsive(&mut p),
                 _ => app.device.restore_serial(&mut p),
             }
         });

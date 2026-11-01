@@ -2,9 +2,11 @@
 # ("Unknown USB Device (Device Descriptor Request Failed)", instance USB\VID_0000&PID_0002\...).
 # It power-cycles the single USB hub port the broken device sits on (IOCTL_USB_HUB_CYCLE_PORT), which makes the
 # screen enumerate again. -DryRun only lists what it would cycle (no admin rights needed).
-# Only one failed port with an exact remembered screen parent/location pair is eligible. Never reset unrelated USB ports.
+# Failed enumeration uses one exact remembered parent/location pair. Explicit
+# -ResetPresent instead permits one verified normal cooler parent/port only.
+# Never reset unrelated USB ports; neither mode runs automatically.
 # Log: -Log <file> (CoolerScreen 2 passes a per-run file; default %TEMP%\coolerscreen-setup.log) (last line is "RESULT: OK" or "RESULT: ERROR ...")
-param([string]$Log = (Join-Path $env:TEMP 'coolerscreen-setup.log'), [switch]$DryRun)
+param([string]$Log = (Join-Path $env:TEMP 'coolerscreen-setup.log'), [switch]$DryRun, [switch]$ResetPresent)
 $log = $Log
 function Log($m) { "$(Get-Date -Format 'HH:mm:ss') $m" | Add-Content $log }
 Remove-Item $log -ErrorAction SilentlyContinue
@@ -19,26 +21,36 @@ public static class Hub {
   [DllImport("setupapi.dll", SetLastError = true)] public static extern bool SetupDiEnumDeviceInterfaces(IntPtr s, IntPtr d, ref Guid g, int i, ref SP_DEVICE_INTERFACE_DATA r);
   [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool SetupDiGetDeviceInterfaceDetail(IntPtr s, ref SP_DEVICE_INTERFACE_DATA i, IntPtr detail, int size, out int req, ref SP_DEVINFO_DATA d);
   [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool SetupDiGetDeviceInstanceId(IntPtr s, ref SP_DEVINFO_DATA d, System.Text.StringBuilder id, int size, out int req);
+  [DllImport("setupapi.dll", SetLastError = true)] public static extern bool SetupDiDestroyDeviceInfoList(IntPtr s);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern SafeFileHandle CreateFile(string n, uint access, uint share, IntPtr sa, uint disp, uint flags, IntPtr t);
   [DllImport("kernel32.dll", SetLastError = true)] public static extern bool DeviceIoControl(SafeFileHandle h, uint code, byte[] inb, int inl, byte[] outb, int outl, out int ret, IntPtr ov);
 
-  public static string PathFor(string instanceId) {
+  public static string[] PathsFor(string instanceId) {
+    var paths = new System.Collections.Generic.List<string>();
     Guid g = new Guid("f18a0e88-c30c-11d0-8815-00a0c906bed8");
     IntPtr s = SetupDiGetClassDevs(ref g, null, IntPtr.Zero, 0x12); // PRESENT | DEVICEINTERFACE
+    if (s == new IntPtr(-1)) return paths.ToArray();
+    try {
     for (int i = 0; ; i++) {
       var ifd = new SP_DEVICE_INTERFACE_DATA(); ifd.cbSize = Marshal.SizeOf(ifd);
-      if (!SetupDiEnumDeviceInterfaces(s, IntPtr.Zero, ref g, i, ref ifd)) return null;
+      if (!SetupDiEnumDeviceInterfaces(s, IntPtr.Zero, ref g, i, ref ifd)) return paths.ToArray();
       var dd = new SP_DEVINFO_DATA(); dd.cbSize = Marshal.SizeOf(dd);
       int req; SetupDiGetDeviceInterfaceDetail(s, ref ifd, IntPtr.Zero, 0, out req, ref dd);
+      if (req < 8) continue;
       IntPtr buf = Marshal.AllocHGlobal(req);
+      try {
       Marshal.WriteInt32(buf, IntPtr.Size == 8 ? 8 : 6);
-      SetupDiGetDeviceInterfaceDetail(s, ref ifd, buf, req, out req, ref dd);
+      if (!SetupDiGetDeviceInterfaceDetail(s, ref ifd, buf, req, out req, ref dd)) continue;
       string path = Marshal.PtrToStringUni(new IntPtr(buf.ToInt64() + 4));
-      Marshal.FreeHGlobal(buf);
       var sb = new System.Text.StringBuilder(512);
-      SetupDiGetDeviceInstanceId(s, ref dd, sb, 512, out req);
-      if (string.Equals(sb.ToString(), instanceId, StringComparison.OrdinalIgnoreCase)) return path;
+      if (SetupDiGetDeviceInstanceId(s, ref dd, sb, 512, out req) && !String.IsNullOrEmpty(path) && string.Equals(sb.ToString(), instanceId, StringComparison.OrdinalIgnoreCase)) paths.Add(path);
+      } finally { Marshal.FreeHGlobal(buf); }
     }
+    } finally { SetupDiDestroyDeviceInfoList(s); }
+  }
+  public static string PathFor(string instanceId) {
+    var paths = PathsFor(instanceId);
+    return paths.Length == 1 ? paths[0] : null;
   }
   public static string Cycle(string hubPath, int port) {
     var h = CreateFile(hubPath, 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
@@ -65,14 +77,32 @@ function Select-CoolerReconnectTargets($FailedNodes, $ScreenHistory) {
   })
 }
 
+function Select-CoolerPresentReconnectTarget($PresentNodes) {
+  $normal = @($PresentNodes | Where-Object { $_.Node.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' })
+  if ($normal.Count -ne 1) { throw "cannot identify one present cooler-screen parent node safely (matched $($normal.Count)). No USB ports were reset." }
+  $target = $normal[0]
+  $m = [regex]::Match([string]$target.Location, '^Port_#(\d+)\.Hub_#\d+$')
+  if (-not $target.Parent -or $target.Parent -eq $target.Node.InstanceId -or -not $m.Success -or [int]$m.Groups[1].Value -lt 1 -or [int]$m.Groups[1].Value -gt 255) {
+    throw 'present cooler parent/location is incomplete or invalid; no USB port reset'
+  }
+  $target
+}
+
 try {
-  $screen = Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' } | Select-Object -First 1
+  $screen = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' })
   $failed = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_0000&PID_000[0-9A-F]\\' })
-  if ($screen) {
+  if ($screen -and -not $ResetPresent) {
     Log "screen already present: $($screen.InstanceId); no USB port reset needed"
     Log 'RESULT: OK'
     return
   }
+  if ($ResetPresent) {
+    $presentCandidates = @($screen | ForEach-Object {
+      [pscustomobject]@{ Node = $_; Parent = Prop $_.InstanceId 'DEVPKEY_Device_Parent'; Location = Prop $_.InstanceId 'DEVPKEY_Device_LocationInfo' }
+    })
+    $targets = @(Select-CoolerPresentReconnectTarget $presentCandidates)
+    Log 'explicit ResetPresent: one normal cooler parent node selected for USB port recovery'
+  } else {
   if ($DryRun) {
     # Show that the port lookup works on the screen's own node (the same steps a failed node goes through).
     foreach ($d in @($screen) + $failed | Where-Object { $_ }) {
@@ -98,6 +128,7 @@ try {
   })
   Log "failed nodes: $($failed.Count); remembered screen locations: $(($history | ForEach-Object { $_.Location }) -join ', ')"
   $targets = @(Select-CoolerReconnectTargets $candidates $history)
+  }
   if ($targets.Count -ne 1) {
     throw "cannot identify one failed cooler-screen USB port safely (matched $($targets.Count)). No USB ports were reset. Unplug and reconnect the screen's USB cable."
   }
@@ -108,8 +139,15 @@ try {
     $m = [regex]::Match([string]$loc, 'Port_#(\d+)')
     if (-not $m.Success) { throw "no port in screen location '$loc'; no USB port reset" }
     $port = [int]$m.Groups[1].Value
-    $path = [Hub]::PathFor($hub)
-    if (-not $path) { throw 'screen USB hub interface not found; no USB port reset' }
+    $paths = @([Hub]::PathsFor($hub))
+    if ($paths.Count -ne 1) { throw "screen USB parent must have exactly one present hub interface (found $($paths.Count)); no USB port reset" }
+    $path = $paths[0]
+    if ($ResetPresent) {
+      $current = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -match '^USB\\VID_33C3&PID_77(88|91)\\' })
+      if ($current.Count -ne 1 -or $current[0].InstanceId -ne $nodeId -or (Prop $nodeId 'DEVPKEY_Device_Parent') -ne $hub -or (Prop $nodeId 'DEVPKEY_Device_LocationInfo') -ne $loc) {
+        throw 'present cooler identity or parent/location changed; no USB port reset'
+      }
+    }
     if ($DryRun) { Log "WOULD cycle $nodeId hub $hub port $port"; continue }
     $cycleResult = [Hub]::Cycle($path, $port)
     Log "cycling $nodeId hub $hub port $port : $cycleResult"

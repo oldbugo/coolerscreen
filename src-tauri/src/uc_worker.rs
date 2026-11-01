@@ -213,6 +213,7 @@ const COMMANDS: &[&str] = &[
     "twin_watch",
     "live_set",
     "activate",
+    "health_status",
     "shutdown",
 ];
 
@@ -503,12 +504,14 @@ fn dispatch(app: &App, command: &str, a: &Value) -> CoreResult<Value> {
         "lyrics_status",
         "ext_sensor_status",
         "game_fps_status",
+        "health_status",
     ]
     .contains(&command)
     {
         native_conflict(app.device.fake_mode().is_some())?;
     }
     match command {
+        "health_status"=>Ok(health_value(&app.live.status())),
         "app_state" => Ok(app.app_state()),
         "activity" => Ok(app.activity()),
         "settings_update" => app.settings_update(a.get("patch").map(|_| object(a,"patch")).transpose()?.unwrap_or(a)),
@@ -594,6 +597,55 @@ fn dispatch(app: &App, command: &str, a: &Value) -> CoreResult<Value> {
         },
         _ => Err(CoreError::coded("unsupported","Unknown cooler command.").status(404)),
     }
+}
+
+/// The health reply deliberately omits raw messages, settings, theme IDs/paths
+/// and firmware replies. Connection stage is coarse; this does not claim to
+/// identify which individual handshake write failed.
+fn health_value(live: &Value) -> Value {
+    let connection = &live["connection"];
+    let state = connection["state"].as_str().unwrap_or("error");
+    let message = connection["message"]
+        .as_str()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let held = live["paused"] == true
+        || live["deviceHold"] == true
+        || live["systemHold"] == true
+        || live["idle"] == true;
+    let (state, code, stage) = if live["running"] != true {
+        ("off", "off", "off")
+    } else if held {
+        ("paused", "paused", "hold")
+    } else if live["connected"] == true {
+        ("connected", "connected", "streaming")
+    } else {
+        let code = match state {
+            "connecting" => "connecting",
+            "notFound" => "not_found",
+            "failedUsb" => "descriptor_failure",
+            "busy" => "busy",
+            "noReply" => "no_reply",
+            _ if message.contains("timed out") || message.contains("timeout") => "write_timeout",
+            _ if message.contains("short write") => "short_write",
+            _ => "transport_error",
+        };
+        (
+            match state {
+                "connecting" | "notFound" | "failedUsb" | "busy" | "noReply" | "error" => state,
+                _ => "error",
+            },
+            code,
+            "connecting",
+        )
+    };
+    json!({"running":live["running"]==true,"connected":live["connected"]==true,
+        "paused":live["paused"]==true,"deviceHold":live["deviceHold"]==true,"systemHold":live["systemHold"]==true,"idle":live["idle"]==true,
+        "connectionState":state,"code":code,"stage":stage,"attempts":connection["attempts"].as_u64().unwrap_or(0),"retryInSeconds":connection["retryInSeconds"].as_u64().unwrap_or(0).min(60),
+        "measuredFps":live["measuredFps"].as_f64().filter(|v|v.is_finite()&&*v>=0.0&&*v<=1000.0).unwrap_or(0.0),
+        "rxBytes":cs_core::device::frame::IN_BYTES.load(std::sync::atomic::Ordering::Relaxed),
+        "rxTransfers":cs_core::device::frame::IN_TRANSFERS.load(std::sync::atomic::Ordering::Relaxed),
+        "statusFrames":cs_core::device::frame::STATUS_FRAMES.load(std::sync::atomic::Ordering::Relaxed)})
 }
 
 fn shutdown(app: &App) {
@@ -914,6 +966,7 @@ pub fn run() -> CoreResult<()> {
                 "originals_list",
                 "theme_standard",
                 "sources_list",
+                "health_status",
             ]
             .contains(&request.command.as_str())
             {
@@ -935,8 +988,14 @@ pub fn run() -> CoreResult<()> {
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 // State/activity are responsive while a slow import or preview runs.
-                let _guard = if ["app_state", "activity", "job_get", "device_presence"]
-                    .contains(&request.command.as_str())
+                let _guard = if [
+                    "app_state",
+                    "activity",
+                    "job_get",
+                    "device_presence",
+                    "health_status",
+                ]
+                .contains(&request.command.as_str())
                 {
                     None
                 } else {
@@ -973,6 +1032,23 @@ pub fn run() -> CoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn health_is_read_only_whitelist_and_keeps_timeout_distinct_from_absence() {
+        let live = json!({"running":true,"connected":false,"connection":{"state":"error","message":"USB write timed out seed-secret C:\\private\\file","attempts":9,"retryInSeconds":15},"theme":"secret","account":"secret"});
+        let health = health_value(&live);
+        assert_eq!(health["code"], "write_timeout");
+        assert_eq!(health["stage"], "connecting");
+        let serialized = health.to_string();
+        for forbidden in ["seed-secret", "private", "theme", "account"] {
+            assert!(!serialized.contains(forbidden));
+        }
+        let mut absent = live.clone();
+        absent["connection"]["state"] = json!("notFound");
+        assert_eq!(health_value(&absent)["code"], "not_found");
+        absent["systemHold"] = json!(true);
+        assert_eq!(health_value(&absent)["stage"], "hold");
+        assert!(parse(br#"{"v":1,"id":1,"command":"health_status","args":{}}"#).is_ok());
+    }
     #[test]
     fn bounded_protocol_rejects_unknown_and_wrong_types() {
         assert!(parse(br#"{"v":1,"id":2,"command":"activity","args":{}}"#).is_ok());
