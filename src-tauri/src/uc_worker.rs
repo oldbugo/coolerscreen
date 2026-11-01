@@ -946,10 +946,13 @@ pub fn run() -> CoreResult<()> {
             .unwrap_or_else(|_| {
                 Err(CoreError::coded("worker", "Cooler request failed.").status(500))
             });
-            out.reply(request.id, result);
             let mut count = active.0.lock().unwrap();
             *count -= 1;
             active.1.notify_all();
+            drop(count);
+            // A completed response is an admission boundary: the host may send
+            // shutdown immediately after receiving it.
+            out.reply(request.id, result);
         });
     }
     // Parent loss closes stdin. Let admitted operations and noncancellable uploads settle before cleanup.
