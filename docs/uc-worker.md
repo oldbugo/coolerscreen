@@ -1,5 +1,12 @@
 # Unified Control cooler worker
 
+UC 0.3.0 stand-down (2026-11-02): the installed combined app pins this worker to
+`88cd041c4a4a19d66bd332b913ba34d745b075a2`. Consolidating the reviewed worker/health
+history onto this repository's main does not change that pin, install a new
+standalone CoolerScreen build, or establish physical cooler recovery. The
+descriptor-failure incident and deferred cable/sleep checks remain recorded in
+`oldbugo/unified-control`'s acceptance and connection-health documents.
+
 This is an engine entry point for the combined app, built with `cargo build --manifest-path src-tauri/Cargo.toml --bin uc-cooler-worker`. It reuses `cs_core` from this repository; it does not launch the CoolerScreen GUI, tray or installed application. UC packages the reviewed executable and the existing ffmpeg/resources separately.
 
 The worker requires `UC_COOLER_WORKER=1` and an absolute `COOLERSCREEN_HOME`. The host supplies only private inherited stdin/stdout handles; there is no named command endpoint or command HTTP server. Lines are JSON, version 1, capped at 32 MiB before parsing. Requests are `{v:1,id:u64,command:string,args:object}`. Responses are `{v:1,id,ok:true,result}` or `{v:1,id,ok:false,error:{error,status,code,...}}`. Events are `{v:1,event,payload}` for `ready`, `cs:job`, `cs:library`, `cs:device` and `cs:app`. The ready payload includes engineVersion, capabilities, fake and blocked/message. No protocol contents are logged.
