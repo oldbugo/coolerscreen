@@ -351,6 +351,10 @@ impl DeviceService {
     // ---------- one-time driver scripts (scripts/*.ps1, elevated) ----------
 
     fn run_elevated(&self, script: &str) -> CoreResult<String> {
+        self.run_elevated_with(script, &[])
+    }
+
+    fn run_elevated_with(&self, script: &str, extra: &[&str]) -> CoreResult<String> {
         if let Some(f) = &self.fake {
             // test hook: never elevate or change drivers; just switch the simulated state
             self.fsleep(1500);
@@ -359,7 +363,7 @@ impl DeviceService {
         }
         #[cfg(not(windows))]
         {
-            let _ = script;
+            let _ = (script, extra);
             return Err(CoreError::new("Driver setup is only needed (and supported) on Windows."));
         }
         #[cfg(windows)]
@@ -370,7 +374,7 @@ impl DeviceService {
                 return Err(CoreError::new(format!("Setup script not found: {}", file.display())));
             }
             let log = self.new_setup_log(script);
-            let ps = script_command(&file, &log, &[], true);
+            let ps = script_command(&file, &log, extra, true);
             let out = std::process::Command::new("powershell")
                 .args(["-NoProfile", "-Command", &ps])
                 .creation_flags(0x0800_0000)
@@ -472,11 +476,46 @@ impl DeviceService {
         }
         Ok(json!({ "already": false }))
     }
+
+    /// Explicit manual recovery of an enumerated but unresponsive cooler.
+    /// The caller holds the exclusive device queue; never runs automatically.
+    pub fn reconnect_unresponsive(&self, progress: Progress) -> CoreResult<Value> {
+        if self.state()["transport"] == "none" {
+            return self.reconnect(progress);
+        }
+        progress(
+            0.1,
+            "Waiting for administrator approval to reset the cooler USB port",
+        );
+        self.run_elevated_with("reconnect.ps1", &["-ResetPresent"])?;
+        progress(0.6, "Checking the cooler firmware after the USB reset");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if self.check_once().is_ok() {
+                progress(1.0, "The cooler answered after its USB port reset");
+                return Ok(json!({"already":false,"firmwareVerified":true}));
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            self.fsleep(500);
+        }
+        Err(CoreError::coded("noReply","The cooler USB port was reset, but its firmware still does not answer. Disconnect and reconnect only the cooler screen USB cable; a port reset may not remove its power."))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_reconnect_checks_present_firmware_without_real_effects() {
+        let fake = DeviceService::fake("winusb", 0.001, false);
+        assert_eq!(
+            fake.reconnect_unresponsive(&mut |_, _| {}).unwrap()["firmwareVerified"],
+            true
+        );
+    }
 
     fn mjpeg_file(dir: &Path, name: &str) -> PathBuf {
         // Smallest file the MJPEG guard accepts: a top-level moov with an 'mp4v'-less 'jpeg' sample entry.
