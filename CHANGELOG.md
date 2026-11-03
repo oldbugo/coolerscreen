@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.18.2 - 2026-11-03 (UC worker Live lifetime)
+
+- Saved Live claims streams started by the editor's twin, preview or fit tools, including host activation and explicit
+  Live off/on. Closing those temporary views leaves enabled Live running.
+- Coordinate temporary stream retirement and new startup/promotion, so an older cleanup cannot stop a newly enabled
+  Live stream or overlap its USB handover. Explicit Live off and app shutdown still end the stream.
+- Regress worker ownership, stale fit state and deterministic concurrent cleanup/startup. This is the engine consumed
+  by UC0.4; it does not install or replace the separate CoolerScreen application.
+
 ## 4.18.1 - 2026-10-26 (connection reliability)
 
 - Screen status follows the current Live connection, with specific USB, missing,

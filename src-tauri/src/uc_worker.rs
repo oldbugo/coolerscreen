@@ -478,11 +478,11 @@ fn live_set(app: &App, args: &Value) -> CoreResult<Value> {
     }
     if now.in_app {
         app.prepare_live();
-        if app.live.running() {
-            app.live.reload(&app.live_config());
-        } else {
-            app.live.start_with(app.live_config());
-        }
+        // A running pipeline may belong to an editor-only twin or preview.
+        // Claim it for saved Live before reloading, so view cleanup cannot stop it.
+        let config = app.live_config();
+        app.live.start_with(config.clone());
+        app.live.reload(&config);
     } else if before.in_app || app.live.running() {
         app.live.stop();
     }
@@ -578,7 +578,9 @@ fn dispatch(app: &App, command: &str, a: &Value) -> CoreResult<Value> {
             // Merely spawning the worker still never starts Live.
             if app.settings.load().live_in_app() {
                 app.prepare_live();
-                if app.live.running() {app.live.reload(&app.live_config());} else {app.live.start_with(app.live_config());}
+                let config = app.live_config();
+                app.live.start_with(config.clone());
+                app.live.reload(&config);
             }
             Ok(app.app_state())
         },
@@ -1115,12 +1117,40 @@ mod tests {
             .code_is("test_mode"));
         assert!(dispatch(&app, "activate", &json!({})).is_ok());
         assert!(!app.live.running());
+        // The editor can open its own temporary twin before Live is enabled.
+        // Enabling Live must claim that pipeline: closing the editor must not
+        // switch the saved Live setting back to an effectively stopped stream.
+        dispatch(&app, "twin_watch", &json!({"on":true})).unwrap();
+        assert!(app.live.running() && app.live.twinning());
+        dispatch(&app, "live_set", &json!({"patch":{"inApp":true,"music":false}})).unwrap();
+        assert!(!app.live.twinning(), "enabled Live owns the stream instead of the editor");
+        dispatch(&app, "twin_watch", &json!({"on":false})).unwrap();
+        assert!(app.live.running(), "leaving the editor keeps enabled Live running");
+        dispatch(&app, "live_set", &json!({"patch":{"inApp":false}})).unwrap();
+        assert!(!app.live.running(), "explicitly disabling Live still stops it");
         app.settings
             .update(|settings| settings["live"] = json!({"inApp":true,"music":false}))
             .unwrap();
         assert!(!app.live.running());
+        // Host activation can race the first editor twin request after ready.
+        dispatch(&app, "twin_watch", &json!({"on":true})).unwrap();
+        assert!(app.live.twinning());
         dispatch(&app, "activate", &json!({})).unwrap();
-        assert!(app.live.running());
+        assert!(app.live.running() && !app.live.twinning(), "saved Live activation claims an early editor stream");
+        dispatch(&app, "twin_watch", &json!({"on":false})).unwrap();
+        assert!(app.live.running(), "activation survives editor cleanup");
+        dispatch(&app, "live_set", &json!({"patch":{"inApp":false}})).unwrap();
+        app.live.tune_start(cs_core::core::fit::Fit::default());
+        assert!(app.live.tuning() && app.live.running());
+        dispatch(&app, "live_set", &json!({"patch":{"inApp":true}})).unwrap();
+        app.live.tune_end();
+        assert!(app.live.running(), "enabled Live also takes ownership from temporary fit tuning");
+        dispatch(&app, "live_set", &json!({"patch":{"inApp":false}})).unwrap();
+        app.live.tune_start(cs_core::core::fit::Fit::default());
+        dispatch(&app, "live_set", &json!({"patch":{"inApp":false}})).unwrap();
+        dispatch(&app, "live_set", &json!({"patch":{"inApp":true}})).unwrap();
+        app.live.tune_end();
+        assert!(app.live.running(), "explicit Live off clears stale temporary fit ownership before the next enable");
         assert!(dispatch(&app, "theme_standard", &json!({}))
             .unwrap()
             .is_object());
