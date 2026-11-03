@@ -25,6 +25,9 @@ pub const LAYER: u32 = 16;
 pub const FITCAL: u32 = 32;
 
 pub struct LiveHost {
+    /// A new pipeline may start only after the previous stream's hand-over is finished.
+    /// Getters/rendering use `pipeline` alone and never wait for this lifecycle gate.
+    lifecycle: Mutex<()>,
     pipeline: Mutex<Option<Arc<Pipeline>>>,
     /// Frames are discarded (measuring or testing without the screen).
     no_device: AtomicBool,
@@ -92,6 +95,7 @@ fn hlog(msg: &str) {
 impl Default for LiveHost {
     fn default() -> Self {
         LiveHost {
+            lifecycle: Mutex::new(()),
             pipeline: Mutex::new(None),
             no_device: AtomicBool::new(false),
             holds: AtomicU32::new(0),
@@ -234,9 +238,7 @@ impl LiveHost {
     pub fn tune_end(self: &Arc<Self>) {
         *self.fit_tune.lock().unwrap() = None;
         self.apply_fit();
-        if self.tune_temp.swap(false, SeqCst) {
-            self.stop();
-        }
+        self.stop_temporary(&self.tune_temp, || {});
     }
 
     pub fn tuning(&self) -> bool {
@@ -299,11 +301,10 @@ impl LiveHost {
         if self.preview.lock().unwrap().is_none() {
             return false;
         }
-        let temp = self.preview_temp.swap(false, SeqCst);
+        let temp = self.stop_temporary(&self.preview_temp, || {});
         if temp {
-            // stop() reads the previewed theme from the pipeline for the ending, then forgets the preview
+            // The detached pipeline reads its previewed theme for the hand-over.
             hlog("preview: ended, the temporary stream stops");
-            self.stop();
         } else {
             *self.preview.lock().unwrap() = None;
             *self.preview_touched.lock().unwrap() = None;
@@ -363,9 +364,8 @@ impl LiveHost {
     /// The editor closed or is hidden: a stream started for the twin ends; live's own stream is left alone.
     pub fn twin_stop(self: &Arc<Self>) {
         crate::live::twin::clear();
-        if self.twin_temp.swap(false, SeqCst) {
+        if self.stop_temporary(&self.twin_temp, || {}) {
             hlog("twin: the editor closed; its stream stops");
-            self.stop();
             self.evaluate_idle();
         }
     }
@@ -515,14 +515,27 @@ impl LiveHost {
 
     /// Start live with this config (no-op when already running). Returns quickly; the pipeline connects on its own threads.
     pub fn start_with(&self, cfg: Config) {
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        self.start_with_locked(cfg);
+    }
+
+    /// The lifecycle gate is held by the caller, including while an editor-only
+    /// pipeline is retired before its replacement starts.
+    fn start_with_locked(&self, cfg: Config) {
         let mut g = self.pipeline.lock().unwrap();
         if g.is_some() {
             self.preview_temp.store(false, SeqCst); // live was switched on during a preview: the stream is live's now
+            self.tune_temp.store(false, SeqCst); // likewise, ending fit tuning must leave enabled Live alone
             if self.twin_temp.swap(false, SeqCst) {
                 // live was switched on while the editor's twin ran its own stream: the real stream (live's) is what is started now
+                let previous = g.take();
+                self.off_stopped.store(false, SeqCst);
+                self.preview_forget();
                 drop(g);
-                self.stop();
-                self.start_with(cfg);
+                if let Some(previous) = previous {
+                    previous.stop();
+                }
+                self.start_with_locked(cfg);
             }
             return;
         }
@@ -547,11 +560,36 @@ impl LiveHost {
         *g = Some(p);
     }
 
+    /// End only the pipeline still owned by this temporary editor feature.
+    /// Decide ownership and detach under the same lock used to start/claim Live;
+    /// blocking shutdown afterward cannot take a newly enabled Live pipeline.
+    fn stop_temporary(&self, owner: &AtomicBool, before_stop: impl FnOnce()) -> bool {
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        let pipeline = {
+            let mut pipeline = self.pipeline.lock().unwrap();
+            if !owner.swap(false, SeqCst) {
+                return false;
+            }
+            self.off_stopped.store(false, SeqCst);
+            self.preview_forget();
+            self.twin_temp.store(false, SeqCst);
+            self.tune_temp.store(false, SeqCst);
+            pipeline.take()
+        };
+        before_stop();
+        if let Some(pipeline) = pipeline {
+            pipeline.stop();
+        }
+        true
+    }
+
     /// Stop live and end the stream properly (the screen plays its loop clip again). Blocks until the threads are done.
     pub fn stop(&self) {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         self.off_stopped.store(false, SeqCst);
         self.preview_forget();
         self.twin_temp.store(false, SeqCst);
+        self.tune_temp.store(false, SeqCst);
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
             hlog("stop (live switched off or the app is closing)");
@@ -561,9 +599,11 @@ impl LiveHost {
 
     /// Shutdown or logoff: the fast ending (at most 800 ms), loop clip or screen off.
     pub fn stop_fast(&self, screen_off: bool) {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         self.off_stopped.store(false, SeqCst);
         self.preview_forget();
         self.twin_temp.store(false, SeqCst);
+        self.tune_temp.store(false, SeqCst);
         self.end_calibration_now();
         let p = self.pipeline.lock().unwrap().take();
         if let Some(p) = p {
@@ -648,6 +688,7 @@ impl LiveHost {
     /// Like `hold`, but ends the stream with the screen off (sleep or lock set to turn the screen off). Live is started again
     /// when all holds are released.
     pub fn hold_screen_off(&self, bit: u32) {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         self.resume_gen.fetch_add(1, SeqCst);
         self.add_hold(bit);
         let p = self.pipeline.lock().unwrap().take();
@@ -1168,6 +1209,55 @@ mod tests {
         assert_eq!(p.shared.fps.load(SeqCst), 15);
         h.twin_stop();
         assert!(!h.running() && !h.twinning(), "the editor-only stream is gone");
+    }
+
+    /// With Live on the editor gets the frames the engine sends (no second stream), and closing the editor leaves live alone.
+    #[test]
+    fn temporary_retirement_finishes_before_enabled_live_starts() {
+        for owner in ["twin", "fit", "preview"] {
+            let h = LiveHost::new();
+            h.set_no_device(true);
+            h.set_config_override(Some(Config::default()));
+            h.set_theme(marked(1));
+            let flag = match owner {
+                "twin" => { h.twin_start(); &h.twin_temp },
+                "fit" => { h.tune_start(crate::core::fit::Fit::default()); &h.tune_temp },
+                _ => { h.preview_start(marked(2)); &h.preview_temp },
+            };
+            let before = h.pipeline().unwrap();
+            let end_reached = Arc::new(std::sync::Barrier::new(2));
+            let resume_end = Arc::new(std::sync::Barrier::new(2));
+            std::thread::scope(|scope| {
+                let end_reached_worker = end_reached.clone();
+                let resume_end_worker = resume_end.clone();
+                let h_end = h.clone();
+                let end = scope.spawn(move || h_end.stop_temporary(flag, || {
+                    end_reached_worker.wait();
+                    resume_end_worker.wait();
+                }));
+                end_reached.wait();
+                let (starting, start_attempted) = std::sync::mpsc::channel();
+                let (finished, start_finished) = std::sync::mpsc::channel();
+                let h_start = h.clone();
+                let start = scope.spawn(move || {
+                    starting.send(()).unwrap();
+                    h_start.start_with(Config::default());
+                    finished.send(h_start.pipeline().unwrap()).unwrap();
+                });
+                start_attempted.recv().unwrap();
+                let early = start_finished.recv_timeout(Duration::from_millis(100));
+                let waited_for_retirement = early.is_err();
+                resume_end.wait();
+                assert!(end.join().unwrap());
+                let enabled = early.unwrap_or_else(|_| start_finished.recv_timeout(Duration::from_secs(10)).unwrap());
+                start.join().unwrap();
+                assert!(waited_for_retirement, "{owner}: new Live cannot start while the old pipeline is still handing over");
+                assert!(h.running(), "{owner}: newly enabled Live survives older temporary cleanup");
+                assert!(Arc::ptr_eq(&enabled, &h.pipeline().unwrap()));
+                assert!(!Arc::ptr_eq(&before, &enabled), "{owner}: the old temporary stream was detached");
+            });
+            h.stop();
+        }
     }
 
     /// With Live on the editor gets the frames the engine sends (no second stream), and closing the editor leaves live alone.
