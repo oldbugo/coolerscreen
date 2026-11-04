@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.19.0 - 2026-11-05 (UC shared hardware)
+
+- UC's worker consumes validated, timestamped CPU/RAM/NVIDIA snapshots instead of starting duplicate legacy and modern
+  aggregate sensor readers. Actual visible widgets register expiring demand at their requested1/2/4Hz rates.
+- Preserve GPU temperature, load, clock, memory, power, fan and product name, plus used/total RAM. Missing or expired
+  readings display dashes and clear bars. Strict generation/sequence/time checks keep rejected data from renewing values.
+- Add bounded private hardware exchange and finite verification counters. Standalone CoolerScreen keeps local mode;
+  this engine milestone is bundled by UC and does not install or replace the standalone application.
+
 ## 4.18.2 - 2026-11-03 (UC worker Live lifetime)
 
 - Saved Live claims streams started by the editor's twin, preview or fit tools, including host activation and explicit

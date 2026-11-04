@@ -82,6 +82,7 @@ impl Hub {
 
     /// Ask for a metric (registers the demand): its latest value and total, or None when it cannot be read.
     pub fn read(self: &Arc<Self>, key: &str, rate: u32) -> (Option<f32>, Option<f32>) {
+        if super::shared_hardware::replaces(key) {return super::shared_hardware::read_metric(key,rate);}
         let mut g = self.s.lock().unwrap();
         let first = !g.slots.contains_key(key);
         let slot = g.slots.entry(key.to_string()).or_default();
@@ -95,6 +96,7 @@ impl Hub {
 
     /// History within the last `secs` seconds, oldest first, as (age in seconds, value).
     pub fn history(&self, key: &str, secs: f32) -> Vec<(f32, f32)> {
+        if super::shared_hardware::replaces(key) {return super::shared_hardware::history(key,secs);}
         let g = self.s.lock().unwrap();
         let now = Instant::now();
         g.slots.get(key).map(|s| s.ring.iter().map(|(t, v)| ((now - *t).as_secs_f32(), *v)).filter(|(a, _)| *a <= secs).collect()).unwrap_or_default()
@@ -122,6 +124,7 @@ impl Hub {
     }
 
     pub fn gpu_name(self: &Arc<Self>) -> Option<String> {
+        if super::shared_hardware::enabled() {return super::shared_hardware::gpu_name();}
         // the GPU name comes with the first GPU poll
         let _ = self.read("gpu.load", 1);
         self.s.lock().unwrap().gpu_name.clone()
@@ -227,6 +230,8 @@ impl Sources {
 
     /// Poll one metric into its slot. Returns the GPU name when a GPU metric was read.
     fn poll(&mut self, key: &str, s: &mut Slot, now: Instant) -> Option<String> {
+        if super::shared_hardware::replaces(key){s.value=None;s.total=None;return None;}
+        if matches!(key,"cpu.load"|"ram.used")||key.starts_with("gpu."){super::shared_hardware::local_metric_poll();}
         let (metric, arg) = key.split_once(':').unwrap_or((key, ""));
         s.value = None;
         match metric {

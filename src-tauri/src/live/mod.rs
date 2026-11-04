@@ -32,6 +32,7 @@ pub mod lyrics;
 pub mod preview;
 pub mod render;
 pub mod sensors;
+pub mod shared_hardware;
 pub mod session;
 pub mod theme;
 pub mod twin;
