@@ -7,6 +7,10 @@ loops forever. You only need the app while you are changing the picture.
 **Optional since 3.0: a live screen.** Turn **Live** on and CoolerScreen also draws a clock, music, PC stats, weather and
 more on top of your picture while it runs. It is **off by default**.
 
+**UC engine4.19.0:** when launched by Unified Control in shared-hardware mode, visible sensor widgets consume UC's
+single timestamped collector. Replaced local aggregate CPU/RAM/NVIDIA readers stay off; missing/expired data stays unknown.
+Standalone mode retains its own readers. This milestone updates the UC engine, without replacing the standalone install.
+
 **Connection reliability (4.18.1):** Live reports the current connection failure
 and retries when the screen returns. It checks for a real firmware response before
 starting and permits one safe firmware recovery attempt through the device queue.

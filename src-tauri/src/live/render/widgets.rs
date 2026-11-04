@@ -202,7 +202,7 @@ impl Renderer {
             return;
         }
         let gpu = s.gpu.as_ref();
-        let target = [
+        let mut target = [
             s.cpu_load_pct / 100.0,
             if s.ram_total_gb > 0.0 { s.ram_used_gb / s.ram_total_gb } else { 0.0 },
             gpu.map(|g| g.load_pct as f32 / 100.0).unwrap_or(0.0),
@@ -210,6 +210,13 @@ impl Renderer {
             gpu.map(|g| g.clock_mhz as f32 / 3200.0).unwrap_or(0.0),
             s.cpu_temp_c.map(|c| c / 100.0).unwrap_or(0.0),
         ];
+        if crate::live::shared_hardware::enabled() && !self.sample {
+            let readings=crate::live::shared_hardware::stats(&[]);
+            for index in 0..5 {
+                let (value,total)=readings[index];
+                target[index]=match (index,value,total){(1,Some(v),Some(t))if t>0.=>v/t,(0|2,Some(v),_)=>v/100.,(3,Some(v),_)=>v/100.,(4,Some(v),_)=>v/3200.,_=>{self.bars[index]=0.;0.}};
+            }
+        }
         let k = 1.0 - 0.75f32.powi(steps);
         for (b, t) in self.bars.iter_mut().zip(target) {
             *b += (t.clamp(0.0, 1.0) - *b) * k;
@@ -219,6 +226,7 @@ impl Renderer {
     pub(super) fn draw_stats(&mut self, b: Rect, p: &StatsProps, s: &Sensors) {
         const IDS: [&str; 6] = ["cpu", "ram", "gpuLoad", "gpuTemp", "gpuClock", "cpuTemp"];
         let items: Vec<usize> = p.items.iter().filter_map(|i| IDS.iter().position(|k| k == i)).collect();
+        let shared=(crate::live::shared_hardware::enabled()&&!self.sample).then(||crate::live::shared_hardware::stats(&items));
         let n = items.len().max(1) as f32;
         let u = (b.w / 592.0).min(b.h / (72.0 + 104.0 * n)).clamp(0.2, 4.0);
         let rad = self.card_radius(b, (28.0 * u).min(b.h / 6.0));
@@ -228,7 +236,7 @@ impl Renderer {
         let gpu = s.gpu.as_ref();
         let dash = "\u{2014}".to_string();
         for (row, &id) in items.iter().enumerate() {
-            let (label, value) = match id {
+            let (label, mut value) = match id {
                 0 => ("CPU load", format!("{:.0} %", s.cpu_load_pct)),
                 1 => ("RAM", format!("{:.1} / {:.1} GB", s.ram_used_gb, s.ram_total_gb)),
                 2 => ("GPU load", gpu.map(|g| format!("{} %", g.load_pct)).unwrap_or(dash.clone())),
@@ -236,6 +244,7 @@ impl Renderer {
                 4 => ("GPU clock", gpu.map(|g| format!("{} MHz", g.clock_mhz)).unwrap_or(dash.clone())),
                 _ => ("CPU temp", s.cpu_temp_c.map(|c| format!("{c:.0} \u{00B0}C")).unwrap_or(dash.clone())),
             };
+            if let Some(readings)=&shared {if let Some(reading)=readings.get(id){value=crate::live::shared_hardware::stat_text(id,*reading);if reading.0.is_none(){self.bars[id]=0.;}}}
             let y0 = b.y + pad + row as f32 * pitch + (pitch - 104.0 * u) / 2.0;
             let (lsz, vsz) = ((30.0 * u).round().max(6.0) as u32, (40.0 * u).round().max(6.0) as u32);
             self.text(label, b.x + pad, y0 + 34.0 * u, lsz, Weight::Regular, [185, 192, 208], 1.0);

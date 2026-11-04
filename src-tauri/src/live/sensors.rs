@@ -39,11 +39,14 @@ impl Sampler {
     pub fn start() -> Sampler {
         let data = Arc::new(Mutex::new(Sensors::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        if super::shared_hardware::enabled() {return Sampler{data,stop,thread:None};}
         let (d2, s2) = (data.clone(), stop.clone());
         let thread = std::thread::spawn(move || {
+            super::shared_hardware::local_legacy_poll();
             let mut nvml = GpuSource::new();
             let mut prev = cpu_times();
             while !s2.load(Ordering::Relaxed) {
+                super::shared_hardware::local_legacy_poll();
                 let now = cpu_times();
                 let mut s = Sensors::default();
                 if let (Some(a), Some(b)) = (prev, now) {

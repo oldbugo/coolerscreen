@@ -214,6 +214,7 @@ const COMMANDS: &[&str] = &[
     "live_set",
     "activate",
     "health_status",
+    "hardware_exchange",
     "shutdown",
 ];
 
@@ -257,6 +258,7 @@ fn validate(command: &str, args: &Value) -> CoreResult<()> {
         "fit_cal" => &["action", "fit", "sel"],
         "weather_search" => &["query"],
         "weather_set_place" => &["place"],
+        "hardware_exchange" => &["snapshot"],
         "lyrics_offset_set" => &["key", "seconds"],
         "screen_preview" => &["originalId", "sourceId", "item", "thumb"],
         "screen_preview_end" => &["keepalive"],
@@ -505,12 +507,18 @@ fn dispatch(app: &App, command: &str, a: &Value) -> CoreResult<Value> {
         "ext_sensor_status",
         "game_fps_status",
         "health_status",
+        "hardware_exchange",
     ]
     .contains(&command)
     {
         native_conflict(app.device.fake_mode().is_some())?;
     }
     match command {
+        "hardware_exchange"=>{
+            let snapshot=a.get("snapshot").ok_or_else(||bad("snapshot"))?;
+            let snapshot=serde_json::from_value::<Option<cs_core::live::shared_hardware::Snapshot>>(snapshot.clone()).map_err(|_|bad("snapshot"))?;
+            cs_core::live::shared_hardware::exchange(snapshot).map_err(|_|CoreError::coded("hardware_snapshot","Shared hardware snapshot was rejected.").status(400))
+        },
         "health_status"=>Ok(health_value(&app.live.status())),
         "app_state" => Ok(app.app_state()),
         "activity" => Ok(app.activity()),
@@ -860,6 +868,7 @@ fn home_from_env() -> CoreResult<PathBuf> {
 
 pub fn run() -> CoreResult<()> {
     let home = home_from_env()?;
+    if std::env::var("UC_SHARED_HARDWARE").is_ok_and(|v|v=="1"){cs_core::live::shared_hardware::enable_for_uc_worker();}
     let fake = cs_core::core::device_service::fake_mode_from_env().is_some()
         || std::env::var("COOLERSCREEN_FAKE_MEDIA").is_ok_and(|v| v == "1");
     let blocked = native_conflict(fake).err();
@@ -969,6 +978,7 @@ pub fn run() -> CoreResult<()> {
                 "theme_standard",
                 "sources_list",
                 "health_status",
+                "hardware_exchange",
             ]
             .contains(&request.command.as_str())
             {
@@ -996,6 +1006,7 @@ pub fn run() -> CoreResult<()> {
                     "job_get",
                     "device_presence",
                     "health_status",
+                    "hardware_exchange",
                 ]
                 .contains(&request.command.as_str())
                 {
@@ -1078,6 +1089,7 @@ mod tests {
     }
     #[test]
     fn fake_core_dispatch_preserves_theme_and_saved_live_settings() {
+        cs_core::live::shared_hardware::enable_for_uc_worker();
         let dir = tempfile::tempdir().unwrap();
         struct RestoreHome(Option<std::ffi::OsString>);
         impl Drop for RestoreHome {
@@ -1101,6 +1113,10 @@ mod tests {
             cs_core::core::device_service::DeviceService::fake("winusb", 0.01, false),
         );
         app.live.set_no_device(true);
+        let idle=dispatch(&app,"hardware_exchange",&json!({"snapshot":null})).unwrap();
+        assert_eq!(idle["demand"],json!({"cpu":false,"ram":false,"gpu":false,"hz":1}));
+        assert_eq!(idle["state"]["local_polls"],0);
+        assert!(dispatch(&app,"hardware_exchange",&json!({"snapshot":{"version":1,"extra":"rejected"}})).is_err());
         let state = dispatch(
             &app,
             "live_set",
@@ -1155,5 +1171,7 @@ mod tests {
             .unwrap()
             .is_object());
         shutdown(&app);
+        let idle=dispatch(&app,"hardware_exchange",&json!({"snapshot":null})).unwrap();
+        assert_eq!(idle["state"]["local_polls"],0);
     }
 }
