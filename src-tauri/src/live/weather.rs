@@ -3,6 +3,9 @@
 //! by the user (never guessed from the IP). No place: nothing is fetched. Offline: the last value stays, flagged `stale`.
 //! Temperatures are stored in degrees Celsius; the widget converts.
 use serde_json::Value;
+use serde::{Serialize,Deserialize};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64,Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -10,7 +13,8 @@ const CACHE: Duration = Duration::from_secs(15 * 60);
 /// The fetch thread ends when no widget asked for this long (the cache stays).
 const IDLE_END: Duration = Duration::from_secs(120);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Place {
     pub name: String,
     pub lat: f64,
@@ -18,7 +22,8 @@ pub struct Place {
     pub tz: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Hour {
     /// Local hour of day 0..23.
     pub hour: u32,
@@ -26,7 +31,8 @@ pub struct Hour {
     pub code: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Day {
     /// 0 = Monday .. 6 = Sunday.
     pub weekday: u32,
@@ -35,7 +41,8 @@ pub struct Day {
     pub code: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WeatherData {
     pub place: String,
     pub temp_c: f32,
@@ -50,14 +57,16 @@ pub struct WeatherData {
 
 #[derive(Default)]
 struct State {
-    data: Option<WeatherData>,
-    fetched: Option<Instant>,
+    cache:HashMap<String,CacheEntry>,
     place: Option<Place>,
     last_ask: Option<Instant>,
     running: bool,
-    /// Last place the data was fetched for.
-    data_place: Option<Place>,
 }
+#[derive(Default)]
+struct CacheEntry {data:Option<WeatherData>,observed_at_ms:Option<u64>,attempted:Option<Instant>,failed:bool}
+static FETCHES:AtomicU64=AtomicU64::new(0);
+pub fn fetch_count()->u64{FETCHES.load(Ordering::Relaxed)}
+fn key(place:&Place)->String{serde_json::to_string(place).unwrap_or_default()}
 
 fn state() -> &'static Arc<Mutex<State>> {
     static S: OnceLock<Arc<Mutex<State>>> = OnceLock::new();
@@ -66,10 +75,15 @@ fn state() -> &'static Arc<Mutex<State>> {
 
 /// What the widget needs: Ok(data) when there is a place and a value, Err(reason) otherwise ("no place" / "loading").
 pub fn get() -> Result<WeatherData, &'static str> {
+    if super::shared_services::enabled(){return super::shared_services::weather_get(read_place());}
+    get_for(read_place())
+}
+/// Source-only explicit input: this never reads app settings or geolocation.
+pub fn get_for(place:Option<Place>)->Result<WeatherData,&'static str>{
     let st = state().clone();
     let mut g = st.lock().unwrap();
-    g.last_ask = Some(Instant::now());
-    g.place = read_place();
+    if place.is_some(){g.last_ask = Some(Instant::now());}
+    g.place = place;
     if !g.running && g.place.is_some() {
         g.running = true;
         let me = st.clone();
@@ -78,10 +92,16 @@ pub fn get() -> Result<WeatherData, &'static str> {
     if g.place.is_none() {
         return Err("no place");
     }
-    match &g.data {
+    let place=g.place.as_ref().ok_or("no place")?;
+    match g.cache.get(&key(place)).and_then(|c|c.data.as_ref()) {
         Some(d) => Ok(d.clone()),
         None => Err("loading"),
     }
+}
+pub fn source_observation(place:Option<Place>)->super::shared_services::WeatherObservation{
+    let _=get_for(place.clone());let g=state().lock().unwrap();
+    let entry=place.as_ref().and_then(|p|g.cache.get(&key(p)));
+    super::shared_services::WeatherObservation{status:if place.is_none(){"inactive"}else if entry.is_some_and(|e|e.data.is_some()){if entry.is_some_and(|e|e.failed){"stale"}else{"ok"}}else if entry.is_some_and(|e|e.failed){"error"}else{"loading"}.into(),observed_at_ms:entry.and_then(|e|e.observed_at_ms),place,data:entry.and_then(|e|e.data.clone())}
 }
 
 /// settings.json `weather.place`; None when missing or incomplete.
@@ -104,32 +124,32 @@ fn run(st: Arc<Mutex<State>>) {
         let (place, due, idle) = {
             let g = st.lock().unwrap();
             let idle = g.last_ask.is_none_or(|t| t.elapsed() > IDLE_END);
-            let changed = g.place != g.data_place;
-            (g.place.clone(), changed || g.fetched.is_none_or(|t| t.elapsed() >= CACHE), idle)
+            let due=g.place.as_ref().map(|p|g.cache.get(&key(p)).is_none_or(|e|e.attempted.is_none_or(|t|t.elapsed()>=if e.failed{Duration::from_secs(60)}else{CACHE}))).unwrap_or(false);
+            (g.place.clone(),due,idle)
         };
         if idle {
             st.lock().unwrap().running = false;
             return;
         }
         if let (Some(p), true) = (place, due) {
+            FETCHES.fetch_add(1,Ordering::Relaxed);
             match fetch(&p) {
                 Ok(d) => {
                     let mut g = st.lock().unwrap();
-                    g.data = Some(d);
-                    g.fetched = Some(Instant::now());
-                    g.data_place = Some(p);
+                    g.cache.insert(key(&p),CacheEntry{data:Some(d),observed_at_ms:Some(super::shared_services::now_ms()),attempted:Some(Instant::now()),failed:false});
                 }
-                Err(e) => {
-                    crate::device::log(&format!("weather: {e}"));
+                Err(_) => {
+                    crate::device::log("weather: source unavailable");
                     let mut g = st.lock().unwrap();
-                    if let Some(d) = g.data.as_mut() {
+                    let entry=g.cache.entry(key(&p)).or_default();
+                    if let Some(d) = entry.data.as_mut() {
                         d.stale = true;
                     }
                     // retry in a minute, not at the next poll
-                    g.fetched = Some(Instant::now() - CACHE + Duration::from_secs(60));
-                    g.data_place = Some(p);
+                    entry.failed=true;entry.attempted=Some(Instant::now());
                 }
             }
+            let mut g=st.lock().unwrap();if g.cache.len()>8{let current=g.place.as_ref().map(key);let oldest=g.cache.iter().filter(|(k,_)|Some(*k)!=current.as_ref()).min_by_key(|(_,v)|v.observed_at_ms.unwrap_or(0)).map(|(k,_)|k.clone());if let Some(oldest)=oldest{g.cache.remove(&oldest);}}
         }
         std::thread::sleep(Duration::from_secs(3));
     }

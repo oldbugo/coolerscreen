@@ -2,7 +2,7 @@
 //! Media Player, VLC, ...). A worker thread on the multithreaded apartment waits for session events (new track, play/pause,
 //! session change) with a 1 s poll as a safety net. Properties are re-read about 400 ms after a track change (players
 //! publish title and cover a moment apart); the cover is decoded once per track. The position is extrapolated while playing.
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool,AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::Media::Control::{
@@ -28,6 +28,8 @@ pub struct NowPlaying {
     pos_s: f64,
     pub duration_s: f64,
     read_at: Instant,
+    observed_at_ms:u64,
+    state_changed_at_ms:u64,
     /// When play/pause last changed (a paused player keeps its panel for a minute).
     pub state_since: Instant,
     pub cover: Option<Arc<Cover>>,
@@ -52,24 +54,35 @@ pub struct MusicWatcher {
     preferred: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    health: Arc<Mutex<SourceHealth>>,
+    preference_epoch:Arc<AtomicU64>,
 }
+#[derive(Clone,Default)]
+pub struct SourceHealth {pub status:&'static str,pub observed_at_ms:Option<u64>,pub reads:u64}
 
 impl MusicWatcher {
     pub fn start(preferred_app: Option<String>) -> MusicWatcher {
+        super::shared_services::local_music_start();
         let data = Arc::new(Mutex::new(None));
         let preferred = Arc::new(Mutex::new(preferred_app));
         let stop = Arc::new(AtomicBool::new(false));
         let (d2, p2, s2) = (data.clone(), preferred.clone(), stop.clone());
+        let health=Arc::new(Mutex::new(SourceHealth{status:"loading",..Default::default()}));let h2=health.clone();
+        let preference_epoch=Arc::new(AtomicU64::new(1));let epoch=preference_epoch.clone();
         let thread = std::thread::spawn(move || {
-            if let Err(e) = run(d2, p2, s2) {
-                crate::device::log(&format!("companion: now playing unavailable: {e}"));
+            if let Err(e) = run(d2, p2, s2,h2.clone(),epoch) {
+                h2.lock().unwrap().status="error";
+                crate::device::log(&format!("companion: now playing unavailable ({:#x})",e.code().0));
             }
         });
-        MusicWatcher { data, preferred, stop, thread: Some(thread) }
+        MusicWatcher { data, preferred, stop, thread: Some(thread),health,preference_epoch }
     }
 
     pub fn set_preferred(&self, app: Option<String>) {
-        *self.preferred.lock().unwrap() = app;
+        let mut preferred=self.preferred.lock().unwrap();if *preferred==app{return}
+        self.preference_epoch.fetch_add(1,Ordering::SeqCst);*preferred = app;
+        *self.data.lock().unwrap()=None;
+        let mut h=self.health.lock().unwrap();h.status="loading";h.observed_at_ms=None;drop(h);drop(preferred);
         if let Some(t) = &self.thread {
             t.thread().unpark();
         }
@@ -78,6 +91,7 @@ impl MusicWatcher {
     pub fn get(&self) -> Option<NowPlaying> {
         self.data.lock().unwrap().clone()
     }
+    pub fn source_health(&self)->SourceHealth{self.health.lock().unwrap().clone()}
 }
 
 impl Drop for MusicWatcher {
@@ -90,7 +104,12 @@ impl Drop for MusicWatcher {
     }
 }
 
-fn run(data: Arc<Mutex<Option<NowPlaying>>>, preferred: Arc<Mutex<Option<String>>>, stop: Arc<AtomicBool>) -> windows::core::Result<()> {
+fn publish(data:&Mutex<Option<NowPlaying>>,health:&Mutex<SourceHealth>,preferred:&Mutex<Option<String>>,epoch:&AtomicU64,expected:&Option<String>,expected_epoch:u64,value:Option<NowPlaying>,status:&'static str)->bool{
+    let current=preferred.lock().unwrap();if *current!=*expected||epoch.load(Ordering::SeqCst)!=expected_epoch{return false}
+    if status=="ok"||status=="none"{*data.lock().unwrap()=value;}
+    let mut h=health.lock().unwrap();h.status=status;h.observed_at_ms=Some(super::shared_services::now_ms());true
+}
+fn run(data: Arc<Mutex<Option<NowPlaying>>>, preferred: Arc<Mutex<Option<String>>>, stop: Arc<AtomicBool>,health:Arc<Mutex<SourceHealth>>,preference_epoch:Arc<AtomicU64>) -> windows::core::Result<()> {
     use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
     unsafe { RoInitialize(RO_INIT_MULTITHREADED)? };
     let mgr = Manager::RequestAsync()?.join()?;
@@ -112,12 +131,14 @@ fn run(data: Arc<Mutex<Option<NowPlaying>>>, preferred: Arc<Mutex<Option<String>
     let mut cover_tries = 0;
     let mut state_playing: Option<bool> = None;
     let mut state_since = Instant::now();
+    let mut state_changed_at_ms=super::shared_services::now_ms();
     while !stop.load(Ordering::Relaxed) {
-        let pref = preferred.lock().unwrap().clone();
-        let session = pick(&mgr, pref.as_deref());
+        health.lock().unwrap().reads+=1;
+        let (pref,epoch)={let p=preferred.lock().unwrap();(p.clone(),preference_epoch.load(Ordering::SeqCst))};
+        let session = match pick(&mgr, pref.as_deref()) {Ok(session)=>session,Err(_)=>{publish(&data,&health,&preferred,&preference_epoch,&pref,epoch,None,"error");std::thread::park_timeout(Duration::from_secs(1));continue;}};
         match session {
             None => {
-                *data.lock().unwrap() = None;
+                if !publish(&data,&health,&preferred,&preference_epoch,&pref,epoch,None,"none"){continue;}
                 track_key.clear();
             }
             Some(s) => {
@@ -157,11 +178,15 @@ fn run(data: Arc<Mutex<Option<NowPlaying>>>, preferred: Arc<Mutex<Option<String>
                     if state_playing != Some(np.playing) {
                         state_playing = Some(np.playing);
                         state_since = Instant::now();
+                        state_changed_at_ms=super::shared_services::now_ms();
                     }
                     np.state_since = state_since;
+                    np.state_changed_at_ms=state_changed_at_ms;
                     np.cover = cover.clone();
                     np.track_id = track_id;
-                    *data.lock().unwrap() = Some(np);
+                    if !publish(&data,&health,&preferred,&preference_epoch,&pref,epoch,Some(np),"ok"){continue;}
+                } else {
+                    if !publish(&data,&health,&preferred,&preference_epoch,&pref,epoch,None,"error"){continue;}
                 }
             }
         }
@@ -186,23 +211,23 @@ fn choose(cands: &[(String, bool, bool)], preferred: Option<&str>) -> Option<usi
         .or_else(|| cands.iter().position(|c| c.2))
 }
 
-fn pick(mgr: &Manager, preferred: Option<&str>) -> Option<Session> {
-    let list = mgr.GetSessions().ok()?;
+fn pick(mgr: &Manager, preferred: Option<&str>) -> windows::core::Result<Option<Session>> {
+    let list = mgr.GetSessions()?;
     let current = mgr.GetCurrentSession().ok();
     let cur_id = current.as_ref().and_then(|s| s.SourceAppUserModelId().ok()).map(|h| h.to_string());
     let mut sessions = Vec::new();
     let mut cands = Vec::new();
-    for i in 0..list.Size().ok()? {
-        let Ok(s) = list.GetAt(i) else { continue };
-        let id = s.SourceAppUserModelId().map(|h| h.to_string()).unwrap_or_default();
-        let playing = s.GetPlaybackInfo().and_then(|i| i.PlaybackStatus()).is_ok_and(|st| st == Status::Playing);
+    for i in 0..list.Size()? {
+        let s = list.GetAt(i)?;
+        let id = s.SourceAppUserModelId()?.to_string();
+        let playing = s.GetPlaybackInfo()?.PlaybackStatus()? == Status::Playing;
         cands.push((id.clone(), playing, cur_id.as_deref() == Some(id.as_str())));
         sessions.push(s);
     }
-    match choose(&cands, preferred) {
+    Ok(match choose(&cands, preferred) {
         Some(i) => sessions.into_iter().nth(i),
         None => current,
-    }
+    })
 }
 
 fn read(s: &Session, app: &str) -> windows::core::Result<NowPlaying> {
@@ -230,6 +255,8 @@ fn read(s: &Session, app: &str) -> windows::core::Result<NowPlaying> {
         pos_s: pos_now.max(0.0),
         duration_s: (end - start).max(0.0),
         read_at: Instant::now(),
+        observed_at_ms:super::shared_services::now_ms(),
+        state_changed_at_ms:super::shared_services::now_ms(),
         state_since: Instant::now(),
         cover: None,
         track_id: 0,
@@ -274,6 +301,12 @@ fn decode_cover(s: &Session) -> Option<Arc<Cover>> {
 }
 
 impl NowPlaying {
+    pub fn shared_data(&self)->super::shared_services::MusicData{
+        let clean=|s:&str,limit:usize|s.chars().filter(|c|!c.is_control()).take(limit).collect();
+        super::shared_services::MusicData{app:clean(&self.app,256),title:clean(&self.title,512),artist:clean(&self.artist,512),playing:self.playing,position_s:self.pos_s,duration_s:self.duration_s,state_changed_at_ms:self.state_changed_at_ms,track_id:self.track_id.max(1),cover:None}
+    }
+    pub fn observed_at_ms(&self)->u64{self.observed_at_ms}
+    pub fn from_shared(d:&super::shared_services::MusicData,observed_at_ms:u64,cover:Option<Arc<Cover>>)->Option<Self>{let now=super::shared_services::now_ms();if observed_at_ms>now||now-observed_at_ms>=3000||d.state_changed_at_ms>now{return None}let position=if d.playing{d.position_s+(now-observed_at_ms) as f64/1000.}else{d.position_s};Some(Self{app:d.app.clone(),title:d.title.clone(),artist:d.artist.clone(),playing:d.playing,pos_s:if d.duration_s>0.{position.min(d.duration_s)}else{position},duration_s:d.duration_s,read_at:Instant::now(),observed_at_ms:now,state_changed_at_ms:d.state_changed_at_ms,state_since:Instant::now().checked_sub(Duration::from_millis(now-d.state_changed_at_ms)).unwrap_or_else(Instant::now),cover,track_id:d.track_id})}
     /// A made-up track for layout checks (dry run) and tests: a gradient cover, playing, at `pos_s` of `duration_s`.
     pub fn demo(title: &str, artist: &str, playing: bool, pos_s: f64, duration_s: f64) -> NowPlaying {
         let (w, h) = (320usize, 320usize);
@@ -294,6 +327,8 @@ impl NowPlaying {
             pos_s,
             duration_s,
             read_at: Instant::now(),
+            observed_at_ms:super::shared_services::now_ms(),
+            state_changed_at_ms:super::shared_services::now_ms(),
             state_since: Instant::now(),
             cover: Some(Arc::new(Cover { w, h, rgba })),
             track_id: 1,
@@ -304,6 +339,16 @@ impl NowPlaying {
 #[cfg(test)]
 mod tests {
     use super::choose;
+    #[test]
+    fn preference_changes_clear_data_and_reject_old_epoch_even_after_a_b_a(){
+        use super::*;
+        let watcher=MusicWatcher{data:Arc::new(Mutex::new(Some(NowPlaying::demo("Old","Artist",true,10.,100.)))),preferred:Arc::new(Mutex::new(Some("A".into()))),stop:Arc::new(AtomicBool::new(false)),thread:None,health:Arc::new(Mutex::new(SourceHealth{status:"ok",observed_at_ms:Some(super::super::shared_services::now_ms()),reads:1})),preference_epoch:Arc::new(AtomicU64::new(1))};
+        watcher.set_preferred(Some("B".into()));assert!(watcher.get().is_none());assert_eq!(watcher.source_health().status,"loading");watcher.set_preferred(Some("A".into()));
+        assert!(!publish(&watcher.data,&watcher.health,&watcher.preferred,&watcher.preference_epoch,&Some("A".into()),1,Some(NowPlaying::demo("Old late read","Artist",true,10.,100.)),"ok"));assert!(watcher.get().is_none());
+        let epoch=watcher.preference_epoch.load(Ordering::SeqCst);assert!(publish(&watcher.data,&watcher.health,&watcher.preferred,&watcher.preference_epoch,&Some("A".into()),epoch,Some(NowPlaying::demo("Current","Artist",true,10.,100.)),"ok"));assert_eq!(watcher.get().unwrap().title,"Current");
+    }
+    #[test]
+    fn source_metadata_is_bounded_and_original_timestamps_do_not_renew(){let mut np=super::NowPlaying::demo(&format!("{}\n", "T".repeat(900)),"A\tB",false,10.,100.);np.app="X".repeat(400);let first=np.shared_data();let at=np.observed_at_ms();std::thread::sleep(std::time::Duration::from_millis(2));let again=np.shared_data();assert_eq!(first.title.chars().count(),512);assert_eq!(first.app.chars().count(),256);assert_eq!(first.artist,"AB");assert_eq!(first.state_changed_at_ms,again.state_changed_at_ms);assert_eq!(np.observed_at_ms(),at);}
 
     fn c(id: &str, playing: bool, current: bool) -> (String, bool, bool) {
         (id.to_string(), playing, current)

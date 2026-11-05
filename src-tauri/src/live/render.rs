@@ -672,7 +672,7 @@ impl Renderer {
         // second) or the fade changed.
         let wants_music = self.has_widget("music") || self.has_widget("lyrics");
         let keep_idle = self.theme.theme.handover.music_idle == MusicIdle::Keep;
-        let np = if wants_music { self.music.as_ref().and_then(|m| m.lock().unwrap().clone()) } else { None };
+        let np = if wants_music { if super::shared_services::enabled()&&!self.sample{super::shared_services::now_playing()}else{self.music.as_ref().and_then(|m| m.lock().unwrap().clone())} } else { None };
         let want = np.as_ref().is_some_and(|n| n.visible()) || keep_idle;
         if self.sample {
             self.music_alpha = if want { 1.0 } else { 0.0 };

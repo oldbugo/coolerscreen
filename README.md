@@ -7,6 +7,12 @@ loops forever. You only need the app while you are changing the picture.
 **Optional since 3.0: a live screen.** Turn **Live** on and CoolerScreen also draws a clock, music, PC stats, weather and
 more on top of your picture while it runs. It is **off by default**.
 
+**UC engine4.20.0:** shared-services mode consumes UC-supervised music and weather observations as well as shared hardware.
+A separate provider-only launch of the bundled worker opens no device, window or media server. It reads only requested
+media sessions and explicitly selected weather places; idle source interests stop while the bounded weather cache stays
+in memory until UC quits. Original playback/pause timing, artwork and weather observation times survive delivery.
+Standalone mode retains its own readers; this engine milestone does not replace the standalone installation.
+
 **UC engine4.19.0:** when launched by Unified Control in shared-hardware mode, visible sensor widgets consume UC's
 single timestamped collector. Replaced local aggregate CPU/RAM/NVIDIA readers stay off; missing/expired data stays unknown.
 Standalone mode retains its own readers. This milestone updates the UC engine, without replacing the standalone install.
