@@ -300,7 +300,7 @@ impl Pipeline {
                     if force_apply {
                         force_apply = false;
                         // Music: start/stop the watcher, or just change the preferred app. Only when the theme has a music or lyrics widget.
-                        match (cfg.music.enabled && (r.has_widget("music") || r.has_widget("lyrics")), music.is_some()) {
+                        match (!super::shared_services::enabled() && cfg.music.enabled && (r.has_widget("music") || r.has_widget("lyrics")), music.is_some()) {
                             (true, false) => {
                                 let m = MusicWatcher::start(cfg.music.preferred_app.clone());
                                 r.set_music_source(Some(m.data.clone()));
@@ -336,6 +336,9 @@ impl Pipeline {
                             }
                         }
                     }
+                    // The existing music watcher follows the configured visible
+                    // theme even while its pipeline is paused/disconnected.
+                    if super::shared_services::enabled() && cfg.music.enabled && (r.has_widget("music")||r.has_widget("lyrics")){super::shared_services::touch_music(cfg.music.preferred_app.clone());}
                     // The decoder only runs while frames are being streamed (an idle ffmpeg would burn CPU for nothing).
                     let want_video = active && applied_src.is_some();
                     if want_video && !video_on {

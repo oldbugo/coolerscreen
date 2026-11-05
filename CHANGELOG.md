@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.20.0 - 2026-11-05 (UC shared music and weather)
+
+- Add a source-only private worker mode, entered before application/device/media-server startup, for UC-supervised
+  music and weather collection. Explicit leased inputs preserve preferred-player and chosen-place rules; no new opt-in.
+- Shared cooler mode uses injected readings and disables replaced native music watchers/weather fetches. Standalone
+  local mode remains. Music position and pause age keep original observation times, and artwork is bounded/cached.
+- Key forecasts and retries by place, retaining at most eight in-memory entries. Idle requests stop source interests
+  while keeping the existing15-minute weather cache, one-minute retry and matching-place stale fallback.
+- Strict source/consumer schemas, generation/sequence/deadline validation and source-mode fake fixtures support isolated
+  acceptance. This milestone is bundled by UC; it does not install or replace standalone CoolerScreen.
+
+
 ## 4.19.0 - 2026-11-05 (UC shared hardware)
 
 - UC's worker consumes validated, timestamped CPU/RAM/NVIDIA snapshots instead of starting duplicate legacy and modern
