@@ -26,6 +26,7 @@ struct Fake {
     speed: f64,
     /// Free blocks the fake screen reports (a test hook plays "another program wrote to the screen").
     free: u64,
+    brightness:Option<u8>,
 }
 
 pub struct DeviceService {
@@ -121,7 +122,7 @@ impl DeviceService {
     pub fn fake(mode: &str, speed: f64, fail_upload: bool) -> Self {
         let t = if mode == "1" { "winusb".to_string() } else { mode.to_lowercase() };
         DeviceService {
-            fake: Some(Mutex::new(Fake { transport: t, restarted: false, fail_upload, speed, free: 4880 })),
+            fake: Some(Mutex::new(Fake { transport: t, restarted: false, fail_upload, speed, free: 4880,brightness:if mode=="brightness-unknown"{None}else{Some(50)} })),
             scripts: Mutex::new(super::paths::scripts_dir()),
             logs_dir: std::env::temp_dir().join("CoolerScreen-logs"),
             last_log: Mutex::new(None),
@@ -212,12 +213,32 @@ impl DeviceService {
             let t = if serial { "serial" } else { "winusb" };
             let mut v = json!({ "model": "D215-NOR-JD9365-6.67inch-hor (fake)", "version": "3.6", "i_blocks": 24520, "i_block_size": 512,
                 "i_block_free": self.fake.as_ref().unwrap().lock().unwrap().free, "_transport": t, "_needsSetup": serial, "_fake": true });
+            v["brightness"]=json!(self.fake.as_ref().unwrap().lock().unwrap().brightness);
             if serial {
                 v["_warning"] = json!(SERIAL_WARNING);
             }
             return Ok(v);
         }
         ops::check_once().map_err(CoreError::from)
+    }
+    /// Called only while the scheduler owns Res::Device (Live is paused).
+    /// Steps always obtain a new device report; cached/requested values are not
+    /// an invented baseline. There is no reset, serial fallback or raw API.
+    pub fn brightness_change(&self,change:super::dock_control::BrightnessChange)->CoreResult<Value>{
+        if let Some(error)=self.fake_error(){return Err(error)}
+        if let Some(fake)=&self.fake{
+            let mut fake=fake.lock().unwrap();let target=change.target(fake.brightness)?;
+            fake.brightness=match fake.transport.as_str(){"brightness-no-readback"=>None,"brightness-mismatch"=>Some(target.saturating_sub(1)),_=>Some(target)};
+            return Ok(json!({"requested":target,"reported":fake.brightness}));
+        }
+        let mut screen=device::Screen::open_usb().map_err(CoreError::from)?;
+        let result=(||{
+            let baseline=if matches!(change,super::dock_control::BrightnessChange::Step(_)){super::dock_control::reported_brightness(&screen.brightness_info().map_err(CoreError::from)?)}else{None};
+            let target=change.target(baseline)?;
+            screen.set_brightness(target).map_err(CoreError::from)?;
+            let reported=screen.brightness_info().ok().as_ref().and_then(super::dock_control::reported_brightness);
+            Ok(json!({"requested":target,"reported":reported}))
+        })();screen.close();result
     }
 
     /// Restart (0x01), wait for the screen to come back and check it answers.

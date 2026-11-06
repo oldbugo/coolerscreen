@@ -229,6 +229,18 @@ impl Screen {
         log(&format!("verified info reply: {value}"));
         Ok(value)
     }
+    /// One named brightness write, supported by the recorded vendor protocol.
+    /// This does not broaden cmd/live_key or accept a caller-supplied key/frame.
+    pub fn set_brightness(&mut self,value:u8)->Result<(),DevErr>{
+        self.live_write_timeout(&brightness_frame(value)?,Duration::from_secs(1))
+    }
+    /// Read-only info for a brightness transaction, bounded and without logging
+    /// the complete firmware payload. The caller owns exclusive device access.
+    pub fn brightness_info(&mut self)->Result<Value,DevErr>{
+        while self.rx.try_recv().is_ok(){}
+        self.live_write_timeout(&frame::frame(KEY_INFO,&[]),Duration::from_millis(500))?;
+        wait_info(&self.rx,REPLY_TIMEOUT,&||false)
+    }
 
     /// Restart (0x01): the only command that still works when the screen stops answering. No reply.
     pub fn send_restart(&mut self) -> Result<(), DevErr> {
@@ -300,6 +312,7 @@ impl Screen {
 }
 
 pub mod ops;
+pub fn brightness_frame(value:u8)->Result<Vec<u8>,DevErr>{if value>100{return Err(DevErr::new("Brightness must be between 0 and 100"));}Ok(frame::frame(0x03,&[value]))}
 
 /// Said when a debug build is asked to open the real screen.
 pub const DEBUG_NO_REAL: &str = "This is a debug build: it never uses the real screen (set COOLERSCREEN_REAL_DEVICE=1 to allow it).";

@@ -7,6 +7,12 @@ loops forever. You only need the app while you are changing the picture.
 **Optional since 3.0: a live screen.** Turn **Live** on and CoolerScreen also draws a clock, music, PC stats, weather and
 more on top of your picture while it runs. It is **off by default**.
 
+**UC engine4.21.0:** named dock controls select/cycle Live themes, set/toggle Live and change screen brightness.
+Theme actions never store Embedded content. Busy work is refused rather than queued for later execution. Brightness
+uses a dedicated serialized device operation, fresh readback for relative steps, and distinct requested/reported values;
+unknown or mismatched readback is explicitly unconfirmed. The existing Screen settings shows the reported brightness.
+This milestone is bundled by UC and does not replace the standalone installation. Physical result/feel remains separate acceptance.
+
 **UC engine4.20.0:** shared-services mode consumes UC-supervised music and weather observations as well as shared hardware.
 A separate provider-only launch of the bundled worker opens no device, window or media server. It reads only requested
 media sessions and explicitly selected weather places; idle source interests stop while the bounded weather cache stays

@@ -6,6 +6,7 @@ pub mod buildinfo;
 pub mod autostart;
 pub mod commands;
 pub mod device_service;
+pub mod dock_control;
 pub mod error;
 pub mod fit;
 pub mod fake_media;

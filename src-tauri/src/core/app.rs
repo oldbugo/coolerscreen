@@ -83,6 +83,7 @@ pub struct App {
     pub(crate) me: Mutex<Weak<App>>,
     /// The last screen info a check answered (shown while live holds the screen, instead of opening it a second time).
     pub(crate) last_info: Mutex<Option<serde_json::Value>>,
+    pub(crate) brightness_requested:Mutex<Option<u8>>,
 }
 
 impl App {
@@ -125,6 +126,7 @@ impl App {
             gallery_env: Mutex::new(None),
             me: Mutex::new(Weak::new()),
             last_info: Mutex::new(None),
+            brightness_requested:Mutex::new(None),
         });
         *app.me.lock().unwrap() = Arc::downgrade(&app);
         let ev = events.clone();
