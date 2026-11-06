@@ -599,11 +599,23 @@ impl Scheduler {
     }
 
     pub fn submit_arc(&self, spec: TaskSpec, f: TaskFn) -> JobHandle {
+        self.submit_inner(spec,f,false).expect("unconditional task admission")
+    }
+
+    /// Physical-button work is admitted atomically or refused. It never waits
+    /// behind user work or another device owner and then runs unexpectedly.
+    pub fn try_submit_idle(&self,spec:TaskSpec,f:impl Fn(&TaskCtx)->CoreResult<Value>+Send+Sync+'static)->CoreResult<JobHandle>{
+        self.submit_inner(spec,Arc::new(f),true)
+    }
+    fn submit_inner(&self,spec:TaskSpec,f:TaskFn,idle_only:bool)->CoreResult<JobHandle>{
         let id = new_job_id();
         let slot = Arc::new(Slot::default());
         let mut emits = vec![];
         {
             let mut g = self.0.inner.lock().unwrap();
+            if idle_only&&(g.entries.values().any(|e|e.spec.visible)||Shared::device_active(&g)||!Shared::can_start(&g,&spec)){
+                return Err(CoreError::coded("busy","The cooler is busy. Try again when its work finishes.").status(409));
+            }
             // Coalesce: drop queued tasks with the same key, cancel a running one.
             if let Some(key) = &spec.coalesce_key {
                 let old: Vec<String> = g
@@ -667,7 +679,7 @@ impl Scheduler {
             self.0.emit(&j);
         }
         self.0.pump();
-        JobHandle { id, slot }
+        Ok(JobHandle { id, slot })
     }
 
     /// Cancel one job. Running device work cannot be cancelled (an upload must not be cut off); returns false then.

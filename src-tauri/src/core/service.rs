@@ -104,6 +104,7 @@ impl App {
         json!({
             "appVersion": self.app_version, "build": { "screen": super::buildinfo::screen_note(), "hash": super::buildinfo::HASH, "commitDate": super::buildinfo::COMMIT_DATE, "builtAt": super::buildinfo::built_at() }, "desktopApp": self.sources.desktop_capture(), "deviceFps": DEVICE_FPS,
             "imageSeconds": IMAGE_SECONDS, "fake": self.device.fake_mode(),
+            "brightness":self.brightness_state(),
             "mask": s.mask(), "cornersDefault": s.mask()["corners"], "cornerRadius": s.corner_radius(), "maxSeconds": s.0["maxSeconds"],
             "screenGuides": s.screen_guides(), "screenFit": s.screen_fit().to_value(), "editorSnap": s.editor_snap(), "weather": s.weather_value(),
             "screenChanged": self.screen_changed_value(), "budgetRoomLimited": b.room_limited, "budgetRoomAt": b.room_at,

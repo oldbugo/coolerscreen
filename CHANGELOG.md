@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.21.0 - 2026-11-06 (UC dock-to-cooler controls)
+
+- Add narrow private theme selection/cycling, Live on/off/toggle and brightness actions, with a read-only bounded
+  catalog/state. Relative actions resolve against current target state in deterministic name/ID order.
+- Admit physical-button work atomically only when idle. Never queue/replay behind a job, auto-enable a device or store
+  Embedded content. Existing settings/library events reflect changes in the cooler interface.
+- Use a dedicated reviewed brightness operation under the device scheduler, preserving Live ownership. Steps require a
+  fresh device report; reported/requested values remain distinct. Absent/mismatched readback returns unconfirmed without retry.
+- Add the brightness readout to existing Screen settings. Strict action, scheduler and worker fake regressions pass;
+  real physical switching/brightness remains separate acceptance. No standalone installation/data replacement.
+
+
 ## 4.20.0 - 2026-11-05 (UC shared music and weather)
 
 - Add a source-only private worker mode, entered before application/device/media-server startup, for UC-supervised

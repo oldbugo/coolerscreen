@@ -212,6 +212,8 @@ const COMMANDS: &[&str] = &[
     "screen_preview_end",
     "twin_watch",
     "live_set",
+    "dock_control_state",
+    "dock_action",
     "activate",
     "health_status",
     "hardware_exchange",
@@ -266,6 +268,7 @@ fn validate(command: &str, args: &Value) -> CoreResult<()> {
         "screen_preview_end" => &["keepalive"],
         "twin_watch" => &["on"],
         "live_set" => &["patch"],
+        "dock_action" => &["action"],
         command if COMMANDS.contains(&command) => &[],
         _ => return Err(CoreError::coded("unsupported", "Unknown cooler command.").status(404)),
     };
@@ -508,6 +511,7 @@ fn dispatch(app: &App, command: &str, a: &Value) -> CoreResult<Value> {
         "lyrics_status",
         "ext_sensor_status",
         "game_fps_status",
+        "dock_control_state",
         "health_status",
         "hardware_exchange",
         "services_exchange",
@@ -527,6 +531,8 @@ fn dispatch(app: &App, command: &str, a: &Value) -> CoreResult<Value> {
             let snapshot=serde_json::from_value::<Option<cs_core::live::shared_hardware::Snapshot>>(snapshot.clone()).map_err(|_|bad("snapshot"))?;
             cs_core::live::shared_hardware::exchange(snapshot).map_err(|_|CoreError::coded("hardware_snapshot","Shared hardware snapshot was rejected.").status(400))
         },
+        "dock_control_state"=>app.dock_control_state(),
+        "dock_action"=>app.dock_action(serde_json::from_value(a["action"].clone()).map_err(|_|bad("action"))?),
         "health_status"=>Ok(health_value(&app.live.status())),
         "app_state" => Ok(app.app_state()),
         "activity" => Ok(app.activity()),
@@ -986,7 +992,8 @@ pub fn run() -> CoreResult<()> {
                 "originals_list",
                 "theme_standard",
                 "sources_list",
-                "health_status",
+                "dock_control_state",
+        "health_status",
                 "hardware_exchange",
                 "services_exchange",
             ]
@@ -1015,7 +1022,8 @@ pub fn run() -> CoreResult<()> {
                     "activity",
                     "job_get",
                     "device_presence",
-                    "health_status",
+                    "dock_control_state",
+        "health_status",
                     "hardware_exchange",
                     "services_exchange",
                 ]
@@ -1023,7 +1031,7 @@ pub fn run() -> CoreResult<()> {
                 {
                     None
                 } else {
-                    Some(mutations.lock().unwrap())
+                    Some(if request.command == "dock_action" { mutations.try_lock().map_err(|_|CoreError::coded("busy","The cooler is in use. Try again when its work finishes.").status(409))? } else { mutations.lock().unwrap() })
                 };
                 dispatch(&app, &request.command, &request.args)
             }))
@@ -1182,6 +1190,24 @@ mod tests {
         assert!(dispatch(&app, "theme_standard", &json!({}))
             .unwrap()
             .is_object());
+        let controls=dispatch(&app,"dock_control_state",&json!({})).unwrap();
+        assert_eq!(controls.as_object().unwrap().len(),10);
+        let call=|action:Value|dispatch(&app,"dock_action",&json!({"action":action}));
+        assert!(call(json!({"op":"live","mode":"off","extra":1})).is_err());
+        let off=call(json!({"op":"live","mode":"off"})).unwrap();
+        assert_eq!(off["liveEnabled"],false);assert_eq!(off["running"],false);
+        app.live.twin_start();
+        assert!(app.live.twinning());
+        let twin=call(json!({"op":"brightness_set","value":60})).unwrap();
+        assert_eq!(twin["liveEnabled"],false);assert!(app.live.twinning(),"brightness preserves the editor-only pipeline");
+        let on=call(json!({"op":"live","mode":"toggle"})).unwrap();
+        assert_eq!(on["liveEnabled"],true);assert_eq!(on["running"],true);
+        assert!(!app.live.twinning(),"explicit Live on claims the pipeline from the editor");
+        let bright=call(json!({"op":"brightness_set","value":72})).unwrap();
+        assert_eq!(bright["brightness"],json!({"reported":72,"requested":72}));
+        assert_eq!(bright["liveEnabled"],true);assert_eq!(bright["running"],true);
+        let off=call(json!({"op":"live","mode":"toggle"})).unwrap();
+        assert_eq!(off["liveEnabled"],false);assert_eq!(off["running"],false);
         shutdown(&app);
         let idle=dispatch(&app,"hardware_exchange",&json!({"snapshot":null})).unwrap();
         assert_eq!(idle["state"]["local_polls"],0);
