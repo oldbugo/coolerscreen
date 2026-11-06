@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 const MAX_FRAME: usize = 32 * 1024 * 1024;
 const MAX_REQUESTS: usize = 16;
@@ -67,6 +67,52 @@ impl Events for Output {
     }
     fn device_busy(&self, busy: bool) {
         self.event("cs:device", json!({"busy":busy}));
+    }
+}
+
+/// Diagnostics must never hold the Live sender behind a slow parent pipe.
+/// Producers drop excess traces; shutdown permits only a bounded final drain.
+#[derive(Clone)]
+struct TraceEvents {
+    sender: mpsc::SyncSender<Value>,
+    pending: Arc<(Mutex<usize>, Condvar)>,
+}
+impl TraceEvents {
+    fn new(emit: impl Fn(Value) + Send + 'static) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(16);
+        let pending = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let waiting = pending.clone();
+        std::thread::spawn(move || {
+            while let Ok(value) = receiver.recv() {
+                emit(value);
+                let mut count = waiting.0.lock().unwrap();
+                *count -= 1;
+                waiting.1.notify_all();
+            }
+        });
+        Self { sender, pending }
+    }
+    fn enqueue(&self, value: Value) {
+        let mut count = self.pending.0.lock().unwrap();
+        *count += 1;
+        if self.sender.try_send(value).is_err() {
+            *count -= 1;
+        }
+    }
+    fn flush(&self, timeout: Duration) {
+        let until = Instant::now() + timeout;
+        let mut count = self.pending.0.lock().unwrap();
+        while *count > 0 {
+            let remaining = until.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (next, result) = self.pending.1.wait_timeout(count, remaining).unwrap();
+            count = next;
+            if result.timed_out() {
+                break;
+            }
+        }
     }
 }
 
@@ -904,6 +950,10 @@ pub fn run() -> CoreResult<()> {
         )?;
     }
     let out = Output(Arc::new(Mutex::new(std::io::stdout())));
+    let trace_out = out.clone();
+    let traces = TraceEvents::new(move |value| trace_out.event("cs:connection_trace", value));
+    let trace_sink = traces.clone();
+    cs_core::live::session::trace::install_sink(Arc::new(move |value| trace_sink.enqueue(value)));
     let backends = if fake {
         Backends {
             media: Arc::new(FakeMedia::default()),
@@ -981,6 +1031,7 @@ pub fn run() -> CoreResult<()> {
                 continue;
             }
             shutdown(&app);
+            traces.flush(Duration::from_millis(250));
             out.reply(request.id, Ok(json!({"stopped":true})));
             break;
         }
@@ -1057,6 +1108,7 @@ pub fn run() -> CoreResult<()> {
         std::thread::sleep(Duration::from_millis(100));
     }
     shutdown(&app);
+    traces.flush(Duration::from_millis(250));
     drop(server);
     protocol_error.map_or(Ok(()), Err)
 }
@@ -1064,6 +1116,33 @@ pub fn run() -> CoreResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn connection_trace_queue_drops_excess_and_bounds_its_final_drain() {
+        let (entered, started) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = delivered.clone();
+        let traces = TraceEvents::new(move |_| {
+            if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                entered.send(()).unwrap();
+                resume.recv().unwrap();
+            }
+        });
+        traces.enqueue(json!({"sequence":1}));
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        for sequence in 2..1000 {
+            traces.enqueue(json!({"sequence":sequence}));
+        }
+        assert_eq!(*traces.pending.0.lock().unwrap(), 17);
+        let start = Instant::now();
+        traces.flush(Duration::from_millis(20));
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert_eq!(*traces.pending.0.lock().unwrap(), 17);
+        release.send(()).unwrap();
+        traces.flush(Duration::from_secs(2));
+        assert_eq!(*traces.pending.0.lock().unwrap(), 0);
+        assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 17);
+    }
     #[test]
     fn health_is_read_only_whitelist_and_keeps_timeout_distinct_from_absence() {
         let live = json!({"running":true,"connected":false,"connection":{"state":"error","message":"USB write timed out seed-secret C:\\private\\file","attempts":9,"retryInSeconds":15},"theme":"secret","account":"secret"});

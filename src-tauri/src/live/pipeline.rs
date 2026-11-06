@@ -652,8 +652,8 @@ impl Pipeline {
                         s.stop_fast(ending);
                     } else {
                         log(match ending {
-                            Ending::LoopClip => "stopping: loop clip plays",
-                            Ending::ScreenOff => "stopping: screen off",
+                            Ending::LoopClip => "stopping: requesting Embedded playback",
+                            Ending::ScreenOff => "stopping: requesting screen off",
                         });
                         s.stop_with(ending);
                     }

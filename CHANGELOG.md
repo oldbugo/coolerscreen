@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.21.1 - 2026-11-06 (UC connection step diagnostics)
+
+- Buffer finite per-step results and elapsed times for Live connect and normal/fast/cancel stop paths, then emit through a bounded nonblocking private worker queue. No payloads, identifiers or arbitrary errors are recorded.
+- Preserve the existing commands, order, waits, write timeouts, original errors and best-effort stop continuation. Diagnostics add no recovery operations.
+- UC persists validated traces only while its existing Connection diagnostics setting is enabled. The final worker drain is bounded; saturated channels drop diagnostics rather than hold Live.
+- Stop messages describe requested Embedded playback or screen-off, rather than claiming the physical result. Standalone installation/data remain unchanged; this is evidence collection, not a disconnect fix.
+
 ## 4.21.0 - 2026-11-06 (UC dock-to-cooler controls)
 
 - Add narrow private theme selection/cycling, Live on/off/toggle and brightness actions, with a read-only bounded
