@@ -2,6 +2,7 @@
 // The Rust core (src/core) serves the UI through Tauri commands/events and a local media server.
 // 3.0 prototype B (live companion inside the app, off by default): live_app.rs (tray, hide on close), live_measure.rs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use cs_core::core::sync::MutexExt;
 
 mod live_app;
 mod instance_id;
@@ -20,6 +21,8 @@ use tauri::{Manager, RunEvent};
 /// Keeps the media server alive for the app's lifetime.
 struct Media(#[allow(dead_code)] Mutex<Option<MediaServer>>);
 fn main() {
+    // Release builds unwind on panic: every panic leaves one short line in device.log (see core/sync.rs).
+    cs_core::core::sync::install_panic_hook("app");
     let args: Vec<String> = std::env::args().skip(1).collect();
     // `--quit`: ask the running app (same app folder) to quit like the tray's Quit; never shows a window or starts an app.
     if args.iter().any(|a| a == "--quit") {
@@ -171,7 +174,7 @@ fn main() {
                     #[cfg(debug_assertions)]
                     eprintln!("CS_MEDIA {}", srv.base_url());
                     c.set_media_base(&srv.base_url());
-                    app.state::<Media>().0.lock().unwrap().replace(srv);
+                    app.state::<Media>().0.lock_or_recover().replace(srv);
                 }
                 Err(e) => eprintln!("Media server failed to start: {e}"),
             }

@@ -3,6 +3,7 @@
 //! recognised by its unchanged size and modification time. A file that disappears is marked "missing" (its
 //! versions stay); the UI offers to delete originals missing for more than 30 days and never deletes them itself.
 //! A `notify` watcher (debounced 1 s) rescans the folder; files still being written are retried (stable-file check).
+use crate::core::sync::MutexExt;
 use super::api::MediaTask;
 use super::app::App;
 use super::error::{CoreError, CoreResult};
@@ -128,7 +129,7 @@ fn is_stable(file: &Path, md: &std::fs::Metadata) -> bool {
 
 impl App {
     pub fn gallery_dir(&self) -> PathBuf {
-        if let Some(g) = self.gallery_env.lock().unwrap().clone() {
+        if let Some(g) = self.gallery_env.lock_or_recover().clone() {
             return g.into();
         }
         let s = self.settings.load();
@@ -259,7 +260,7 @@ impl App {
             }
             if fs_ != Some(md.len()) || fm != Some(mtime_ms(&md) as f64) {
                 let key = file_key(f, &md);
-                if self.gallery.bad.lock().unwrap().contains_key(&key) {
+                if self.gallery.bad.lock_or_recover().contains_key(&key) {
                     continue;
                 }
                 if !is_stable(f, &md) {
@@ -268,7 +269,7 @@ impl App {
                 }
                 let cur = self.lib.read_original(&oid);
                 if let Err(e) = self.register_file(f, cur.as_ref()) {
-                    self.gallery.bad.lock().unwrap().insert(key, e.message.clone());
+                    self.gallery.bad.lock_or_recover().insert(key, e.message.clone());
                     eprintln!("Gallery: {}", e.message);
                 }
             }
@@ -308,7 +309,7 @@ impl App {
                 continue;
             }
             let key = file_key(f, md);
-            if self.gallery.bad.lock().unwrap().contains_key(&key) {
+            if self.gallery.bad.lock_or_recover().contains_key(&key) {
                 continue;
             }
             if !is_stable(f, md) {
@@ -316,7 +317,7 @@ impl App {
                 continue;
             }
             if let Err(e) = self.register_file(f, None) {
-                self.gallery.bad.lock().unwrap().insert(key, e.message.clone());
+                self.gallery.bad.lock_or_recover().insert(key, e.message.clone());
                 eprintln!("Gallery: skipped {}: {}", f.display(), e.message);
             }
         }
@@ -332,7 +333,7 @@ impl App {
     /// Serialised scan of the gallery folder; afterwards queues any missing previews.
     pub fn gallery_sync(&self) {
         let pending = {
-            let _g = self.gallery.sync_lock.lock().unwrap();
+            let _g = self.gallery.sync_lock.lock_or_recover();
             self.do_sync()
         };
         if pending {
@@ -366,11 +367,11 @@ impl App {
             let ready = o["assets"] == "ready" && o.get("fps").is_some();
             let oid = o["id"].as_str().unwrap_or("").to_string();
             let key = format!("{oid}|{}", o.get("fileMtime").map(|v| v.to_string()).unwrap_or_default());
-            if ready || self.gallery.assets_tried.lock().unwrap().contains(&key) {
+            if ready || self.gallery.assets_tried.lock_or_recover().contains(&key) {
                 continue;
             }
             let Some(src) = self.lib.source_path(&o) else { continue };
-            self.gallery.assets_tried.lock().unwrap().insert(key);
+            self.gallery.assets_tried.lock_or_recover().insert(key);
             let res = self.media.resources(MediaTask::Assets, None);
             let app = self.arc();
             let spec = TaskSpec::new("assets", format!("Previews for \"{}\"", o["name"].as_str().unwrap_or("clip")), res)
@@ -408,15 +409,15 @@ impl App {
     pub fn gallery_watch(&self) {
         use notify::{RecursiveMode, Watcher};
         let dir = self.gallery_dir();
-        let mut w = self.gallery.watcher.lock().unwrap();
+        let mut w = self.gallery.watcher.lock_or_recover();
         if w.as_ref().is_some_and(|(d, _)| d == &dir) {
             return;
         }
         *w = None;
         let deb = {
-            let mut r = self.gallery.rescan.lock().unwrap();
+            let mut r = self.gallery.rescan.lock_or_recover();
             if r.is_none() {
-                let weak = self.me.lock().unwrap().clone();
+                let weak = self.me.lock_or_recover().clone();
                 *r = Some(super::app::Debounce::new(Duration::from_millis(1000), move || {
                     if let Some(a) = weak.upgrade() {
                         a.gallery_sync();

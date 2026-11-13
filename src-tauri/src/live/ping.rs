@@ -1,6 +1,7 @@
 //! 4.0 stream B2: the `ping` widget's data. One ICMP echo per second to a host the USER typed into the widget (default 1.1.1.1), only
 //! while a ping widget is shown (a thread per host, ending a few seconds after the last ask). Windows' own ICMP API (IcmpSendEcho): no
 //! admin, no driver. Nothing else is sent.
+use crate::core::sync::MutexExt;
 use std::collections::{HashMap, VecDeque};
 use std::net::{Ipv4Addr, ToSocketAddrs};
 use std::sync::{Mutex, OnceLock};
@@ -45,7 +46,7 @@ pub fn clean_host(s: &str) -> Option<String> {
 /// The latest numbers for `host` (registers the demand and starts its thread when needed). None: not an acceptable host.
 pub fn read(host: &str, secs: f32) -> Option<PingView> {
     let host = clean_host(host)?;
-    let mut g = slots().lock().unwrap();
+    let mut g = slots().lock_or_recover();
     if !g.contains_key(&host) && g.values().filter(|s| s.running).count() >= MAX_HOSTS {
         return None;
     }
@@ -54,7 +55,15 @@ pub fn read(host: &str, secs: f32) -> Option<PingView> {
     if !s.running {
         s.running = true;
         let h = host.clone();
-        std::thread::spawn(move || run(h));
+        // A crash starts this host's pings again (1 s, doubling to 30 s) while they are still asked for.
+        std::thread::spawn(move || {
+            let quiet = || !slots().lock_or_recover().get(&h).and_then(|s| s.last_used).is_some_and(|t| t.elapsed() < KEEP);
+            if crate::core::sync::restarting("ping", quiet, || run(h.clone())).is_none() {
+                if let Some(s) = slots().lock_or_recover().get_mut(&h) {
+                    s.running = false;
+                }
+            }
+        });
     }
     let now = Instant::now();
     let hist = s.ring.iter().filter_map(|(t, v)| v.map(|v| ((now - *t).as_secs_f32(), v))).filter(|(a, _)| *a <= secs).collect();
@@ -81,18 +90,18 @@ fn run(host: String) {
         loop {
             // stop when nobody asked lately
             {
-                let g = slots().lock().unwrap();
+                let g = slots().lock_or_recover();
                 if !g.get(&host).and_then(|s| s.last_used).is_some_and(|t| t.elapsed() < KEEP) {
                     break;
                 }
             }
             let dest = {
-                let cached = slots().lock().unwrap().get(&host).and_then(|s| s.resolved).filter(|(t, ip)| t.elapsed() < Duration::from_secs(if ip.is_some() { 300 } else { 10 }));
+                let cached = slots().lock_or_recover().get(&host).and_then(|s| s.resolved).filter(|(t, ip)| t.elapsed() < Duration::from_secs(if ip.is_some() { 300 } else { 10 }));
                 match cached {
                     Some((_, ip)) => ip,
                     None => {
                         let ip = resolve(&host);
-                        if let Some(s) = slots().lock().unwrap().get_mut(&host) {
+                        if let Some(s) = slots().lock_or_recover().get_mut(&host) {
                             s.resolved = Some((Instant::now(), ip));
                         }
                         ip
@@ -111,7 +120,7 @@ fn run(host: String) {
                 _ => None,
             };
             {
-                let mut g = slots().lock().unwrap();
+                let mut g = slots().lock_or_recover();
                 if let Some(s) = g.get_mut(&host) {
                     s.ring.push_back((Instant::now(), rtt));
                     while s.ring.len() > RING {
@@ -131,7 +140,7 @@ fn run(host: String) {
             IcmpCloseHandle(h);
         }
     }
-    if let Some(s) = slots().lock().unwrap().get_mut(&host) {
+    if let Some(s) = slots().lock_or_recover().get_mut(&host) {
         s.running = false;
     }
 }

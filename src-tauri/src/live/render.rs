@@ -3,6 +3,7 @@
 //! transparent layer (each inside its box, scaled to it), composited with the live-layer fade, then the notch mask.
 //! The panel is limited by the screen: motion along the landscape vertical axis tears, so nothing here moves up or down;
 //! the gradient drifts sideways, the bars grow sideways, and fades only change opacity.
+use crate::core::sync::MutexExt;
 use super::mask::Mask;
 use super::nowplaying::NowPlaying;
 use super::sensors::Sensors;
@@ -442,7 +443,7 @@ impl Renderer {
     fn sync_effect(&mut self) {
         let want = self.theme.theme.effect();
         if want.is_none() && self.effect.is_some() {
-            *self.first.lock().unwrap() = None; // no longer an effect theme: drop its hand-over frame
+            *self.first.lock_or_recover() = None; // no longer an effect theme: drop its hand-over frame
         }
         if want != self.effect.as_ref().map(|e| e.params.clone()) {
             self.effect = want.map(super::effects::EffectBg::new);
@@ -454,7 +455,7 @@ impl Renderer {
     /// The hand-over target of an effect theme whose Embedded loop is a recording of it: the loop starts at phase 0, so the first
     /// frame is the effect at phase 0 (drawn here, no decoder). Cleared when the theme has no such loop.
     fn fill_effect_first(&mut self) {
-        let mut slot = self.first.lock().unwrap();
+        let mut slot = self.first.lock_or_recover();
         match (&self.effect, self.theme.effect_stored) {
             (Some(e), true) => {
                 let (cw, ch) = (self.cw, self.ch);
@@ -512,7 +513,7 @@ impl Renderer {
     }
 
     pub fn has_first_frame(&self) -> bool {
-        self.first.lock().unwrap().is_some()
+        self.first.lock_or_recover().is_some()
     }
 
     /// Number of frames the background decoder delivered so far (the loop position is this modulo the loop length).
@@ -672,7 +673,7 @@ impl Renderer {
         // second) or the fade changed.
         let wants_music = self.has_widget("music") || self.has_widget("lyrics");
         let keep_idle = self.theme.theme.handover.music_idle == MusicIdle::Keep;
-        let np = if wants_music { if super::shared_services::enabled()&&!self.sample{super::shared_services::now_playing()}else{self.music.as_ref().and_then(|m| m.lock().unwrap().clone())} } else { None };
+        let np = if wants_music { if super::shared_services::enabled()&&!self.sample{super::shared_services::now_playing()}else{self.music.as_ref().and_then(|m| m.lock_or_recover().clone())} } else { None };
         let want = np.as_ref().is_some_and(|n| n.visible()) || keep_idle;
         if self.sample {
             self.music_alpha = if want { 1.0 } else { 0.0 };
@@ -698,7 +699,7 @@ impl Renderer {
         }
         self.last_key = Some(key);
         self.fonts.trim_fallback();
-        let s = self.sensors.lock().unwrap().clone();
+        let s = self.sensors.lock_or_recover().clone();
         let t0 = Instant::now();
         self.background(t, vframe);
         // The stored base is already fitted the way it was made; anything else (or a base made with another fit) is scaled here.
@@ -752,7 +753,7 @@ impl Renderer {
             return;
         }
         let k = (p.clamp(0.0, 1.0) * 256.0) as u32;
-        let first = self.first.lock().unwrap().clone();
+        let first = self.first.lock_or_recover().clone();
         let d = self.pm.data_mut();
         match (target, first) {
             (HandTarget::FirstFrame, Some(f)) if f.len() == d.len() => {

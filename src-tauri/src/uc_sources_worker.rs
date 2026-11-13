@@ -1,4 +1,5 @@
 //! Source-only process. No App, DeviceLease, media server, settings or device engine.
+use cs_core::core::sync::MutexExt;
 use cs_core::live::{nowplaying::MusicWatcher, shared_services::*, weather};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -80,15 +81,17 @@ impl MusicActor {
             starts.clone(),
             reads.clone(),
         );
-        std::thread::spawn(move || {
+        // A crash in one round starts the loop again from a clean state (1 s, doubling to 30 s), so music does not
+        // stop for good; it ends when the worker stops.
+        std::thread::spawn(move || cs_core::core::sync::restarting("music source", || s.load(Ordering::SeqCst), || {
             let mut watcher: Option<MusicWatcher> = None;
             let mut previous: Option<MusicDemand> = None;
             let mut encoded: Option<(Arc<cs_core::live::nowplaying::Cover>, CoverData)> = None;
             let mut prior_reads = 0;
             while !s.load(Ordering::SeqCst) {
-                let demand = w.lock().unwrap().clone();
+                let demand = w.lock_or_recover().clone();
                 if demand != previous {
-                    *o.lock().unwrap() = empty_music(
+                    *o.lock_or_recover() = empty_music(
                         if demand.is_some() {
                             "loading"
                         } else {
@@ -148,13 +151,13 @@ impl MusicActor {
                             observation.status = "loading".into();
                         }
                     }
-                    if *w.lock().unwrap() == Some(demand.clone()) {
-                        *o.lock().unwrap() = observation;
+                    if *w.lock_or_recover() == Some(demand.clone()) {
+                        *o.lock_or_recover() = observation;
                     }
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-        });
+        }));
         Self {
             wanted,
             observed,
@@ -164,8 +167,8 @@ impl MusicActor {
         }
     }
     fn get(&self, demand: Option<MusicDemand>) -> MusicObservation {
-        *self.wanted.lock().unwrap() = demand.clone();
-        let observed = self.observed.lock().unwrap().clone();
+        *self.wanted.lock_or_recover() = demand.clone();
+        let observed = self.observed.lock_or_recover().clone();
         if demand.is_none() {
             empty_music("inactive", None)
         } else if observed.preferred_app != demand.as_ref().and_then(|d| d.preferred_app.clone())

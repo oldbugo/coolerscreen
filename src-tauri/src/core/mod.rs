@@ -26,6 +26,7 @@ pub mod repair;
 pub mod scheduler;
 pub mod service;
 pub mod settings;
+pub mod sync;
 pub mod sources_adapter;
 pub mod theme;
 pub mod themes;

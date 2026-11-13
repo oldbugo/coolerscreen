@@ -2,6 +2,7 @@
 //! Media Player, VLC, ...). A worker thread on the multithreaded apartment waits for session events (new track, play/pause,
 //! session change) with a 1 s poll as a safety net. Properties are re-read about 400 ms after a track change (players
 //! publish title and cover a moment apart); the cover is decoded once per track. The position is extrapolated while playing.
+use crate::core::sync::MutexExt;
 use std::sync::atomic::{AtomicBool,AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -71,7 +72,7 @@ impl MusicWatcher {
         let preference_epoch=Arc::new(AtomicU64::new(1));let epoch=preference_epoch.clone();
         let thread = std::thread::spawn(move || {
             if let Err(e) = run(d2, p2, s2,h2.clone(),epoch) {
-                h2.lock().unwrap().status="error";
+                h2.lock_or_recover().status="error";
                 crate::device::log(&format!("companion: now playing unavailable ({:#x})",e.code().0));
             }
         });
@@ -79,19 +80,19 @@ impl MusicWatcher {
     }
 
     pub fn set_preferred(&self, app: Option<String>) {
-        let mut preferred=self.preferred.lock().unwrap();if *preferred==app{return}
+        let mut preferred=self.preferred.lock_or_recover();if *preferred==app{return}
         self.preference_epoch.fetch_add(1,Ordering::SeqCst);*preferred = app;
-        *self.data.lock().unwrap()=None;
-        let mut h=self.health.lock().unwrap();h.status="loading";h.observed_at_ms=None;drop(h);drop(preferred);
+        *self.data.lock_or_recover()=None;
+        let mut h=self.health.lock_or_recover();h.status="loading";h.observed_at_ms=None;drop(h);drop(preferred);
         if let Some(t) = &self.thread {
             t.thread().unpark();
         }
     }
 
     pub fn get(&self) -> Option<NowPlaying> {
-        self.data.lock().unwrap().clone()
+        self.data.lock_or_recover().clone()
     }
-    pub fn source_health(&self)->SourceHealth{self.health.lock().unwrap().clone()}
+    pub fn source_health(&self)->SourceHealth{self.health.lock_or_recover().clone()}
 }
 
 impl Drop for MusicWatcher {
@@ -105,9 +106,9 @@ impl Drop for MusicWatcher {
 }
 
 fn publish(data:&Mutex<Option<NowPlaying>>,health:&Mutex<SourceHealth>,preferred:&Mutex<Option<String>>,epoch:&AtomicU64,expected:&Option<String>,expected_epoch:u64,value:Option<NowPlaying>,status:&'static str)->bool{
-    let current=preferred.lock().unwrap();if *current!=*expected||epoch.load(Ordering::SeqCst)!=expected_epoch{return false}
-    if status=="ok"||status=="none"{*data.lock().unwrap()=value;}
-    let mut h=health.lock().unwrap();h.status=status;h.observed_at_ms=Some(super::shared_services::now_ms());true
+    let current=preferred.lock_or_recover();if *current!=*expected||epoch.load(Ordering::SeqCst)!=expected_epoch{return false}
+    if status=="ok"||status=="none"{*data.lock_or_recover()=value;}
+    let mut h=health.lock_or_recover();h.status=status;h.observed_at_ms=Some(super::shared_services::now_ms());true
 }
 fn run(data: Arc<Mutex<Option<NowPlaying>>>, preferred: Arc<Mutex<Option<String>>>, stop: Arc<AtomicBool>,health:Arc<Mutex<SourceHealth>>,preference_epoch:Arc<AtomicU64>) -> windows::core::Result<()> {
     use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
@@ -133,8 +134,8 @@ fn run(data: Arc<Mutex<Option<NowPlaying>>>, preferred: Arc<Mutex<Option<String>
     let mut state_since = Instant::now();
     let mut state_changed_at_ms=super::shared_services::now_ms();
     while !stop.load(Ordering::Relaxed) {
-        health.lock().unwrap().reads+=1;
-        let (pref,epoch)={let p=preferred.lock().unwrap();(p.clone(),preference_epoch.load(Ordering::SeqCst))};
+        health.lock_or_recover().reads+=1;
+        let (pref,epoch)={let p=preferred.lock_or_recover();(p.clone(),preference_epoch.load(Ordering::SeqCst))};
         let session = match pick(&mgr, pref.as_deref()) {Ok(session)=>session,Err(_)=>{publish(&data,&health,&preferred,&preference_epoch,&pref,epoch,None,"error");std::thread::park_timeout(Duration::from_secs(1));continue;}};
         match session {
             None => {

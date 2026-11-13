@@ -171,7 +171,7 @@ pub struct EtwSession {
 unsafe impl Send for EtwSession {}
 
 unsafe extern "system" fn callback(rec: *mut EVENT_RECORD) {
-    let _ = std::panic::catch_unwind(|| {
+    let _ = crate::core::sync::guarded("game fps event", || {
         if rec.is_null() {
             return;
         }

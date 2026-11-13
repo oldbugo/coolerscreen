@@ -1,6 +1,7 @@
 //! Sensor readings for the sensor panel, sampled about once a second on their own thread.
 //! CPU load: GetSystemTimes. RAM: GlobalMemoryStatusEx. NVIDIA GPU: NVML, loaded at run time from nvml.dll (it ships with the
 //! driver; no admin, nothing to install). CPU temperature needs a kernel driver or admin tooling, so it is None here.
+use crate::core::sync::MutexExt;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -61,7 +62,7 @@ impl Sampler {
                     s.ram_total_gb = total as f32 / 1073741824.0;
                 }
                 s.gpu = nvml.read();
-                *d2.lock().unwrap() = s;
+                *d2.lock_or_recover() = s;
                 // sleep in small steps so stop is quick
                 for _ in 0..10 {
                     if s2.load(Ordering::Relaxed) {
@@ -75,7 +76,7 @@ impl Sampler {
     }
 
     pub fn get(&self) -> Sensors {
-        self.data.lock().unwrap().clone()
+        self.data.lock_or_recover().clone()
     }
 }
 

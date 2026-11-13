@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.22.0 - 2026-11-13 (crash recovery, as in Unified Control 0.10.0)
+
+- Release builds now unwind on panic instead of aborting, so one crashing job or thread no longer ends the whole app.
+  Ported Unified Control's crash helpers (`core/sync.rs`): poison-tolerant locks, guarded regions, service loops that
+  start again after a crash (1 s, doubling to 30 s), and a panic hook.
+- Every lock that used `lock().unwrap()` (and the RwLock and Condvar equivalents) recovers a lock left poisoned by a
+  crash instead of spreading the fault. The library's version index is cleared after such a crash and read again from disk.
+- A crashing scheduler job, worker request, media-server connection or game-fps event fails only itself. The live data
+  samplers (metrics, audio, volume, game fps, lyrics, weather, ping, headlines, agenda, web picture) and the source
+  worker's music loop start again after a crash instead of stopping for good.
+- Every panic writes one short line to device.log (at most 32 per run, 160 characters, user folders replaced by
+  placeholders). In `uc-cooler-worker` an unguarded panic still ends the worker (exit code 101), so Unified Control
+  restarts a clean one. USB commands, order and timings are unchanged. Not installed; no hardware test.
+
 ## 4.21.1 - 2026-11-06 (UC connection step diagnostics)
 
 - Buffer finite per-step results and elapsed times for Live connect and normal/fast/cancel stop paths, then emit through a bounded nonblocking private worker queue. No payloads, identifiers or arbitrary errors are recorded.

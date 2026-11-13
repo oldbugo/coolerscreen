@@ -6,6 +6,7 @@
 //! RAM (GlobalMemoryStatusEx), NVIDIA GPU load/temp/clock/VRAM/power/fan (NVML, loaded at run time), network (GetIfTable2),
 //! disk space (GetDiskFreeSpaceEx), disk activity (PDH), top processes (toolhelp snapshot, only while shown).
 //! CPU temperature has no reliable source without a kernel driver: it reads as missing (None) and widgets show "-".
+use crate::core::sync::MutexExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -77,13 +78,18 @@ impl Hub {
         g.running = true;
         self.stop.store(false, Ordering::Relaxed);
         let me = self.clone();
-        std::thread::spawn(move || me.run());
+        // A crash starts the sampler again (1 s, doubling to 30 s); a stop while it waits clears the running flag.
+        std::thread::spawn(move || {
+            if crate::core::sync::restarting("metrics sampler", || me.stop.load(Ordering::Relaxed), || me.clone().run()).is_none() {
+                me.s.lock_or_recover().running = false;
+            }
+        });
     }
 
     /// Ask for a metric (registers the demand): its latest value and total, or None when it cannot be read.
     pub fn read(self: &Arc<Self>, key: &str, rate: u32) -> (Option<f32>, Option<f32>) {
         if super::shared_hardware::replaces(key) {return super::shared_hardware::read_metric(key,rate);}
-        let mut g = self.s.lock().unwrap();
+        let mut g = self.s.lock_or_recover();
         let first = !g.slots.contains_key(key);
         let slot = g.slots.entry(key.to_string()).or_default();
         slot.last_used = Some(Instant::now());
@@ -97,13 +103,13 @@ impl Hub {
     /// History within the last `secs` seconds, oldest first, as (age in seconds, value).
     pub fn history(&self, key: &str, secs: f32) -> Vec<(f32, f32)> {
         if super::shared_hardware::replaces(key) {return super::shared_hardware::history(key,secs);}
-        let g = self.s.lock().unwrap();
+        let g = self.s.lock_or_recover();
         let now = Instant::now();
         g.slots.get(key).map(|s| s.ring.iter().map(|(t, v)| ((now - *t).as_secs_f32(), *v)).filter(|(a, _)| *a <= secs).collect()).unwrap_or_default()
     }
 
     pub fn top_processes(self: &Arc<Self>, by_ram: bool, count: usize) -> Vec<ProcRow> {
-        let mut g = self.s.lock().unwrap();
+        let mut g = self.s.lock_or_recover();
         g.procs_used = Some(Instant::now());
         self.ensure_thread(&mut g);
         let mut v = g.procs.clone();
@@ -116,7 +122,7 @@ impl Hub {
     }
 
     pub fn cpu_name(&self) -> Option<String> {
-        let mut g = self.s.lock().unwrap();
+        let mut g = self.s.lock_or_recover();
         if g.cpu_name.is_none() {
             g.cpu_name = Some(read_cpu_name().unwrap_or_default());
         }
@@ -127,7 +133,7 @@ impl Hub {
         if super::shared_hardware::enabled() {return super::shared_hardware::gpu_name();}
         // the GPU name comes with the first GPU poll
         let _ = self.read("gpu.load", 1);
-        self.s.lock().unwrap().gpu_name.clone()
+        self.s.lock_or_recover().gpu_name.clone()
     }
 
     /// Stop the thread now (it also ends by itself when nothing is asked for).
@@ -147,7 +153,7 @@ impl Hub {
             let now = Instant::now();
             // which slots are due
             let due: Vec<String> = {
-                let g = self.s.lock().unwrap();
+                let g = self.s.lock_or_recover();
                 g.slots
                     .iter()
                     .filter(|(_, s)| s.last_used.is_some_and(|t| now - t < KEEP))
@@ -158,7 +164,7 @@ impl Hub {
             for k in due {
                 // take the slot's counter state out, poll without holding the lock (the polls make system calls)
                 let mut slot = {
-                    let mut g = self.s.lock().unwrap();
+                    let mut g = self.s.lock_or_recover();
                     match g.slots.get_mut(&k) {
                         Some(s) => std::mem::take(s),
                         None => continue,
@@ -172,7 +178,7 @@ impl Hub {
                         slot.ring.pop_front();
                     }
                 }
-                let mut g = self.s.lock().unwrap();
+                let mut g = self.s.lock_or_recover();
                 if let Some(n) = gpu_name {
                     g.gpu_name = Some(n);
                 }
@@ -185,14 +191,14 @@ impl Hub {
                 }
             }
             // top processes: every 2 s while shown
-            let procs_wanted = self.s.lock().unwrap().procs_used.is_some_and(|t| now - t < KEEP);
+            let procs_wanted = self.s.lock_or_recover().procs_used.is_some_and(|t| now - t < KEEP);
             if procs_wanted && now - last_procs >= Duration::from_secs(2) {
                 let rows = sample_processes(&mut prev_proc, now);
                 last_procs = now;
-                self.s.lock().unwrap().procs = rows;
+                self.s.lock_or_recover().procs = rows;
             }
             // nothing asked for lately: end the thread (a new ask starts it again)
-            let mut g = self.s.lock().unwrap();
+            let mut g = self.s.lock_or_recover();
             let busy = g.slots.values().any(|s| s.last_used.is_some_and(|t| now - t < KEEP)) || procs_wanted;
             if !busy {
                 g.running = false;
@@ -202,7 +208,7 @@ impl Hub {
             }
         }
         // a stop request also clears the running flag
-        self.s.lock().unwrap().running = false;
+        self.s.lock_or_recover().running = false;
     }
 }
 

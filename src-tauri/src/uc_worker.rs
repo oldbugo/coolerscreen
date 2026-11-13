@@ -1,4 +1,5 @@
 //! Private inherited-handle protocol for UC. Only this binary includes this module.
+use cs_core::core::sync::{MutexExt, RecoverResult};
 use cs_core::core::api::{Backends, NoSources};
 use cs_core::core::error::{CoreError, CoreResult};
 use cs_core::core::fake_media::FakeMedia;
@@ -84,8 +85,9 @@ impl TraceEvents {
         let waiting = pending.clone();
         std::thread::spawn(move || {
             while let Ok(value) = receiver.recv() {
-                emit(value);
-                let mut count = waiting.0.lock().unwrap();
+                // A crash while sending one trace drops that trace only; the count below still settles.
+                let _ = cs_core::core::sync::guarded("trace delivery", || emit(value));
+                let mut count = waiting.0.lock_or_recover();
                 *count -= 1;
                 waiting.1.notify_all();
             }
@@ -93,7 +95,7 @@ impl TraceEvents {
         Self { sender, pending }
     }
     fn enqueue(&self, value: Value) {
-        let mut count = self.pending.0.lock().unwrap();
+        let mut count = self.pending.0.lock_or_recover();
         *count += 1;
         if self.sender.try_send(value).is_err() {
             *count -= 1;
@@ -101,13 +103,13 @@ impl TraceEvents {
     }
     fn flush(&self, timeout: Duration) {
         let until = Instant::now() + timeout;
-        let mut count = self.pending.0.lock().unwrap();
+        let mut count = self.pending.0.lock_or_recover();
         while *count > 0 {
             let remaining = until.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
             }
-            let (next, result) = self.pending.1.wait_timeout(count, remaining).unwrap();
+            let (next, result) = self.pending.1.wait_timeout(count, remaining).recover();
             count = next;
             if result.timed_out() {
                 break;
@@ -1017,7 +1019,7 @@ pub fn run() -> CoreResult<()> {
                 }
             }
         };
-        let mut count = active.0.lock().unwrap();
+        let mut count = active.0.lock_or_recover();
         if request.command == "shutdown" {
             if *count > 0 || jobs_busy(&app) {
                 out.reply(
@@ -1066,7 +1068,8 @@ pub fn run() -> CoreResult<()> {
         let (app, out, active, mutations) =
             (app.clone(), out.clone(), active.clone(), mutations.clone());
         std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // A crash fails this request only; the worker keeps serving (an unguarded panic would end it).
+            let result = cs_core::core::sync::guarded("cooler request", || {
                 // State/activity are responsive while a slow import or preview runs.
                 let _guard = if [
                     "app_state",
@@ -1082,14 +1085,14 @@ pub fn run() -> CoreResult<()> {
                 {
                     None
                 } else {
-                    Some(if request.command == "dock_action" { mutations.try_lock().map_err(|_|CoreError::coded("busy","The cooler is in use. Try again when its work finishes.").status(409))? } else { mutations.lock().unwrap() })
+                    Some(if request.command == "dock_action" { mutations.try_lock_or_recover().ok_or_else(||CoreError::coded("busy","The cooler is in use. Try again when its work finishes.").status(409))? } else { mutations.lock_or_recover() })
                 };
                 dispatch(&app, &request.command, &request.args)
-            }))
-            .unwrap_or_else(|_| {
+            })
+            .unwrap_or_else(|| {
                 Err(CoreError::coded("worker", "Cooler request failed.").status(500))
             });
-            let mut count = active.0.lock().unwrap();
+            let mut count = active.0.lock_or_recover();
             *count -= 1;
             active.1.notify_all();
             drop(count);
@@ -1099,9 +1102,9 @@ pub fn run() -> CoreResult<()> {
         });
     }
     // Parent loss closes stdin. Let admitted operations and noncancellable uploads settle before cleanup.
-    let mut count = active.0.lock().unwrap();
+    let mut count = active.0.lock_or_recover();
     while *count > 0 {
-        count = active.1.wait(count).unwrap();
+        count = active.1.wait(count).recover();
     }
     drop(count);
     while jobs_busy(&app) {
@@ -1133,14 +1136,14 @@ mod tests {
         for sequence in 2..1000 {
             traces.enqueue(json!({"sequence":sequence}));
         }
-        assert_eq!(*traces.pending.0.lock().unwrap(), 17);
+        assert_eq!(*traces.pending.0.lock_or_recover(), 17);
         let start = Instant::now();
         traces.flush(Duration::from_millis(20));
         assert!(start.elapsed() < Duration::from_secs(1));
-        assert_eq!(*traces.pending.0.lock().unwrap(), 17);
+        assert_eq!(*traces.pending.0.lock_or_recover(), 17);
         release.send(()).unwrap();
         traces.flush(Duration::from_secs(2));
-        assert_eq!(*traces.pending.0.lock().unwrap(), 0);
+        assert_eq!(*traces.pending.0.lock_or_recover(), 0);
         assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 17);
     }
     #[test]

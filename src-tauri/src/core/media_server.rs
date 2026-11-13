@@ -40,7 +40,8 @@ impl MediaServer {
                 let (r, t) = (resolver.clone(), tok.clone());
                 let _ = std::thread::Builder::new().name("media-conn".into()).spawn(move || {
                     let keep = conn.try_clone();
-                    let _ = serve_conn(conn, &t, &r);
+                    // A crash while serving one request ends that connection only; the socket is still closed.
+                    let _ = crate::core::sync::guarded("media connection", || serve_conn(conn, &t, &r));
                     if let Ok(s) = keep {
                         close_gracefully(s);
                     }

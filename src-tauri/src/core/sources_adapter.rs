@@ -2,6 +2,7 @@
 //! (docs/v2/api-contract.md 5.2). WS3's code stays as it is; this file does the mapping:
 //! context (adds data_dir / sources_dir / ffmpeg), items, progress and cancellation (TaskCtx → `sources::Cancel`),
 //! and JSON plug-ins, which are listed by file name and only parsed when enabled.
+use crate::core::sync::MutexExt;
 use super::api::{AddOpts, AddedFile, Detect, ItemPage, SourceCatalog, SourceCtx, SourceItem, SourceProvider};
 use super::error::{CoreError, CoreResult};
 use super::scheduler::TaskCtx;
@@ -72,7 +73,7 @@ fn run_add(task: &TaskCtx, p: Arc<dyn ws3::SourceProvider>, c: ws3::SourceCtx, i
             .spawn(move || {
                 let tp = Mutex::new(tx.clone());
                 let prog = move |f: f32, m: &str| {
-                    let _ = tp.lock().unwrap().send(Msg::P(f, m.to_string()));
+                    let _ = tp.lock_or_recover().send(Msg::P(f, m.to_string()));
                 };
                 let r = p.add(&c, &item, &req, &prog, &cancel);
                 if let Err(std::sync::mpsc::SendError(Msg::Done(r))) = tx.send(Msg::Done(r)) {
@@ -193,7 +194,7 @@ struct Plugin {
 
 impl Plugin {
     fn load(&self) -> CoreResult<Arc<ws3::declarative::Declarative>> {
-        let mut g = self.loaded.lock().unwrap();
+        let mut g = self.loaded.lock_or_recover();
         if let Some(p) = g.as_ref() {
             return Ok(p.clone());
         }
@@ -218,7 +219,7 @@ impl SourceProvider for Plugin {
     }
     fn extra(&self) -> Value {
         let mut v = json!({ "warning": ws3::PLUGIN_WARNING, "file": self.file.to_string_lossy() });
-        if let Some(p) = self.loaded.lock().unwrap().as_ref() {
+        if let Some(p) = self.loaded.lock_or_recover().as_ref() {
             use ws3::SourceProvider as _;
             v["name"] = json!(p.name());
             v["description"] = json!(p.description());
@@ -305,7 +306,7 @@ impl Catalog {
 impl SourceCatalog for Catalog {
     fn providers(&self) -> Vec<Arc<dyn SourceProvider>> {
         let files = ws3::plugin_files(&self.env.sources_dir);
-        let mut cache = self.plugins.lock().unwrap();
+        let mut cache = self.plugins.lock_or_recover();
         // Keep loaded plug-ins whose file is unchanged; a changed file is re-read on next use.
         cache.retain(|p| files.contains(&p.file));
         for f in files {

@@ -8,6 +8,7 @@
 //! `(fraction 0..1, message)`. Nothing here blocks on a global lock while ffmpeg runs, so several operations can run in
 //! parallel; the scheduler (core) decides what runs.
 
+use crate::core::sync::MutexExt;
 pub mod assets;
 pub mod core_engine;
 pub mod encode;
@@ -132,7 +133,7 @@ impl MediaConfig {
 /// call, the Job Object kills the children when the process ends and the next start deletes the folders.
 pub fn shutdown() {
     sys::kill_adopted_children();
-    let mut dirs: Vec<PathBuf> = encode::RUN_DIRS.lock().unwrap().clone();
+    let mut dirs: Vec<PathBuf> = encode::RUN_DIRS.lock_or_recover().clone();
     dirs.push(encode::default_run_dir());
     for _ in 0..20 {
         dirs.retain(|d| !sys::remove_tree_best_effort(d) && d.exists());

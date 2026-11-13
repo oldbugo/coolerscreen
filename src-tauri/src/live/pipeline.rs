@@ -4,6 +4,7 @@
 //! show stale clocks). Buffers are recycled through pools so a 60 fps run does not churn the allocator.
 //! The sender connects with backoff, reconnects when the screen disappears, and ends the stream properly (loop clip keeps
 //! playing) when paused or stopped. While there is no connection nothing is rendered.
+use crate::core::sync::{MutexExt, RecoverResult};
 use super::encode::{frame_budget, rotate_cw, JpegEncoder};
 use super::mask::Mask;
 use super::render::{HandTarget, Renderer};
@@ -29,29 +30,29 @@ impl<T> Latest<T> {
     }
     /// Store `t`; returns the stale item it replaced, if any.
     fn put(&self, t: T) -> Option<T> {
-        let old = self.slot.lock().unwrap().replace(t);
+        let old = self.slot.lock_or_recover().replace(t);
         self.cv.notify_one();
         old
     }
     fn take(&self, timeout: Duration) -> Option<T> {
-        let mut g = self.slot.lock().unwrap();
+        let mut g = self.slot.lock_or_recover();
         if g.is_none() {
-            g = self.cv.wait_timeout(g, timeout).unwrap().0;
+            g = self.cv.wait_timeout(g, timeout).recover().0;
         }
         g.take()
     }
     fn clear(&self) {
-        self.slot.lock().unwrap().take();
+        self.slot.lock_or_recover().take();
     }
 }
 
 struct Pool<T>(Mutex<Vec<T>>);
 impl<T: Default> Pool<T> {
     fn get(&self) -> T {
-        self.0.lock().unwrap().pop().unwrap_or_default()
+        self.0.lock_or_recover().pop().unwrap_or_default()
     }
     fn put(&self, t: T) {
-        let mut g = self.0.lock().unwrap();
+        let mut g = self.0.lock_or_recover();
         if g.len() < 3 {
             g.push(t);
         }
@@ -234,7 +235,7 @@ impl Pipeline {
                 if !r.has_fonts() {
                     log("no system font found (Segoe UI / Arial): text is not drawn");
                 }
-                let mut cfg = sh.cfg.lock().unwrap().clone();
+                let mut cfg = sh.cfg.lock_or_recover().clone();
                 let mut seen_gen = sh.cfg_gen.load(Relaxed);
                 let mut seen_theme_gen = u64::MAX;
                 let mut seen_cal_gen = u64::MAX;
@@ -266,8 +267,8 @@ impl Pipeline {
                     if g != seen_gen || tg != seen_theme_gen {
                         seen_gen = g;
                         seen_theme_gen = tg;
-                        cfg = sh.cfg.lock().unwrap().clone();
-                        let eff = effective_theme(&cfg, sh.theme.lock().unwrap().clone());
+                        cfg = sh.cfg.lock_or_recover().clone();
+                        let eff = effective_theme(&cfg, sh.theme.lock_or_recover().clone());
                         fade_in_secs = eff.theme.handover.fade_in;
                         r.set_theme(eff);
                         force_apply = true;
@@ -284,12 +285,12 @@ impl Pipeline {
                     let cg = sh.calibration_gen.load(Relaxed);
                     if cg != seen_cal_gen {
                         seen_cal_gen = cg;
-                        r.set_calibration(sh.calibration.lock().unwrap().clone());
+                        r.set_calibration(sh.calibration.lock_or_recover().clone());
                     }
                     let fg = sh.fit_gen.load(Relaxed);
                     if fg != seen_fit_gen {
                         seen_fit_gen = fg;
-                        r.set_fit(*sh.fit.lock().unwrap());
+                        r.set_fit(*sh.fit.lock_or_recover());
                     }
                     let active = !sh.paused.load(Relaxed) && sh.connected.load(Relaxed);
                     if active && !was_active {
@@ -327,10 +328,10 @@ impl Pipeline {
                             r.set_bg_fit(r.theme().base_fit.unwrap_or_default());
                             // The first frame of the stored base, for the hand-over (one short ffmpeg run, off this thread).
                             let slot_first = r.first_frame_slot();
-                            *slot_first.lock().unwrap() = None;
+                            *slot_first.lock_or_recover() = None;
                             if let Some((p, true, _)) = applied_src.clone() {
                                 std::thread::spawn(move || match super::video::first_frame(&p, true) {
-                                    Ok(f) => *slot_first.lock().unwrap() = Some(Arc::new(f)),
+                                    Ok(f) => *slot_first.lock_or_recover() = Some(Arc::new(f)),
                                     Err(e) => log(&format!("hand-over: no first frame of the base ({e}); widgets only fade out")),
                                 });
                             }
@@ -370,7 +371,7 @@ impl Pipeline {
                         video_on = true;
                     } else if !want_video && video_on {
                         r.set_video(None);
-                        *vc.lock().unwrap() = None;
+                        *vc.lock_or_recover() = None;
                         video_on = false;
                     }
                     if !active {
@@ -538,7 +539,7 @@ impl Pipeline {
                         break;
                     }
                     if sh.paused.load(Relaxed) {
-                        sh.connection.lock().unwrap().paused();
+                        sh.connection.lock_or_recover().paused();
                         if let Some(s) = session.take() {
                             log("paused: ending the live stream (loop clip plays)");
                             s.stop_with(Ending::LoopClip);
@@ -550,17 +551,17 @@ impl Pipeline {
                         std::thread::sleep(Duration::from_millis(100));
                         continue;
                     }
-                    sh.connection.lock().unwrap().resume();
-                    if sink == Sink::Null { sh.connection.lock().unwrap().connected(); }
+                    sh.connection.lock_or_recover().resume();
+                    if sink == Sink::Null { sh.connection.lock_or_recover().connected(); }
                     if sink == Sink::Device && session.is_none() {
-                        if !sh.connection.lock().unwrap().due(Instant::now()) {
+                        if !sh.connection.lock_or_recover().due(Instant::now()) {
                             std::thread::sleep(Duration::from_millis(100));
                             continue;
                         }
                         // A connect in progress counts as an open session: a device task asking live to step aside waits for it
                         // (and for the pause to end it), instead of opening the screen at the same moment.
                         sh.session_active.store(true, Relaxed);
-                        sh.connection.lock().unwrap().begin();
+                        sh.connection.lock_or_recover().begin();
                         match LiveSession::connect_checked(&|| sh.paused.load(Relaxed) || sh.quit.load(Relaxed)) {
                             Ok(s) => {
                                 // A hold may have arrived during the final USB write. Never hand it an active stream.
@@ -575,18 +576,18 @@ impl Pipeline {
                                 sh.connected.store(true, Relaxed);
                                 sh.session_active.store(true, Relaxed);
                                 sh.stats.reconnects.fetch_add(1, Relaxed);
-                                sh.connection.lock().unwrap().connected();
+                                sh.connection.lock_or_recover().connected();
                             }
                             Err(e) => {
                                 sh.session_active.store(false, Relaxed);
                                 if sh.paused.load(Relaxed) || sh.quit.load(Relaxed) { continue; }
-                                let recover = sh.recover.lock().unwrap().clone();
+                                let recover = sh.recover.lock_or_recover().clone();
                                 let request_recovery = {
-                                    let mut c = sh.connection.lock().unwrap();
+                                    let mut c = sh.connection.lock_or_recover();
                                     if let Some(line) = c.failed(&e, Instant::now()) { log(&line); }
                                     recover.is_some() && c.request_recovery(&e)
                                 };
-                                if request_recovery && !recover.unwrap()() { sh.connection.lock().unwrap().recovery_deferred(); }
+                                if request_recovery && !recover.unwrap()() { sh.connection.lock_or_recover().recovery_deferred(); }
                                 continue;
                             }
                         }
@@ -623,7 +624,7 @@ impl Pipeline {
                                     }
                                     sh.session_active.store(false, Relaxed);
                                     let e = crate::device::friendly(crate::device::DevErr::new(e));
-                                    if let Some(line) = sh.connection.lock().unwrap().failed(&e, Instant::now()) { log(&line); }
+                                    if let Some(line) = sh.connection.lock_or_recover().failed(&e, Instant::now()) { log(&line); }
                                 }
                             }
                             jpool.put(jpeg);
@@ -638,7 +639,7 @@ impl Pipeline {
                                     }
                                     sh.session_active.store(false, Relaxed);
                                     let e = crate::device::friendly(crate::device::DevErr::new(e));
-                                    if let Some(line) = sh.connection.lock().unwrap().failed(&e, Instant::now()) { log(&line); }
+                                    if let Some(line) = sh.connection.lock_or_recover().failed(&e, Instant::now()) { log(&line); }
                                 }
                             }
                         }
@@ -676,7 +677,7 @@ impl Pipeline {
         if !self.shared.rate_locked.load(Relaxed) {
             self.shared.fps.store(f, Relaxed);
         }
-        self.shared.cfg.lock().unwrap().fps = f;
+        self.shared.cfg.lock_or_recover().fps = f;
     }
 
     /// A fixed render rate (any value, e.g. 15 for the editor's twin) that settings changes do not touch.
@@ -687,14 +688,14 @@ impl Pipeline {
 
     /// Swap the theme (widgets, background, hand-over) while running, without restarting the pipeline.
     pub fn set_theme(&self, t: ThemeLive) {
-        *self.shared.theme.lock().unwrap() = Some(t);
+        *self.shared.theme.lock_or_recover() = Some(t);
         self.shared.theme_gen.fetch_add(1, Relaxed);
     }
 
     /// Screen-guide calibration: while Some, every live frame gets the guide lines, zone tints and labels drawn on top (and a
     /// change redraws at once). None = normal frames. Guides are never drawn otherwise. Temporary: call with None to leave.
     pub fn set_calibration(&self, g: Option<Guides>) {
-        *self.shared.calibration.lock().unwrap() = g;
+        *self.shared.calibration.lock_or_recover() = g;
         self.shared.calibration_gen.fetch_add(1, Relaxed);
     }
 
@@ -705,13 +706,13 @@ impl Pipeline {
     }
 
     pub fn set_fit(&self, f: crate::core::fit::Fit) {
-        *self.shared.fit.lock().unwrap() = f;
+        *self.shared.fit.lock_or_recover() = f;
         self.shared.fit_gen.fetch_add(1, Relaxed);
     }
 
     /// Change the background clip while running (None: the animated gradient). The decoder is restarted by the render thread.
     pub fn set_background(&self, clip: Option<String>) {
-        self.shared.cfg.lock().unwrap().background = clip.filter(|c| !c.is_empty());
+        self.shared.cfg.lock_or_recover().background = clip.filter(|c| !c.is_empty());
         self.shared.cfg_gen.fetch_add(1, Relaxed);
     }
 
@@ -722,7 +723,7 @@ impl Pipeline {
         }
         self.shared.show_seconds.store(cfg.show_seconds, Relaxed);
         self.shared.max_kb.store(cfg.max_kb, Relaxed);
-        *self.shared.cfg.lock().unwrap() = cfg.clone();
+        *self.shared.cfg.lock_or_recover() = cfg.clone();
         self.shared.cfg_gen.fetch_add(1, Relaxed);
     }
 
@@ -733,7 +734,7 @@ impl Pipeline {
     ///   instant    (and without a theme, or when no session is open) the plain stop: loop clip ending at once
     /// Waits for the threads.
     pub fn stop(&self) {
-        let end = self.shared.theme.lock().unwrap().as_ref().map(|t| if t.instant_handover() && t.theme.handover.end == HandoverEnd::LoopStart { HandoverEnd::Instant } else { t.theme.handover.end });
+        let end = self.shared.theme.lock_or_recover().as_ref().map(|t| if t.instant_handover() && t.theme.handover.end == HandoverEnd::LoopStart { HandoverEnd::Instant } else { t.theme.handover.end });
         let mode = match end {
             Some(HandoverEnd::LoopStart) => 1,
             Some(HandoverEnd::ScreenOff) => 2,
@@ -764,7 +765,7 @@ impl Pipeline {
     /// hand-over is "instant", or no open session, pauses at once. Resume starts live again (with its fade-in).
     pub fn pause_with_handover(&self) {
         let sh = &self.shared;
-        let fade = sh.theme.lock().unwrap().as_ref().is_none_or(|t| t.theme.handover.end != HandoverEnd::Instant && !(t.instant_handover() && t.theme.handover.end == HandoverEnd::LoopStart));
+        let fade = sh.theme.lock_or_recover().as_ref().is_none_or(|t| t.theme.handover.end != HandoverEnd::Instant && !(t.instant_handover() && t.theme.handover.end == HandoverEnd::LoopStart));
         if fade && sh.connected.load(Relaxed) && !sh.paused.load(Relaxed) && !sh.quit.load(Relaxed) && sh.stop_mode.load(Relaxed) == 0 {
             sh.hand_done.store(false, Relaxed);
             sh.stop_mode.store(1, Relaxed);
@@ -789,7 +790,7 @@ impl Pipeline {
     pub fn stop_with(&self, ending: Ending) {
         self.shared.ending.store(if ending == Ending::ScreenOff { 1 } else { 0 }, Relaxed);
         self.shared.quit.store(true, Relaxed);
-        let ts: Vec<_> = self.threads.lock().unwrap().drain(..).collect();
+        let ts: Vec<_> = self.threads.lock_or_recover().drain(..).collect();
         join_bounded(ts, STOP_JOIN_MAX);
     }
 
@@ -800,7 +801,7 @@ impl Pipeline {
         self.shared.fast_stop.store(true, Relaxed);
         self.shared.ending.store(if ending == Ending::ScreenOff { 1 } else { 0 }, Relaxed);
         self.shared.quit.store(true, Relaxed);
-        let mut ts: Vec<_> = self.threads.lock().unwrap().drain(..).collect();
+        let mut ts: Vec<_> = self.threads.lock_or_recover().drain(..).collect();
         // threads are [render, encode, send]: only the sender talks to the screen
         let Some(send) = ts.pop() else { return };
         let end = Instant::now() + Duration::from_millis(800);
@@ -876,15 +877,15 @@ fn background_source(t: &ThemeLive) -> Option<(PathBuf, bool)> {
 
 /// Mirror the decoder's process handle and method for the measurer once ffmpeg has started.
 fn publish_video_info(v: &VideoBg, vc: &Arc<Mutex<Option<usize>>>, vd: &Arc<Mutex<String>>) {
-    *vc.lock().unwrap() = Some(0);
+    *vc.lock_or_recover() = Some(0);
     let (h, how) = (v.child_handle.clone(), v.decode.clone());
     let (vc2, vd2) = (vc.clone(), vd.clone());
     std::thread::spawn(move || {
         for _ in 0..50 {
             std::thread::sleep(Duration::from_millis(100));
-            if let Some(handle) = *h.lock().unwrap() {
-                *vc2.lock().unwrap() = Some(handle);
-                *vd2.lock().unwrap() = how.lock().unwrap().clone();
+            if let Some(handle) = *h.lock_or_recover() {
+                *vc2.lock_or_recover() = Some(handle);
+                *vd2.lock_or_recover() = how.lock_or_recover().clone();
                 break;
             }
         }

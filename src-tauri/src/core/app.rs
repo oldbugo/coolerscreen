@@ -1,6 +1,7 @@
 //! The core application object: library, settings, scheduler, device, media/sources backends and events.
 //! Tauri commands (core/commands.rs) are thin wrappers over `App` methods (core/service.rs) so everything can be
 //! tested without a window.
+use crate::core::sync::MutexExt;
 use super::api::{Backends, MediaEngine, MediaTask, ProbeInfo, SourceCatalog};
 use super::device_service::DeviceService;
 use super::error::{CoreError, CoreResult};
@@ -97,7 +98,7 @@ impl App {
             device = DeviceService::fake("winusb", 1.0, false);
         }
         let app = Self::with_device(base, backends, events, app_version, device);
-        *app.gallery_env.lock().unwrap() = std::env::var_os("COOLERSCREEN_GALLERY").map(PathBuf::from);
+        *app.gallery_env.lock_or_recover() = std::env::var_os("COOLERSCREEN_GALLERY").map(PathBuf::from);
         app
     }
 
@@ -128,7 +129,7 @@ impl App {
             last_info: Mutex::new(None),
             brightness_requested:Mutex::new(None),
         });
-        *app.me.lock().unwrap() = Arc::downgrade(&app);
+        *app.me.lock_or_recover() = Arc::downgrade(&app);
         let ev = events.clone();
         let l2 = Arc::downgrade(&lib);
         let lib_deb = Debounce::new(Duration::from_millis(100), move || {
@@ -151,11 +152,11 @@ impl App {
     }
 
     pub fn arc(&self) -> Arc<App> {
-        self.me.lock().unwrap().upgrade().expect("App alive")
+        self.me.lock_or_recover().upgrade().expect("App alive")
     }
 
     pub fn set_media_base(&self, base: &str) {
-        *self.media_base.lock().unwrap() = base.to_string();
+        *self.media_base.lock_or_recover() = base.to_string();
         self.lib.set_media_base(base);
     }
 

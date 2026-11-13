@@ -1,5 +1,6 @@
 //! End-to-end tests of the core through the same `App` methods the Tauri commands call, with the fake media
 //! engine and the fake screen (no ffmpeg, no USB).
+use crate::core::sync::MutexExt;
 use super::api::{Backends, NoSources};
 use super::app::{App, Events};
 use super::device_service::DeviceService;
@@ -17,13 +18,13 @@ struct Rec {
 }
 impl Events for Rec {
     fn job(&self, j: &Job) {
-        self.jobs.lock().unwrap().push((j.kind.clone(), j.status.to_string()));
+        self.jobs.lock_or_recover().push((j.kind.clone(), j.status.to_string()));
     }
     fn library(&self, _: u64) {
-        *self.lib.lock().unwrap() += 1;
+        *self.lib.lock_or_recover() += 1;
     }
     fn device_busy(&self, b: bool) {
-        self.busy.lock().unwrap().push(b);
+        self.busy.lock_or_recover().push(b);
     }
 }
 
@@ -147,9 +148,9 @@ fn whole_flow_import_tune_save_send() {
     let kinds: Vec<&str> = act["jobs"].as_array().unwrap().iter().map(|j| j["kind"].as_str().unwrap()).collect();
     assert!(kinds.contains(&"version") && kinds.contains(&"send") && kinds.contains(&"loopsearch"));
     assert!(!kinds.contains(&"estimate") && !kinds.contains(&"assets"), "internal jobs hidden");
-    assert!(rec.jobs.lock().unwrap().iter().any(|(k, s)| k == "send" && s == "done"));
-    wait_until(|| *rec.lib.lock().unwrap() > 0);
-    wait_until(|| rec.busy.lock().unwrap().last() == Some(&false));
+    assert!(rec.jobs.lock_or_recover().iter().any(|(k, s)| k == "send" && s == "done"));
+    wait_until(|| *rec.lib.lock_or_recover() > 0);
+    wait_until(|| rec.busy.lock_or_recover().last() == Some(&false));
 
     // rename moves the gallery file
     app.original_patch(&oid, &json!({ "name": "Renamed" })).unwrap();
@@ -251,11 +252,11 @@ fn cancelled_cards_job_clears_pending() {
     });
     let src = gallery.join("k.mp4");
     app.cards_job(&oid, &src, 4.0, Some(25.0), json!([{ "start": 0, "length": 1 }]));
-    assert!(app.cards_pending.lock().unwrap().contains_key(&oid));
+    assert!(app.cards_pending.lock_or_recover().contains_key(&oid));
     // A newer search for the same clip replaces the queued cards job; the newer one owns the pending mark.
     app.cards_job(&oid, &src, 4.0, Some(25.0), json!([{ "start": 0, "length": 1 }]));
     app.sched.cancel_original(&oid);
-    wait_until(|| !app.cards_pending.lock().unwrap().contains_key(&oid));
+    wait_until(|| !app.cards_pending.lock_or_recover().contains_key(&oid));
     let t = Instant::now();
     assert!(app.resolve_media(&format!("/media/o/{oid}/loop-0.mp4"), "").is_none());
     assert!(t.elapsed() < Duration::from_secs(1), "no 30 s hold once the job is gone");
@@ -1257,18 +1258,18 @@ fn connection_recovery_rechecks_firmware_and_respects_active_device_jobs() {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let rx = Arc::new(Mutex::new(rx));
     let job = app.sched.submit(TaskSpec::new("send", "Simulated upload ownership", Resources::one(Res::Device)), move |_| {
-        rx.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap(); Ok(json!({}))
+        rx.lock_or_recover().recv_timeout(Duration::from_secs(10)).unwrap(); Ok(json!({}))
     });
     wait_until(|| app.sched.device_active());
     app.recover_live_no_reply();
-    assert!(!rec.jobs.lock().unwrap().iter().any(|(kind, _)| kind == "recovery"), "no recovery can overlap an existing device job");
+    assert!(!rec.jobs.lock_or_recover().iter().any(|(kind, _)| kind == "recovery"), "no recovery can overlap an existing device job");
     tx.send(()).unwrap(); job.wait().unwrap();
     assert!(app.device.read_info().unwrap_err().code_is("noReply"), "skipped recovery did not touch firmware");
     wait_until(|| !app.sched.device_active());
     app.recover_live_no_reply();
-    wait_until(|| rec.jobs.lock().unwrap().iter().any(|(kind, state)| kind == "recovery" && state == "done"));
+    wait_until(|| rec.jobs.lock_or_recover().iter().any(|(kind, state)| kind == "recovery" && state == "done"));
     assert!(app.device.read_info().is_ok(), "confirmed noReply was recovered by the exclusive device task");
-    assert!(rec.busy.lock().unwrap().contains(&true));
+    assert!(rec.busy.lock_or_recover().contains(&true));
     app.live.stop();
 }
 

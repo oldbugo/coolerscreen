@@ -8,6 +8,7 @@
 //! PowerShell. `COOLERSCREEN_FAKE_SPEED` (default 1) scales the simulated delays (tests use 0.01).
 //!
 //! Every method here blocks; callers run them inside scheduler tasks holding `Res::Device`.
+use crate::core::sync::MutexExt;
 use super::error::{CoreError, CoreResult};
 use crate::device::{self, ops, DevErr, Slot, SERIAL_WARNING};
 use serde_json::{json, Value};
@@ -110,13 +111,13 @@ impl DeviceService {
         }
         let stem = script.trim_end_matches(".ps1");
         let f = self.logs_dir.join(format!("setup-{}-{stem}.log", super::scheduler::now_ms()));
-        *self.last_log.lock().unwrap() = Some(f.clone());
+        *self.last_log.lock_or_recover() = Some(f.clone());
         f
     }
 
     /// The log of the last elevated script run (for messages).
     pub fn last_setup_log(&self) -> String {
-        self.last_log.lock().unwrap().as_ref().map(|p| p.display().to_string()).unwrap_or_default()
+        self.last_log.lock_or_recover().as_ref().map(|p| p.display().to_string()).unwrap_or_default()
     }
 
     pub fn fake(mode: &str, speed: f64, fail_upload: bool) -> Self {
@@ -132,33 +133,33 @@ impl DeviceService {
     /// Where scripts/*.ps1 live (the app's bundled resources folder in an installed build).
     pub fn set_scripts_dir(&self, dir: PathBuf) {
         if dir.join("setup-winusb.ps1").exists() {
-            *self.scripts.lock().unwrap() = dir;
+            *self.scripts.lock_or_recover() = dir;
         }
     }
 
     pub fn scripts_dir(&self) -> PathBuf {
-        self.scripts.lock().unwrap().clone()
+        self.scripts.lock_or_recover().clone()
     }
 
     /// Test hook: the free blocks the fake screen reports from now on.
     pub fn fake_set_free(&self, blocks: u64) {
         if let Some(f) = &self.fake {
-            f.lock().unwrap().free = blocks;
+            f.lock_or_recover().free = blocks;
         }
     }
 
     /// The fake mode name ("winusb", ...) or None for the real screen (AppState.fake).
     pub fn fake_mode(&self) -> Option<String> {
-        self.fake.as_ref().map(|f| f.lock().unwrap().transport.clone())
+        self.fake.as_ref().map(|f| f.lock_or_recover().transport.clone())
     }
 
     fn fsleep(&self, ms: u64) {
-        let speed = self.fake.as_ref().map(|f| f.lock().unwrap().speed).unwrap_or(1.0);
+        let speed = self.fake.as_ref().map(|f| f.lock_or_recover().speed).unwrap_or(1.0);
         std::thread::sleep(Duration::from_millis((ms as f64 * speed) as u64));
     }
 
     fn fake_error(&self) -> Option<CoreError> {
-        let f = self.fake.as_ref()?.lock().unwrap();
+        let f = self.fake.as_ref()?.lock_or_recover();
         match f.transport.as_str() {
             "none" => Some(friendly_fake("notFound")),
             "failedusb" => Some(friendly_fake("failedUsb")),
@@ -171,7 +172,7 @@ impl DeviceService {
     /// What is reachable right now, without sending anything to the screen.
     pub fn state(&self) -> Value {
         if let Some(f) = &self.fake {
-            let t = f.lock().unwrap().transport.clone();
+            let t = f.lock_or_recover().transport.clone();
             return if t == "winusb" || t.starts_with("noreply") {
                 json!({ "transport": "winusb", "needsSetup": false, "fake": true })
             } else if t == "serial" {
@@ -191,7 +192,7 @@ impl DeviceService {
     /// No-open enumeration for recovery UI. Fake states never touch the machine's devices.
     pub fn presence(&self) -> Value {
         if let Some(f) = &self.fake {
-            let t = f.lock().unwrap().transport.clone();
+            let t = f.lock_or_recover().transport.clone();
             let present = matches!(t.as_str(), "winusb" | "serial" | "busy" | "noreply" | "noreply-stuck");
             return json!({ "present": present, "transport": if !present { "none" } else if t == "serial" { "serial" } else { "winusb" }, "needsSetup": t == "serial" });
         }
@@ -209,11 +210,11 @@ impl DeviceService {
             if let Some(e) = self.fake_error() {
                 return Err(e);
             }
-            let serial = self.fake.as_ref().unwrap().lock().unwrap().transport == "serial";
+            let serial = self.fake.as_ref().unwrap().lock_or_recover().transport == "serial";
             let t = if serial { "serial" } else { "winusb" };
             let mut v = json!({ "model": "D215-NOR-JD9365-6.67inch-hor (fake)", "version": "3.6", "i_blocks": 24520, "i_block_size": 512,
-                "i_block_free": self.fake.as_ref().unwrap().lock().unwrap().free, "_transport": t, "_needsSetup": serial, "_fake": true });
-            v["brightness"]=json!(self.fake.as_ref().unwrap().lock().unwrap().brightness);
+                "i_block_free": self.fake.as_ref().unwrap().lock_or_recover().free, "_transport": t, "_needsSetup": serial, "_fake": true });
+            v["brightness"]=json!(self.fake.as_ref().unwrap().lock_or_recover().brightness);
             if serial {
                 v["_warning"] = json!(SERIAL_WARNING);
             }
@@ -227,7 +228,7 @@ impl DeviceService {
     pub fn brightness_change(&self,change:super::dock_control::BrightnessChange)->CoreResult<Value>{
         if let Some(error)=self.fake_error(){return Err(error)}
         if let Some(fake)=&self.fake{
-            let mut fake=fake.lock().unwrap();let target=change.target(fake.brightness)?;
+            let mut fake=fake.lock_or_recover();let target=change.target(fake.brightness)?;
             fake.brightness=match fake.transport.as_str(){"brightness-no-readback"=>None,"brightness-mismatch"=>Some(target.saturating_sub(1)),_=>Some(target)};
             return Ok(json!({"requested":target,"reported":fake.brightness}));
         }
@@ -247,7 +248,7 @@ impl DeviceService {
             progress(0.1, "Restarting the screen");
             self.fsleep(1500);
             {
-                let mut f = f.lock().unwrap();
+                let mut f = f.lock_or_recover();
                 if f.transport == "noreply-stuck" {
                     f.transport = "failedusb".into();
                 } else {
@@ -287,7 +288,7 @@ impl DeviceService {
     }
 
     fn speed(&self) -> f64 {
-        self.fake.as_ref().map(|f| f.lock().unwrap().speed).unwrap_or(1.0)
+        self.fake.as_ref().map(|f| f.lock_or_recover().speed).unwrap_or(1.0)
     }
 
     /// Check the screen; if it doesn't answer, restart it once and check again (`_restarted: true`).
@@ -344,7 +345,7 @@ impl DeviceService {
             let steps = if *slot == Slot::Standby { 20 } else { 4 };
             let label = if *slot == Slot::Standby { "loop" } else { "intro" };
             for k in 1..=steps {
-                let fail = self.fake.as_ref().unwrap().lock().unwrap().fail_upload;
+                let fail = self.fake.as_ref().unwrap().lock_or_recover().fail_upload;
                 if fail && *slot == Slot::Standby && k > steps / 2 {
                     return Err(CoreError::coded(
                         "stalled",
@@ -364,7 +365,7 @@ impl DeviceService {
                 Err(e) => restart_failed = json!({ "message": e.message, "failedUsb": e.failed_usb }),
             }
         }
-        let serial = self.fake.as_ref().unwrap().lock().unwrap().transport == "serial";
+        let serial = self.fake.as_ref().unwrap().lock_or_recover().transport == "serial";
         Ok(json!({ "ok": true, "transport": "fake", "restarted": restarted, "restartFailed": restart_failed, "finalInfo": final_info,
             "serialWarning": if serial { json!(SERIAL_WARNING) } else { Value::Null } }))
     }
@@ -379,7 +380,7 @@ impl DeviceService {
         if let Some(f) = &self.fake {
             // test hook: never elevate or change drivers; just switch the simulated state
             self.fsleep(1500);
-            f.lock().unwrap().transport = if script == "restore-serial.ps1" { "serial".into() } else { "winusb".into() };
+            f.lock_or_recover().transport = if script == "restore-serial.ps1" { "serial".into() } else { "winusb".into() };
             return Ok("RESULT: OK (fake)".into());
         }
         #[cfg(not(windows))]
@@ -390,7 +391,7 @@ impl DeviceService {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            let file = self.scripts.lock().unwrap().join(script);
+            let file = self.scripts.lock_or_recover().join(script);
             if !file.exists() {
                 return Err(CoreError::new(format!("Setup script not found: {}", file.display())));
             }

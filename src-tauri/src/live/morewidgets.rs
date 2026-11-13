@@ -2,6 +2,7 @@
 //! `disks`, `worldclock`, `timer`. This file holds their props (lenient typed views of `Widget.props`), the cleaning the app
 //! applies to what the editor sends, the Windows time-zone lookup for world clocks, and the timer arithmetic. The drawing is
 //! in `render/more.rs`. Nothing here changes an existing widget type.
+use crate::core::sync::MutexExt;
 use super::theme::{Widget, SENSOR_METRICS};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -612,7 +613,7 @@ pub fn zone_time_now(id: &str) -> Option<ZoneTime> {
         unsafe { GetLocalTime(&mut out) };
     } else {
         let tzi = {
-            let mut c = tz_cache().lock().unwrap();
+            let mut c = tz_cache().lock_or_recover();
             *c.entry(id.to_string()).or_insert_with(|| load_tzi(id))
         }?;
         let mut utc: SYSTEMTIME = unsafe { std::mem::zeroed() };
@@ -631,7 +632,7 @@ pub fn fixed_drives() -> Vec<String> {
     use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDrives};
     static C: OnceLock<Mutex<(Option<Instant>, Vec<String>)>> = OnceLock::new();
     let m = C.get_or_init(|| Mutex::new((None, Vec::new())));
-    let mut g = m.lock().unwrap();
+    let mut g = m.lock_or_recover();
     if g.0.is_none_or(|t| t.elapsed().as_secs() >= 10) {
         let mask = unsafe { GetLogicalDrives() };
         let mut v = Vec::new();

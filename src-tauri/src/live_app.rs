@@ -3,6 +3,7 @@
 //! quitting. With "free the window memory" also on, the window (and its WebView2) is destroyed while hidden and built again
 //! when the tray icon is used. Quit ends the live stream properly (the screen plays its loop clip again).
 //! Nothing starts with Windows and nothing runs unless the setting is on.
+use cs_core::core::sync::MutexExt;
 use cs_core::core::commands::Core;
 use cs_core::core::error::CoreError;
 use cs_core::core::live_host::{LiveHost, LOCK, SLEEP};
@@ -24,7 +25,7 @@ static HOST: OnceLock<Arc<LiveHost>> = OnceLock::new();
 static CFG: Mutex<Option<LiveSettings>> = Mutex::new(None);
 
 fn cfg() -> LiveSettings {
-    CFG.lock().unwrap().clone().unwrap_or_default()
+    CFG.lock_or_recover().clone().unwrap_or_default()
 }
 
 const TRAY_ID: &str = "live";
@@ -243,7 +244,7 @@ fn build_tray(app: &AppHandle) {
         eprintln!("could not create the tray icon");
         return;
     }
-    *TRAY.lock().unwrap() = Some(tray);
+    *TRAY.lock_or_recover() = Some(tray);
     TRAY_ON.store(true, Ordering::SeqCst);
     static HOOK: std::sync::Once = std::sync::Once::new();
     HOOK.call_once(|| {
@@ -282,7 +283,7 @@ pub fn tray_menu_click(a: &AppHandle, id: &str) {
 /// The menu labels as they stand (debug test hook).
 #[cfg(debug_assertions)]
 pub fn tray_state() -> String {
-    match TRAY.lock().unwrap().as_ref() {
+    match TRAY.lock_or_recover().as_ref() {
         Some(t) => format!("pause_text={:?} f30={:?} f60={:?}", t.pause.text().unwrap_or_default(), t.f30.is_checked().ok(), t.f60.is_checked().ok()),
         None => "no tray".into(),
     }
@@ -296,7 +297,7 @@ pub fn refresh_tray(_app: &AppHandle) {
     if let Some(t) = _app.tray_by_id(TRAY_ID) {
         let _ = t.set_tooltip(Some(if paused { "CoolerScreen live: paused (the screen shows Embedded)".to_string() } else { if st["liveItems"] == false { "CoolerScreen live: no live items (the screen shows Embedded)".to_string() } else { format!("CoolerScreen live: {fps} fps") } }));
     }
-    if let Some(t) = TRAY.lock().unwrap().as_ref() {
+    if let Some(t) = TRAY.lock_or_recover().as_ref() {
         let _ = t.pause.set_text(if paused { "Resume live" } else { PAUSE_TEXT });
         let _ = t.f30.set_checked(fps < 45);
         let _ = t.f60.set_checked(fps >= 45);
@@ -305,7 +306,7 @@ pub fn refresh_tray(_app: &AppHandle) {
 
 fn remove_tray(app: &AppHandle) {
     let _ = app.remove_tray_by_id(TRAY_ID);
-    *TRAY.lock().unwrap() = None;
+    *TRAY.lock_or_recover() = None;
     TRAY_ON.store(false, Ordering::SeqCst);
 }
 
@@ -373,7 +374,7 @@ pub fn arm_exit_watchdog(why: &'static str) {
 pub fn apply(app: &AppHandle, force: bool) {
     let core = app.state::<Core>().0.clone();
     let l = core.settings.load().live();
-    *CFG.lock().unwrap() = Some(l.clone());
+    *CFG.lock_or_recover() = Some(l.clone());
     let _ = HOST.set(core.live.clone());
     if l.in_app || force {
         ensure_tray(app, true);
@@ -431,7 +432,7 @@ pub async fn live_set(app: AppHandle, core: tauri::State<'_, Core>, patch: Value
         if let Some(v) = s("onLock").filter(|v| ["loop", "keep", "off"].contains(v)) { now.on_lock = v.into(); }
         let full = now.to_full_value();
         c.settings.update(|st| st["live"] = full).map_err(|e| CoreError::new(e.to_string()))?;
-        *CFG.lock().unwrap() = Some(now.clone());
+        *CFG.lock_or_recover() = Some(now.clone());
         if let Some(f) = patch.get("fps").and_then(Value::as_u64) {
             c.live.set_fps(f as u32);
         }

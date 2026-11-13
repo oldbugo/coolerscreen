@@ -1,5 +1,6 @@
 //! Everything the 1.2 HTTP endpoints did (`src/server.js`), as `App` methods with the same JSON shapes.
 //! `commands.rs` exposes them as Tauri commands (docs/v2/api-contract.md, section 2).
+use crate::core::sync::MutexExt;
 use super::api::{AddOpts, EncodeReq, LoopPointReq, LoopSearchReq, MediaTask, ProbeInfo, SourceCtx, SourceProvider, DEVICE_FPS, IMAGE_SECONDS};
 use super::app::App;
 use super::error::{CoreError, CoreResult};
@@ -112,7 +113,7 @@ impl App {
             "uploadRate": s.upload_rate().map(num).unwrap_or(json!(50000)),
             "galleryDir": self.gallery_dir().to_string_lossy(), "onScreen": self.on_screen(),
             "missingNoticeDays": super::gallery::MISSING_NOTICE_DAYS, "notchKey": key, "oldNotchCount": self.old_notch_count(&key),
-            "mediaBase": self.media_base.lock().unwrap().clone(), "backend": "rust",
+            "mediaBase": self.media_base.lock_or_recover().clone(), "backend": "rust",
             "live": { "settings": s.live().to_full_value(), "status": self.live.status(), "autostart": super::autostart::is_on() },
         })
     }
@@ -540,7 +541,7 @@ impl App {
             .preemptible()
             .coalesce(format!("cards:{oid}"));
         let app = self.arc();
-        let mut pending = self.cards_pending.lock().unwrap();
+        let mut pending = self.cards_pending.lock_or_recover();
         let h = self.sched.submit(spec, move |ctx| {
             // Old cards belong to the previous search (an older cards job was cancelled by coalescing).
             if let Ok(rd) = std::fs::read_dir(&dir) {
@@ -558,7 +559,7 @@ impl App {
         let (app, oid) = (self.arc(), oid.to_string());
         std::thread::spawn(move || {
             let _ = h.wait(); // done, failed or cancelled (a preempted job is re-queued and does not end here)
-            let mut p = app.cards_pending.lock().unwrap();
+            let mut p = app.cards_pending.lock_or_recover();
             if p.get(&oid) == Some(&h.id) {
                 p.remove(&oid);
             }
@@ -905,7 +906,7 @@ impl App {
         let r = self.run_task(TaskSpec::new("check", "Checking the screen", Resources::one(Res::Device)), move |_| app.device.read_info());
         match r {
             Ok(info) => {
-                *self.last_info.lock().unwrap() = Some(info.clone());
+                *self.last_info.lock_or_recover() = Some(info.clone());
                 self.note_screen_info(&info);
                 self.events.app_changed();
             }
@@ -924,7 +925,7 @@ impl App {
         let mut info = self.run_task(TaskSpec::new("check", "Checking the screen", Resources::one(Res::Device)), move |ctx| {
             app.device.check(&mut |p, m| ctx.progress(p, m))
         })?;
-        *self.last_info.lock().unwrap() = Some(info.clone());
+        *self.last_info.lock_or_recover() = Some(info.clone());
         self.note_screen_info(&info);
         let cap = self.save_capacity(&info);
         info["_capacity"] = cap.map(num).unwrap_or(Value::Null);
@@ -1180,7 +1181,7 @@ impl App {
                 if file.starts_with("loop-") {
                     let end = std::time::Instant::now() + Duration::from_secs(30);
                     // (cards are written in place, so wait for the whole job, not just the file)
-                    while self.cards_pending.lock().unwrap().contains_key(*oid)
+                    while self.cards_pending.lock_or_recover().contains_key(*oid)
                         && std::time::Instant::now() < end
                     {
                         std::thread::sleep(Duration::from_millis(100));

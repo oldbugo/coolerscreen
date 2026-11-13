@@ -6,6 +6,7 @@
 //! Same shape as `agenda.rs`: a demand-driven loader per (link, minutes), started by the first `read`, ending about 30 s after the
 //! last one (so a hidden widget costs nothing); `read` never blocks the render thread; a failed refresh keeps the old picture and
 //! reports the error next to it.
+use crate::core::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -338,12 +339,19 @@ pub fn read(source: &str, minutes: u32) -> View {
     };
     let minutes = minutes.clamp(1, 1440);
     let key = format!("{minutes}|{link}");
-    let mut g = slots().lock().unwrap();
+    let mut g = slots().lock_or_recover();
     let s = g.entry(key.clone()).or_insert_with(|| Slot { last_used: Instant::now(), running: false, view: View::default() });
     s.last_used = Instant::now();
     if !s.running {
         s.running = true;
-        std::thread::spawn(move || run(key, link, minutes));
+        // A crash starts this picture's fetcher again (1 s, doubling to 30 s) while it is still asked for; gone quiet
+        // while waiting: let go of the picture, as the fetcher itself does.
+        std::thread::spawn(move || {
+            let quiet = || slots().lock_or_recover().get(&key).is_none_or(|s| s.last_used.elapsed() > KEEP);
+            if crate::core::sync::restarting("web picture fetch", quiet, || run(key.clone(), link.clone(), minutes)).is_none() {
+                slots().lock_or_recover().remove(&key);
+            }
+        });
     }
     s.view.clone()
 }
@@ -398,7 +406,7 @@ fn run(key: String, link: String, minutes: u32) {
     let mut last_hash = 0u64;
     loop {
         {
-            let mut g = slots().lock().unwrap();
+            let mut g = slots().lock_or_recover();
             match g.get(&key) {
                 // gone quiet: end, and let go of the picture
                 Some(s) if s.last_used.elapsed() > KEEP => {
@@ -418,7 +426,7 @@ fn run(key: String, link: String, minutes: u32) {
                     decode(&b).map(|pm| (h, Some(pm)))
                 }
             });
-            let mut g = slots().lock().unwrap();
+            let mut g = slots().lock_or_recover();
             let Some(s) = g.get_mut(&key) else { return };
             s.view.loaded = true;
             match r {
@@ -614,6 +622,6 @@ pub(crate) mod tests {
     fn read_without_a_valid_link_starts_nothing() {
         let v = read("file:///C:/a.png", 5);
         assert!(v.pic.is_none() && v.loaded && v.error.is_some());
-        assert!(slots().lock().unwrap().keys().all(|k| !k.contains("file:")));
+        assert!(slots().lock_or_recover().keys().all(|k| !k.contains("file:")));
     }
 }

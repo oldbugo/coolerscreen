@@ -5,6 +5,7 @@
 //! (one lookup per track, results cached on disk), only while requests keep coming from the renderer (the loader thread
 //! ends ~30 s after the last `request`), and never more often than the back-off allows. When disabled, no network at all;
 //! local sources (a sidecar `.lrc` and already cached results) are still used because they are local.
+use crate::core::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -959,20 +960,20 @@ impl LyricsLoader {
     /// Tests and sample pictures: put a result in place without any lookup.
     #[cfg(test)]
     pub fn inject(&self, key: &str, st: State) {
-        let mut g = self.s.inner.lock().unwrap();
+        let mut g = self.s.inner.lock_or_recover();
         g.states.insert(key.to_string(), st);
     }
 
     /// Opt-in switch and optional sidecar folder. Turning things on re-checks tracks that were "off" / "not found".
     pub fn configure(&self, enabled: bool, sidecar_dir: Option<PathBuf>) {
         let changed = {
-            let mut c = self.s.cfg.lock().unwrap();
+            let mut c = self.s.cfg.lock_or_recover();
             let ch = *c != (enabled, sidecar_dir.clone());
             *c = (enabled, sidecar_dir);
             ch
         };
         if changed {
-            let mut g = self.s.inner.lock().unwrap();
+            let mut g = self.s.inner.lock_or_recover();
             g.states.retain(|_, s| matches!(s, State::Loading | State::Found(_) | State::Instrumental));
             let Inner { states, order, .. } = &mut *g;
             order.retain(|k| states.contains_key(k));
@@ -986,7 +987,7 @@ impl LyricsLoader {
             return String::new();
         }
         let sig = (np.track_id, np.title.clone(), np.artist.clone(), np.duration_s.round() as i64);
-        let mut g = self.s.inner.lock().unwrap();
+        let mut g = self.s.inner.lock_or_recover();
         g.last_used = Instant::now();
         let key = match &g.last_sig {
             Some((s, k)) if *s == sig => k.clone(),
@@ -1015,15 +1016,21 @@ impl LyricsLoader {
         if !g.running && !g.pending.is_empty() {
             g.running = true;
             let me = self.clone();
-            std::thread::spawn(move || me.run());
+            // A crash starts the lookups again (1 s, doubling to 30 s) while lyrics are still asked for.
+            std::thread::spawn(move || {
+                let quiet = || me.s.inner.lock_or_recover().last_used.elapsed() > KEEP;
+                if crate::core::sync::restarting("lyrics lookup", quiet, || me.run()).is_none() {
+                    me.s.inner.lock_or_recover().running = false;
+                }
+            });
         }
         key
     }
 
     pub fn get(&self, key: &str) -> State {
-        match self.s.inner.lock().unwrap().states.get(key) {
+        match self.s.inner.lock_or_recover().states.get(key) {
             Some(s) => s.clone(),
-            None if self.s.cfg.lock().unwrap().0 => State::Loading,
+            None if self.s.cfg.lock_or_recover().0 => State::Loading,
             None => State::Off,
         }
     }
@@ -1031,14 +1038,14 @@ impl LyricsLoader {
     /// Forget a track's result (memory and disk), e.g. a wrong match the user cleared; it is looked up again on request.
     pub fn clear_track(&self, key: &str) {
         let _ = std::fs::remove_file(cache_path(&self.s.dir, key));
-        let mut g = self.s.inner.lock().unwrap();
+        let mut g = self.s.inner.lock_or_recover();
         g.states.remove(key);
         g.order.retain(|k| k != key);
         g.last_sig = None;
     }
 
     fn set_state(&self, key: &str, st: State) {
-        let mut g = self.s.inner.lock().unwrap();
+        let mut g = self.s.inner.lock_or_recover();
         if g.states.contains_key(key) {
             g.states.insert(key.to_string(), st);
         }
@@ -1047,14 +1054,14 @@ impl LyricsLoader {
     fn run(&self) {
         loop {
             let (job, enabled, sidecar) = {
-                let mut g = self.s.inner.lock().unwrap();
+                let mut g = self.s.inner.lock_or_recover();
                 if g.last_used.elapsed() > KEEP {
                     g.running = false;
                     return;
                 }
                 let now = Instant::now();
                 let i = g.pending.iter().rposition(|j| j.not_before <= now);
-                let cfg = self.s.cfg.lock().unwrap().clone();
+                let cfg = self.s.cfg.lock_or_recover().clone();
                 match i {
                     Some(i) => (Some(g.pending.remove(i)), cfg.0, cfg.1),
                     None => (None, cfg.0, cfg.1),
@@ -1073,20 +1080,20 @@ impl LyricsLoader {
                 self.set_state(&job.q.key, State::Off);
                 continue;
             }
-            let blocked = self.s.inner.lock().unwrap().blocked_until.filter(|b| *b > Instant::now());
+            let blocked = self.s.inner.lock_or_recover().blocked_until.filter(|b| *b > Instant::now());
             if let Some(b) = blocked {
-                self.s.inner.lock().unwrap().pending.push(Job { q: job.q, not_before: b });
+                self.s.inner.lock_or_recover().pending.push(Job { q: job.q, not_before: b });
                 continue;
             }
             match resolve_net(&self.s.dir, &*self.s.http, &job.q, now) {
                 Ok(st) => {
-                    let mut g = self.s.inner.lock().unwrap();
+                    let mut g = self.s.inner.lock_or_recover();
                     g.backoff = BACKOFF_START;
                     drop(g);
                     self.set_state(&job.q.key, st);
                 }
                 Err(ra) => {
-                    let mut g = self.s.inner.lock().unwrap();
+                    let mut g = self.s.inner.lock_or_recover();
                     let wait = match ra {
                         Some(s) => s.clamp(1, BACKOFF_MAX),
                         None => {
@@ -1345,7 +1352,7 @@ mod tests {
     }
     impl Http for Fake {
         fn get(&self, url: &str) -> Result<HttpReply, String> {
-            self.calls.lock().unwrap().push(url.to_string());
+            self.calls.lock_or_recover().push(url.to_string());
             (self.f)(url)
         }
     }
@@ -1368,7 +1375,7 @@ mod tests {
         let q = Query::new("Raindance (Official Video)", "Dave - Topic", 221.4);
         let n = lookup(&*h, &q);
         assert!(matches!(n, Net::Found { id: Some(3), .. }), "{n:?}");
-        let c = h.calls.lock().unwrap();
+        let c = h.calls.lock_or_recover();
         assert_eq!(c[0], "https://lrclib.net/api/get?track_name=Raindance&artist_name=Dave&duration=221");
         assert!(c[1].starts_with("https://lrclib.net/api/search?track_name=Raindance&artist_name=Dave"));
     }
@@ -1378,7 +1385,7 @@ mod tests {
         let body = r#"{"id":5,"trackName":"A","artistName":"B","duration":100,"instrumental":false,"syncedLyrics":"[00:01.00]x"}"#;
         let h = fake(move |_| reply(200, body));
         assert!(matches!(lookup(&*h, &Query::new("A", "B", 100.0)), Net::Found { id: Some(5), .. }));
-        assert_eq!(h.calls.lock().unwrap().len(), 1);
+        assert_eq!(h.calls.lock_or_recover().len(), 1);
         let h = fake(|_| reply(200, r#"{"id":6,"trackName":"A","artistName":"B","duration":100,"instrumental":true,"syncedLyrics":null}"#));
         assert_eq!(lookup(&*h, &Query::new("A", "B", 100.0)), Net::Instrumental { id: Some(6) });
         let h = fake(|_| Ok(HttpReply { status: 503, retry_after: Some(7), body: String::new() }));
@@ -1402,9 +1409,9 @@ mod tests {
         let t0 = 1_000_000;
         assert!(resolve_local(d.path(), None, &q, t0).is_none());
         assert!(matches!(resolve_net(d.path(), &*h, &q, t0), Ok(State::NotFound)));
-        let n = h.calls.lock().unwrap().len();
+        let n = h.calls.lock_or_recover().len();
         assert!(matches!(resolve_local(d.path(), None, &q, t0 + 3600), Some(State::NotFound)));
-        assert_eq!(h.calls.lock().unwrap().len(), n);
+        assert_eq!(h.calls.lock_or_recover().len(), n);
         assert!(resolve_local(d.path(), None, &q, t0 + NOT_FOUND_TTL + 1).is_none());
         // found never expires
         let h = fake(|_| reply(200, r#"{"id":5,"trackName":"A","artistName":"B","duration":100,"syncedLyrics":"[00:01.00]x"}"#));
@@ -1497,7 +1504,7 @@ mod tests {
             st = l.get(&k);
         }
         assert!(matches!(st, State::Off), "{st:?}");
-        assert_eq!(h.calls.lock().unwrap().len(), 0);
+        assert_eq!(h.calls.lock_or_recover().len(), 0);
         // enable: looked up once, found
         l.configure(true, None);
         let k = l.request(&np);
@@ -1513,7 +1520,7 @@ mod tests {
         for _ in 0..20 {
             l.request(&np);
         }
-        assert_eq!(h.calls.lock().unwrap().len(), 1);
+        assert_eq!(h.calls.lock_or_recover().len(), 1);
     }
 
     /// Run once by hand: `cargo test --release --lib lyrics::tests::live_lrclib -- --ignored --nocapture`.
