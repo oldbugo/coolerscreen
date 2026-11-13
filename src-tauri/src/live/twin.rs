@@ -2,6 +2,7 @@
 //! On screen editor to show, about 15 per second while the editor is open and looking. Nothing is produced unless the page has asked
 //! within the last few seconds (`wanted`), so the cost is zero when the editor is closed, hidden or minimised.
 //! The picture is the portrait 756x1680 frame the screen gets; the page turns it back with CSS (no work here).
+use crate::core::sync::MutexExt;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,13 +44,13 @@ impl Twin {
         }
         self.last_pub.store(now, Relaxed);
         let seq = self.seq.fetch_add(1, Relaxed) + 1;
-        *self.frame.lock().unwrap() = Some((seq, Arc::new(jpeg.to_vec())));
+        *self.frame.lock_or_recover() = Some((seq, Arc::new(jpeg.to_vec())));
     }
     pub fn latest(&self, since: u64) -> Option<(u64, Arc<Vec<u8>>)> {
-        self.frame.lock().unwrap().as_ref().filter(|(s, _)| *s > since).cloned()
+        self.frame.lock_or_recover().as_ref().filter(|(s, _)| *s > since).cloned()
     }
     pub fn clear(&self) {
-        *self.frame.lock().unwrap() = None;
+        *self.frame.lock_or_recover() = None;
         self.watched.store(0, Relaxed);
     }
 }

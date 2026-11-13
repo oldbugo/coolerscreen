@@ -8,6 +8,7 @@
 //! 1. make or reuse the base version (with the text/picture items baked in when the theme has `onBase` items),
 //! 2. send it to the loop slot (the normal send job; live pauses and resumes around it).
 //! It does not change which theme is live (unless none was chosen: then live follows Embedded).
+use crate::core::sync::MutexExt;
 use super::app::App;
 use super::error::{CoreError, CoreResult};
 use super::gallery::{sanitize_name, unique_path};
@@ -353,7 +354,7 @@ impl App {
 
     /// The small picture My themes shows (base + live layer). Rendered in the background after an edit or an apply.
     pub fn theme_card_soon(&self, oid: &str) {
-        let Some(app) = self.me.lock().unwrap().upgrade() else { return };
+        let Some(app) = self.me.lock_or_recover().upgrade() else { return };
         let oid = oid.to_string();
         std::thread::spawn(move || {
             let t = app.load_theme(&oid);

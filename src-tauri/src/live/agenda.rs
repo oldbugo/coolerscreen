@@ -6,6 +6,7 @@
 //! converted with the PC's own time zone; times with a TZID or floating times are taken as local (a calendar in another zone is
 //! shown shifted by the difference: documented limitation). Recurrence: DAILY, WEEKLY (BYDAY), MONTHLY and YEARLY with INTERVAL,
 //! COUNT, UNTIL and EXDATE; anything fancier is shown as its first occurrence only.
+use crate::core::sync::MutexExt;
 use super::morewidgets::days_from_civil;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -340,12 +341,20 @@ pub fn read(source: &str) -> AgendaView {
         return AgendaView { events: Vec::new(), loaded: true, error: Some("Not a calendar link or .ics file".into()) };
     };
     let key = source.trim().to_string();
-    let mut g = slots().lock().unwrap();
+    let mut g = slots().lock_or_recover();
     let s = g.entry(key.clone()).or_insert_with(|| Slot { last_used: Instant::now(), running: false, view: AgendaView::default(), fetched: None, file_mtime: None });
     s.last_used = Instant::now();
     if !s.running {
         s.running = true;
-        std::thread::spawn(move || run(key, src));
+        // A crash starts this calendar's fetcher again (1 s, doubling to 30 s) while it is still asked for.
+        std::thread::spawn(move || {
+            let quiet = || slots().lock_or_recover().get(&key).is_none_or(|s| s.last_used.elapsed() > KEEP);
+            if crate::core::sync::restarting("agenda fetch", quiet, || run(key.clone(), src.clone())).is_none() {
+                if let Some(s) = slots().lock_or_recover().get_mut(&key) {
+                    s.running = false;
+                }
+            }
+        });
     }
     s.view.clone()
 }
@@ -381,7 +390,7 @@ fn run(key: String, src: Src) {
     let mut cached_text: Option<String> = None;
     loop {
         let (due, idle) = {
-            let g = slots().lock().unwrap();
+            let g = slots().lock_or_recover();
             match g.get(&key) {
                 Some(s) => {
                     let mtime = if let Src::File(p) = &src { std::fs::metadata(p).and_then(|m| m.modified()).ok() } else { None };
@@ -400,7 +409,7 @@ fn run(key: String, src: Src) {
             if let Ok(t) = &r {
                 cached_text = Some(t.clone());
             }
-            let mut g = slots().lock().unwrap();
+            let mut g = slots().lock_or_recover();
             if let Some(s) = g.get_mut(&key) {
                 s.fetched = Some(Instant::now());
                 s.file_mtime = mtime;
@@ -417,7 +426,7 @@ fn run(key: String, src: Src) {
         if let Some(t) = &cached_text {
             let now = now_local_secs();
             let ev = parse(t, now - 3600, now + 90 * 86400);
-            let mut g = slots().lock().unwrap();
+            let mut g = slots().lock_or_recover();
             if let Some(s) = g.get_mut(&key) {
                 s.view.events = ev;
                 s.view.loaded = true;
@@ -425,7 +434,7 @@ fn run(key: String, src: Src) {
         }
         std::thread::sleep(Duration::from_secs(5));
     }
-    if let Some(s) = slots().lock().unwrap().get_mut(&key) {
+    if let Some(s) = slots().lock_or_recover().get_mut(&key) {
         s.running = false;
     }
 }

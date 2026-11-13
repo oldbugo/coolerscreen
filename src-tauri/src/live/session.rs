@@ -259,6 +259,7 @@ pub fn wrap_frame_into(jpeg: &[u8], out: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::sync::MutexExt;
     use std::sync::{Arc, Mutex};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,8 +287,7 @@ mod tests {
     impl SessionOps for FakeOps {
         fn write(&mut self, bytes: &[u8], timeout: Duration) -> Result<(), DevErr> {
             self.calls
-                .lock()
-                .unwrap()
+                .lock_or_recover()
                 .push(Call::Write(bytes.to_vec(), timeout));
             let step = if bytes == END_OF_STREAM {
                 Step::EndStream
@@ -308,7 +308,7 @@ mod tests {
             }
         }
         fn info(&mut self, _: &dyn Fn() -> bool) -> Result<(), DevErr> {
-            self.calls.lock().unwrap().push(Call::Info);
+            self.calls.lock_or_recover().push(Call::Info);
             if self.failure == Some(Step::Info) {
                 Err(failure())
             } else {
@@ -325,10 +325,10 @@ mod tests {
             self.key(0x14, &[0, 0])
         }
         fn wait(&mut self, duration: Duration) {
-            self.calls.lock().unwrap().push(Call::Wait(duration));
+            self.calls.lock_or_recover().push(Call::Wait(duration));
         }
         fn close(self) {
-            self.calls.lock().unwrap().push(Call::Close);
+            self.calls.lock_or_recover().push(Call::Close);
         }
     }
 
@@ -379,7 +379,7 @@ mod tests {
         let mut trace = Trace::new(Flow::Connect);
         let scr = connect_sequence(
             || {
-                calls.lock().unwrap().push(Call::Open);
+                calls.lock_or_recover().push(Call::Open);
                 Ok(FakeOps {
                     calls: calls.clone(),
                     failure: None,
@@ -390,7 +390,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            *calls.lock().unwrap(),
+            *calls.lock_or_recover(),
             vec![
                 Call::Open,
                 Call::Write(END_OF_STREAM.to_vec(), Duration::from_millis(500)),
@@ -441,7 +441,7 @@ mod tests {
             let mut trace = Trace::new(Flow::Connect);
             let result = connect_sequence(
                 || {
-                    calls.lock().unwrap().push(Call::Open);
+                    calls.lock_or_recover().push(Call::Open);
                     if step == Step::Open {
                         Err(failure())
                     } else {
@@ -466,9 +466,9 @@ mod tests {
             assert_eq!(entries.len(), index + 1 + usize::from(index > 0));
             if index > 0 {
                 assert_eq!(entries.last().unwrap()["step"], "close");
-                assert_eq!(calls.lock().unwrap().last(), Some(&Call::Close));
+                assert_eq!(calls.lock_or_recover().last(), Some(&Call::Close));
             } else {
-                assert_eq!(*calls.lock().unwrap(), vec![Call::Open]);
+                assert_eq!(*calls.lock_or_recover(), vec![Call::Open]);
             }
             assert!(!record.to_string().contains("original private failure"));
         }
@@ -504,8 +504,8 @@ mod tests {
             assert_eq!(entries[entries.len() - 2]["step"], "cancelled");
             assert_eq!(entries[entries.len() - 2]["result"], "cancelled");
             assert_eq!(entries.last().unwrap()["step"], "close");
-            assert_eq!(calls.lock().unwrap().last(), Some(&Call::Close));
-            assert!(!calls.lock().unwrap().contains(&written(0x11, &[], 500)));
+            assert_eq!(calls.lock_or_recover().last(), Some(&Call::Close));
+            assert!(!calls.lock_or_recover().contains(&written(0x11, &[], 500)));
         }
     }
 
@@ -540,7 +540,7 @@ mod tests {
                     mode,
                     &mut trace,
                 );
-                assert_eq!(*calls.lock().unwrap(), stop_calls(ending, mode));
+                assert_eq!(*calls.lock_or_recover(), stop_calls(ending, mode));
                 let record = trace.value();
                 let entries = record["steps"].as_array().unwrap();
                 assert_eq!(entries.last().unwrap()["step"], "close");

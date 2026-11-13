@@ -2,10 +2,11 @@
 //! or filled box, corners rounded by the item's own radius when it has one, a small dim card with a short message while there is
 //! no picture yet (nothing chosen / loading / failed). A refresh that fails keeps the old picture with a short amber note.
 //! The editor preview (`self.sample`) draws a built-in landscape and never touches the network.
+use crate::core::sync::MutexExt;
 use super::widgets::scale_to_box;
 use super::{LocalTime, Rect, Renderer, Weight};
 use crate::live::theme::Widget;
-use crate::live::webpicture::{self as wp, PicError, View, WebPictureProps};
+use crate::live::webpicture::{self as wp, View, WebPictureProps};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, PixmapPaint, Transform};
@@ -114,7 +115,7 @@ impl Renderer {
         let (bw, bh) = (b.w.round().max(1.0) as u32, b.h.round().max(1.0) as u32);
         let id = if w.id.is_empty() { "?".to_string() } else { w.id.clone() };
         let (pm, ox, oy) = {
-            let mut g = cache().lock().unwrap();
+            let mut g = cache().lock_or_recover();
             let fresh = g.get(&id).is_some_and(|s| s.pic_id == view.id && s.bw == bw && s.bh == bh && s.cover == cover);
             if !fresh {
                 let (_, _, _, pm, ox, oy) = scale_to_box(&pic, bw, bh, cover);
@@ -153,6 +154,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::live::webpicture::PicError;
     use crate::live::theme::{Theme, ThemeLive};
     use serde_json::json;
     use std::path::PathBuf;

@@ -5,6 +5,7 @@
 //! background work when a high-priority task is starved, and job events for the UI.
 //!
 //! Every task runs on its own OS thread once its resources are granted (the limits bound the thread count).
+use crate::core::sync::{MutexExt, RecoverResult};
 use super::error::{CoreError, CoreResult};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -281,25 +282,25 @@ impl CancelToken {
     }
     fn cancel(&self, reason: CoreError) {
         {
-            let mut r = self.0.reason.lock().unwrap();
+            let mut r = self.0.reason.lock_or_recover();
             if r.is_none() {
                 *r = Some(reason);
             }
         }
         self.0.flag.store(true, Ordering::SeqCst);
-        for w in self.0.children.lock().unwrap().iter() {
+        for w in self.0.children.lock_or_recover().iter() {
             if let Some(c) = w.upgrade() {
-                let _ = c.lock().unwrap().kill();
+                let _ = c.lock_or_recover().kill();
             }
         }
     }
     fn reason(&self) -> CoreError {
-        self.0.reason.lock().unwrap().clone().unwrap_or_else(CoreError::cancelled)
+        self.0.reason.lock_or_recover().clone().unwrap_or_else(CoreError::cancelled)
     }
     fn reset(&self) {
         self.0.flag.store(false, Ordering::SeqCst);
-        *self.0.reason.lock().unwrap() = None;
-        self.0.children.lock().unwrap().clear();
+        *self.0.reason.lock_or_recover() = None;
+        self.0.children.lock_or_recover().clear();
     }
 }
 
@@ -311,38 +312,38 @@ pub struct ChildGuard {
 
 impl ChildGuard {
     pub fn id(&self) -> u32 {
-        self.child.lock().unwrap().id()
+        self.child.lock_or_recover().id()
     }
     /// Take the child's stdout / stderr pipes (if they were piped).
     pub fn take_stdout(&self) -> Option<std::process::ChildStdout> {
-        self.child.lock().unwrap().stdout.take()
+        self.child.lock_or_recover().stdout.take()
     }
     pub fn take_stderr(&self) -> Option<std::process::ChildStderr> {
-        self.child.lock().unwrap().stderr.take()
+        self.child.lock_or_recover().stderr.take()
     }
     /// Wait for exit. Returns `cancelled` if the task was cancelled (the process has been killed).
     pub fn wait(&self) -> CoreResult<ExitStatus> {
         loop {
-            if let Some(st) = self.child.lock().unwrap().try_wait()? {
+            if let Some(st) = self.child.lock_or_recover().try_wait()? {
                 if self.token.is_cancelled() {
                     return Err(self.token.reason());
                 }
                 return Ok(st);
             }
             if self.token.is_cancelled() {
-                let _ = self.child.lock().unwrap().kill();
+                let _ = self.child.lock_or_recover().kill();
             }
             std::thread::sleep(Duration::from_millis(15));
         }
     }
     pub fn kill(&self) {
-        let _ = self.child.lock().unwrap().kill();
+        let _ = self.child.lock_or_recover().kill();
     }
 }
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        let mut c = self.child.lock().unwrap();
+        let mut c = self.child.lock_or_recover();
         if let Ok(None) = c.try_wait() {
             let _ = c.kill();
             let _ = c.wait();
@@ -401,7 +402,7 @@ impl TaskCtx {
         let spawned = cmd.spawn()?;
         super::jobobject::adopt(&spawned); // never outlives the app
         let child = Arc::new(Mutex::new(spawned));
-        self.token.0.children.lock().unwrap().push(Arc::downgrade(&child));
+        self.token.0.children.lock_or_recover().push(Arc::downgrade(&child));
         let g = ChildGuard { child, token: self.token.clone() };
         if self.is_cancelled() {
             g.kill();
@@ -465,26 +466,26 @@ pub struct JobHandle {
 impl JobHandle {
     /// Block until the job finishes.
     pub fn wait(&self) -> Outcome {
-        let mut g = self.slot.v.lock().unwrap();
+        let mut g = self.slot.v.lock_or_recover();
         while g.is_none() {
-            g = self.slot.cv.wait(g).unwrap();
+            g = self.slot.cv.wait(g).recover();
         }
         g.clone().unwrap()
     }
     pub fn wait_timeout(&self, d: Duration) -> Option<Outcome> {
         let end = Instant::now() + d;
-        let mut g = self.slot.v.lock().unwrap();
+        let mut g = self.slot.v.lock_or_recover();
         while g.is_none() {
             let now = Instant::now();
             if now >= end {
                 return None;
             }
-            g = self.slot.cv.wait_timeout(g, end - now).unwrap().0;
+            g = self.slot.cv.wait_timeout(g, end - now).recover().0;
         }
         g.clone()
     }
     pub fn try_result(&self) -> Option<Outcome> {
-        self.slot.v.lock().unwrap().clone()
+        self.slot.v.lock_or_recover().clone()
     }
 }
 
@@ -577,20 +578,20 @@ impl Scheduler {
             sink,
             me: Mutex::new(Weak::new()),
         });
-        *s.me.lock().unwrap() = Arc::downgrade(&s);
+        *s.me.lock_or_recover() = Arc::downgrade(&s);
         Scheduler(s)
     }
 
     pub fn set_limits(&self, limits: Limits) {
-        self.0.inner.lock().unwrap().limits = limits;
+        self.0.inner.lock_or_recover().limits = limits;
         self.0.pump();
     }
     pub fn set_policy(&self, policy: Policy) {
-        self.0.inner.lock().unwrap().policy = policy;
+        self.0.inner.lock_or_recover().policy = policy;
         self.0.pump();
     }
     pub fn policy(&self) -> Policy {
-        self.0.inner.lock().unwrap().policy
+        self.0.inner.lock_or_recover().policy
     }
 
     /// Queue a task. It runs when its resources are free and nothing more important is waiting for them.
@@ -612,7 +613,7 @@ impl Scheduler {
         let slot = Arc::new(Slot::default());
         let mut emits = vec![];
         {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             if idle_only&&(g.entries.values().any(|e|e.spec.visible)||Shared::device_active(&g)||!Shared::can_start(&g,&spec)){
                 return Err(CoreError::coded("busy","The cooler is busy. Try again when its work finishes.").status(409));
             }
@@ -685,7 +686,7 @@ impl Scheduler {
     /// Cancel one job. Running device work cannot be cancelled (an upload must not be cut off); returns false then.
     pub fn cancel(&self, id: &str) -> bool {
         let j = {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             Shared::cancel_locked(&mut g, id, CoreError::cancelled())
         };
         let ok = j.is_some();
@@ -699,7 +700,7 @@ impl Scheduler {
     /// Cancel every job matching `pred` (by clip, by version, ...). Returns how many were cancelled.
     pub fn cancel_where(&self, pred: impl Fn(&TaskSpec) -> bool) -> usize {
         let js = {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             let ids: Vec<String> = g.entries.iter().filter(|(_, e)| pred(&e.spec)).map(|(k, _)| k.clone()).collect();
             ids.iter().filter_map(|id| Shared::cancel_locked(&mut g, id, CoreError::cancelled())).collect::<Vec<_>>()
         };
@@ -722,7 +723,7 @@ impl Scheduler {
     pub fn set_focus(&self, selected: Option<&str>, visible: &[String]) {
         let mut emits = vec![];
         {
-            let mut g = self.0.inner.lock().unwrap();
+            let mut g = self.0.inner.lock_or_recover();
             let ids: Vec<String> = g.entries.keys().cloned().collect();
             for id in ids {
                 let (oid, blur, auto) = {
@@ -761,12 +762,12 @@ impl Scheduler {
 
     /// A queued or running job submitted with this coalesce key (to join it instead of superseding it).
     pub fn live_with_key(&self, key: &str) -> Option<String> {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         g.entries.iter().find(|(_, e)| e.spec.coalesce_key.as_deref() == Some(key)).map(|(id, _)| id.clone())
     }
 
     pub fn job(&self, id: &str) -> Option<Job> {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         if let Some(e) = g.entries.get(id) {
             return Some(e.job.clone());
         }
@@ -775,7 +776,7 @@ impl Scheduler {
 
     /// Visible jobs that are queued/running or finished in the last `keep_ms`.
     pub fn activity(&self, keep_ms: u64) -> Vec<Job> {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         let now = now_ms();
         let mut out: Vec<(u64, Job)> = g
             .finished
@@ -792,17 +793,17 @@ impl Scheduler {
 
     /// True while a device task is running or queued.
     pub fn device_active(&self) -> bool {
-        Shared::device_active(&self.0.inner.lock().unwrap())
+        Shared::device_active(&self.0.inner.lock_or_recover())
     }
 
     /// Any job the user can see is queued or running (upload, conversion, store, recording): not a moment to quit from a script.
     pub fn any_visible_job(&self) -> bool {
-        self.0.inner.lock().unwrap().entries.values().any(|e| e.spec.visible)
+        self.0.inner.lock_or_recover().entries.values().any(|e| e.spec.visible)
     }
 
     /// True while a visible job of one of these kinds is running (close guard).
     pub fn running_kind(&self, kinds: &[&str]) -> bool {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         g.running.iter().any(|id| kinds.contains(&g.entries[id].spec.kind.as_str()))
     }
 
@@ -812,7 +813,7 @@ impl Scheduler {
         let end = Instant::now() + max;
         loop {
             let busy = {
-                let g = self.0.inner.lock().unwrap();
+                let g = self.0.inner.lock_or_recover();
                 g.running.iter().any(|id| !(ignore_device && g.entries[id].spec.resources.get(Res::Device) > 0))
             };
             if !busy {
@@ -827,7 +828,7 @@ impl Scheduler {
 
     /// Number of queued and running tasks (tests, diagnostics).
     pub fn counts(&self) -> (usize, usize) {
-        let g = self.0.inner.lock().unwrap();
+        let g = self.0.inner.lock_or_recover();
         (g.queued.len(), g.running.len())
     }
 }
@@ -849,11 +850,11 @@ impl Shared {
         }
         if j.state.finished() {
             let w = {
-                let mut g = self.inner.lock().unwrap();
+                let mut g = self.inner.lock_or_recover();
                 g.wakes.iter().position(|(id, _, _)| id == &j.id).map(|i| g.wakes.swap_remove(i))
             };
             if let Some((_, slot, r)) = w {
-                *slot.v.lock().unwrap() = Some(r);
+                *slot.v.lock_or_recover() = Some(r);
                 slot.cv.notify_all();
             }
         }
@@ -878,7 +879,7 @@ impl Shared {
             }
             let e = g.entries.get_mut(id).unwrap();
             e.preempted = false;
-            *e.token.0.reason.lock().unwrap() = Some(reason);
+            *e.token.0.reason.lock_or_recover() = Some(reason);
             e.job.message = "Cancelling".into();
             return Some(e.job.clone());
         }
@@ -918,7 +919,7 @@ impl Shared {
 
     fn progress(&self, id: &str, f: f64, msg: Option<&str>, bytes: Option<(u64, u64)>) {
         let emit = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self.inner.lock_or_recover();
             let Some(e) = g.entries.get_mut(id) else { return };
             if e.token.is_cancelled() {
                 return;
@@ -993,7 +994,7 @@ impl Shared {
         let mut emits = vec![];
         let device_change;
         {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self.inner.lock_or_recover();
             let mut order = g.queued.clone();
             order.sort_by_key(|id| {
                 let e = &g.entries[id];
@@ -1085,15 +1086,16 @@ impl Shared {
         if let Some(b) = device_change {
             self.sink.device_busy(b);
         }
-        let me = self.me.lock().unwrap().clone();
+        let me = self.me.lock_or_recover().clone();
         for (id, f, token) in starts {
             let me = me.clone();
             std::thread::Builder::new()
                 .name(format!("job-{id}"))
                 .spawn(move || {
                     let ctx = TaskCtx { id: id.clone(), token: token.clone(), sched: me.clone() };
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&ctx)))
-                        .unwrap_or_else(|_| Err(CoreError::new("Internal error (the task crashed).").status(500)));
+                    // A crash fails this job only (logged by the panic hook); the scheduler and the process keep going.
+                    let r = crate::core::sync::guarded("scheduler job", || f(&ctx))
+                        .unwrap_or_else(|| Err(CoreError::new("Internal error (the task crashed).").status(500)));
                     // A task that was cancelled reports `cancelled`, whatever it returned on its way out.
                     let r = if token.is_cancelled() && r.as_ref().is_err() { Err(token.reason()) } else { r };
                     if let Some(s) = me.upgrade() {
@@ -1106,7 +1108,7 @@ impl Shared {
 
     fn task_done(&self, id: &str, r: Outcome) {
         let job = {
-            let mut g = self.inner.lock().unwrap();
+            let mut g = self.inner.lock_or_recover();
             g.running.retain(|x| x != id);
             let Some(mut e) = g.entries.remove(id) else { return };
             for i in 0..N_RES {
@@ -1166,7 +1168,7 @@ mod tests {
         release: Arc<AtomicBool>,
     ) -> impl Fn(&TaskCtx) -> CoreResult<Value> + Send + Sync {
         move |ctx| {
-            log.lock().unwrap().push(name);
+            log.lock_or_recover().push(name);
             while !release.load(Ordering::SeqCst) {
                 ctx.sleep(Duration::from_millis(5))?;
             }
@@ -1219,12 +1221,12 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let rel = Arc::new(AtomicBool::new(false));
         let blocker = s.submit(TaskSpec::new("t", "blocker", Resources::one(Res::Cpu)), gate_task("blocker", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let order = Arc::new(Mutex::new(vec![]));
         let mk = |name: &'static str, p: Priority| {
             let order = order.clone();
             s.submit(TaskSpec::new("t", name, Resources::one(Res::Cpu)).priority(p), move |_| {
-                order.lock().unwrap().push(name);
+                order.lock_or_recover().push(name);
                 Ok(Value::Null)
             })
         };
@@ -1236,7 +1238,7 @@ mod tests {
         for h in [blocker, a, b, c, d] {
             h.wait().unwrap();
         }
-        assert_eq!(*order.lock().unwrap(), vec!["user", "sel", "vis", "bg"]);
+        assert_eq!(*order.lock_or_recover(), vec!["user", "sel", "vis", "bg"]);
     }
 
     #[test]
@@ -1246,11 +1248,11 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let rel = Arc::new(AtomicBool::new(false));
         let a = s.submit(TaskSpec::new("t", "a", Resources::one(Res::Cpu)), gate_task("a", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let b = s.submit(TaskSpec::new("t", "b", Resources::one(Res::Cpu)).priority(Priority::Selected), gate_task("b", log.clone(), rel.clone()));
         let c = s.submit(TaskSpec::new("t", "c", Resources::one(Res::Net)).priority(Priority::Background), |_| Ok(json!("c")));
         assert_eq!(c.wait().unwrap(), json!("c"));
-        assert_eq!(*log.lock().unwrap(), vec!["a"]);
+        assert_eq!(*log.lock_or_recover(), vec!["a"]);
         rel.store(true, Ordering::SeqCst);
         a.wait().unwrap();
         b.wait().unwrap();
@@ -1264,12 +1266,12 @@ mod tests {
         let a = s.submit(TaskSpec::new("t", "a", Resources::one(Res::Cpu)).original("o1"), gate_task("a", log.clone(), rel.clone()));
         let b = s.submit(TaskSpec::new("t", "b", Resources::one(Res::Cpu)).original("o1"), gate_task("b", log.clone(), rel.clone()));
         let c = s.submit(TaskSpec::new("t", "c", Resources::one(Res::Cpu)).original("o2"), |_| Ok(json!("c")));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         assert_eq!(s.cancel_original("o1"), 2);
         assert!(a.wait().unwrap_err().code_is("cancelled"));
         assert!(b.wait().unwrap_err().code_is("cancelled"));
         assert_eq!(c.wait().unwrap(), json!("c"));
-        assert_eq!(*log.lock().unwrap(), vec!["a"], "b never started");
+        assert_eq!(*log.lock_or_recover(), vec!["a"], "b never started");
         assert_eq!(s.job(&a.id).unwrap().state, JobState::Cancelled);
         assert_eq!(s.job(&a.id).unwrap().status, "error");
     }
@@ -1324,7 +1326,7 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let rel = Arc::new(AtomicBool::new(false));
         let blocker = s.submit(TaskSpec::new("t", "x", Resources::one(Res::Cpu)), gate_task("x", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let est = |n: i64| s.submit(TaskSpec::new("estimate", "e", Resources::one(Res::Cpu)).coalesce("estimate:o1"), move |_| Ok(json!(n)));
         let e1 = est(1);
         let e2 = est(2);
@@ -1342,7 +1344,7 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let never = Arc::new(AtomicBool::new(false));
         let e1 = s.submit(TaskSpec::new("estimate", "e1", Resources::one(Res::Cpu)).coalesce("k"), gate_task("e1", log.clone(), never));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let e2 = s.submit(TaskSpec::new("estimate", "e2", Resources::one(Res::Cpu)).coalesce("k"), |_| Ok(json!(2)));
         assert!(e1.wait().unwrap_err().code_is("superseded"));
         assert_eq!(e2.wait().unwrap(), json!(2));
@@ -1360,7 +1362,7 @@ mod tests {
             TaskSpec::new("cards", "bg1", Resources::one(Res::Cpu)).priority(Priority::Background).preemptible(),
             gate_task("bg1", log.clone(), Arc::new(AtomicBool::new(false))),
         );
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let r2 = runs.clone();
         let rel2 = Arc::new(AtomicBool::new(false));
         let rel2c = rel2.clone();
@@ -1420,7 +1422,7 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let rel = Arc::new(AtomicBool::new(false));
         let conv = s.submit(TaskSpec::new("version", "conv", Resources::one(Res::Cpu)).priority(Priority::Background), gate_task("conv", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let sel = s.submit(TaskSpec::new("estimate", "sel", Resources::one(Res::Cpu)).priority(Priority::Selected), |_| Ok(json!(1)));
         assert!(sel.wait_timeout(Duration::from_millis(150)).is_none());
         rel.store(true, Ordering::SeqCst);
@@ -1435,16 +1437,16 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let rel = Arc::new(AtomicBool::new(false));
         let a = s.submit(TaskSpec::new("t", "a", Resources::one(Res::Cpu)), gate_task("a", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let big = s.submit(TaskSpec::new("t", "big", Resources::none().with(Res::Cpu, 2)).priority(Priority::Selected), gate_task("big", log.clone(), rel.clone()));
         let small = s.submit(TaskSpec::new("t", "small", Resources::one(Res::Cpu)).priority(Priority::Background), gate_task("small", log.clone(), rel.clone()));
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(*log.lock().unwrap(), vec!["a"]);
+        assert_eq!(*log.lock_or_recover(), vec!["a"]);
         rel.store(true, Ordering::SeqCst);
         for h in [a, big, small] {
             h.wait().unwrap();
         }
-        assert_eq!(*log.lock().unwrap(), vec!["a", "big", "small"]);
+        assert_eq!(*log.lock_or_recover(), vec!["a", "big", "small"]);
     }
 
     #[test]
@@ -1454,24 +1456,24 @@ mod tests {
         let rel_conv = Arc::new(AtomicBool::new(false));
         let rel_dev = Arc::new(AtomicBool::new(false));
         let conv = s.submit(TaskSpec::new("version", "conv", Resources::one(Res::Cpu)), gate_task("conv", log.clone(), rel_conv.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let dev = s.submit(TaskSpec::new("send", "send", Resources::one(Res::Device)), gate_task("send", log.clone(), rel_dev.clone()));
         let dev2 = s.submit(TaskSpec::new("send", "send2", Resources::one(Res::Device)), gate_task("send2", log.clone(), rel_dev.clone()));
         let est = s.submit(TaskSpec::new("estimate", "est", Resources::one(Res::Cpu)).priority(Priority::Selected), gate_task("est", log.clone(), rel_dev.clone()));
         std::thread::sleep(Duration::from_millis(50));
         // The device waits for the running conversion; the estimate waits for the device.
-        assert_eq!(*log.lock().unwrap(), vec!["conv"]);
+        assert_eq!(*log.lock_or_recover(), vec!["conv"]);
         assert!(s.device_active());
         rel_conv.store(true, Ordering::SeqCst);
         conv.wait().unwrap();
-        wait_until(|| log.lock().unwrap().len() == 2);
+        wait_until(|| log.lock_or_recover().len() == 2);
         std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(*log.lock().unwrap(), vec!["conv", "send"], "one device task at a time, no media during it");
+        assert_eq!(*log.lock_or_recover(), vec!["conv", "send"], "one device task at a time, no media during it");
         rel_dev.store(true, Ordering::SeqCst);
         for h in [dev, dev2, est] {
             h.wait().unwrap();
         }
-        assert_eq!(*log.lock().unwrap(), vec!["conv", "send", "send2", "est"]);
+        assert_eq!(*log.lock_or_recover(), vec!["conv", "send", "send2", "est"]);
         assert!(!s.device_active());
     }
 
@@ -1484,15 +1486,15 @@ mod tests {
         let rel_dev = Arc::new(AtomicBool::new(false));
         let rel = Arc::new(AtomicBool::new(false));
         let dev = s.submit(TaskSpec::new("send", "send", Resources::one(Res::Device)), gate_task("send", log.clone(), rel_dev.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let a = s.submit(TaskSpec::new("estimate", "a", Resources::one(Res::Cpu)), gate_task("a", log.clone(), rel.clone()));
         let b = s.submit(TaskSpec::new("estimate", "b", Resources::one(Res::Cpu)), gate_task("b", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 2);
+        wait_until(|| log.lock_or_recover().len() == 2);
         std::thread::sleep(Duration::from_millis(50));
-        assert_eq!(*log.lock().unwrap(), vec!["send", "a"], "one cpu task while uploading");
+        assert_eq!(*log.lock_or_recover(), vec!["send", "a"], "one cpu task while uploading");
         rel_dev.store(true, Ordering::SeqCst);
         dev.wait().unwrap();
-        wait_until(|| log.lock().unwrap().len() == 3);
+        wait_until(|| log.lock_or_recover().len() == 3);
         rel.store(true, Ordering::SeqCst);
         a.wait().unwrap();
         b.wait().unwrap();
@@ -1505,7 +1507,7 @@ mod tests {
         let never = Arc::new(AtomicBool::new(false));
         let dev = s.submit(TaskSpec::new("send", "send", Resources::one(Res::Device)), gate_task("send", log.clone(), never.clone()));
         let cpu = s.submit(TaskSpec::new("version", "conv", Resources::one(Res::Cpu)), gate_task("conv", log.clone(), never.clone()));
-        wait_until(|| log.lock().unwrap().len() == 2);
+        wait_until(|| log.lock_or_recover().len() == 2);
         s.cancel_where(|_| true);
         let t = Instant::now();
         assert!(s.wait_idle(Duration::from_secs(1), true), "only the upload is left");
@@ -1524,7 +1526,7 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let rel = Arc::new(AtomicBool::new(false));
         let d = s.submit(TaskSpec::new("send", "send", Resources::one(Res::Device)).version("v"), gate_task("send", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         assert!(!s.cancel(&d.id));
         assert_eq!(s.cancel_version("v"), 0);
         rel.store(true, Ordering::SeqCst);
@@ -1537,14 +1539,14 @@ mod tests {
         let log = Arc::new(Mutex::new(vec![]));
         let rel = Arc::new(AtomicBool::new(false));
         let blocker = s.submit(TaskSpec::new("t", "x", Resources::one(Res::Cpu)), gate_task("x", log.clone(), rel.clone()));
-        wait_until(|| log.lock().unwrap().len() == 1);
+        wait_until(|| log.lock_or_recover().len() == 1);
         let order = Arc::new(Mutex::new(vec![]));
         let mk = |name: &'static str, oid: &str| {
             let order = order.clone();
             s.submit(
                 TaskSpec::new("assets", name, Resources::one(Res::Cpu)).original(oid).priority(Priority::Background).auto_priority(),
                 move |_| {
-                    order.lock().unwrap().push(name);
+                    order.lock_or_recover().push(name);
                     Ok(Value::Null)
                 },
             )
@@ -1560,7 +1562,7 @@ mod tests {
         for h in [blocker, a, b, c] {
             h.wait().unwrap();
         }
-        assert_eq!(*order.lock().unwrap(), vec!["c", "b", "a"]);
+        assert_eq!(*order.lock_or_recover(), vec!["c", "b", "a"]);
     }
 
     #[test]
@@ -1568,10 +1570,10 @@ mod tests {
         struct Rec(Mutex<Vec<(String, JobState)>>, Mutex<Vec<bool>>);
         impl JobSink for Rec {
             fn job(&self, j: &Job) {
-                self.0.lock().unwrap().push((j.label.clone(), j.state));
+                self.0.lock_or_recover().push((j.label.clone(), j.state));
             }
             fn device_busy(&self, b: bool) {
-                self.1.lock().unwrap().push(b);
+                self.1.lock_or_recover().push(b);
             }
         }
         let rec = Arc::new(Rec(Mutex::new(vec![]), Mutex::new(vec![])));
@@ -1584,7 +1586,7 @@ mod tests {
         });
         s.submit(TaskSpec::new("probe", "hidden", Resources::one(Res::Io)), |_| Ok(Value::Null)).wait().unwrap();
         h.wait().unwrap();
-        let ev = rec.0.lock().unwrap().clone();
+        let ev = rec.0.lock_or_recover().clone();
         assert!(ev.iter().all(|(l, _)| l == "vis"));
         assert_eq!(ev.first().unwrap().1, JobState::Queued);
         assert_eq!(ev.last().unwrap().1, JobState::Done);
@@ -1592,8 +1594,8 @@ mod tests {
         assert_eq!(act.len(), 1);
         assert_eq!(act[0].result.as_ref().unwrap()["name"], json!("x"));
         assert!(act[0].result.as_ref().unwrap().get("secret").is_none());
-        wait_until(|| rec.1.lock().unwrap().last() == Some(&false));
-        assert_eq!(rec.1.lock().unwrap().first(), Some(&true));
+        wait_until(|| rec.1.lock_or_recover().last() == Some(&false));
+        assert_eq!(rec.1.lock_or_recover().first(), Some(&true));
     }
 
     #[test]

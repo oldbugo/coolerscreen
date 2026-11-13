@@ -1,6 +1,7 @@
 //! Narrow physical dock actions. Embedded storage and arbitrary patches are not
 //! part of this API. The UC worker serializes mutations; scheduler admission is
 //! atomic and refuses busy work rather than replaying it later.
+use crate::core::sync::MutexExt;
 use super::{
     app::App,
     error::{CoreError, CoreResult},
@@ -233,7 +234,7 @@ mod tests {
             ("brightness-mismatch", json!(69)),
         ] {
             let (_dir, app) = app(mode);
-            *app.last_info.lock().unwrap() = Some(json!({"data":{"brightness":50}}));
+            *app.last_info.lock_or_recover() = Some(json!({"data":{"brightness":50}}));
             assert!(app
                 .dock_action(DockAction::BrightnessSet { value: 70 })
                 .unwrap_err()
@@ -323,11 +324,10 @@ impl App {
     pub fn brightness_state(&self) -> Value {
         let reported = self
             .last_info
-            .lock()
-            .unwrap()
+            .lock_or_recover()
             .as_ref()
             .and_then(reported_brightness);
-        json!({"reported":reported,"requested":*self.brightness_requested.lock().unwrap()})
+        json!({"reported":reported,"requested":*self.brightness_requested.lock_or_recover()})
     }
     pub fn dock_control_state(&self) -> CoreResult<Value> {
         let themes = theme_rows(self)?;
@@ -417,7 +417,7 @@ impl App {
         match self.device.brightness_change(change) {
             Ok(result) => {
                 let reported = result["reported"].as_u64().filter(|v| *v <= 100);
-                let mut last = self.last_info.lock().unwrap();
+                let mut last = self.last_info.lock_or_recover();
                 let info = last.get_or_insert_with(|| json!({}));
                 let data = if info.get("data").is_some_and(Value::is_object) {
                     &mut info["data"]
@@ -425,7 +425,7 @@ impl App {
                     info
                 };
                 data["brightness"] = json!(reported);
-                *self.brightness_requested.lock().unwrap() =
+                *self.brightness_requested.lock_or_recover() =
                     result["requested"].as_u64().map(|v| v as u8);
                 if reported == result["requested"].as_u64() {
                     Ok(())
@@ -434,7 +434,7 @@ impl App {
                 }
             }
             Err(error) => {
-                if let Some(info) = self.last_info.lock().unwrap().as_mut() {
+                if let Some(info) = self.last_info.lock_or_recover().as_mut() {
                     let data = if info.get("data").is_some_and(Value::is_object) {
                         &mut info["data"]
                     } else {

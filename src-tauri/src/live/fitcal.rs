@@ -3,6 +3,7 @@
 //! line on each edge of the visible rectangle and rulers going inward; moving an edge inward until its line is just visible
 //! finds how many pixels the panel hides. The device shows a live picture only while pictures keep coming, so the session
 //! re-sends the current one about five times a second. Ending it uses the normal live ending (the stored loop clip plays).
+use crate::core::sync::MutexExt;
 use super::encode::{frame_budget, rotate_cw, JpegEncoder};
 use super::pipeline::{join_bounded, Sink};
 use super::session::{Ending, LiveSession};
@@ -245,7 +246,7 @@ impl FitCalibration {
                 let g = sh.gen.load(Relaxed);
                 if g != seen {
                     seen = g;
-                    let (fit, sel) = *sh.state.lock().unwrap();
+                    let (fit, sel) = *sh.state.lock_or_recover();
                     let rgba = draw(fit, sel);
                     rotate_cw(&rgba, &mut portrait);
                     if let Err(e) = enc.encode(&portrait, PW, PH, frame_budget(200, 5), &mut jpeg) {
@@ -288,7 +289,7 @@ impl FitCalibration {
 
     /// New offsets (screen px) and selected edge; the picture changes at once.
     pub fn set(&self, fit: Fit, sel: usize) {
-        *self.shared.state.lock().unwrap() = (fit, sel.min(3));
+        *self.shared.state.lock_or_recover() = (fit, sel.min(3));
         self.shared.gen.fetch_add(1, Relaxed);
     }
 
@@ -300,7 +301,7 @@ impl FitCalibration {
     /// End the session: the screen plays its stored loop clip again. Waits a bounded time for the screen link to close.
     pub fn end(&self) {
         self.shared.quit.store(true, Relaxed);
-        let t = self.thread.lock().unwrap().take();
+        let t = self.thread.lock_or_recover().take();
         if let Some(t) = t {
             join_bounded(vec![t], Duration::from_millis(2500));
         }

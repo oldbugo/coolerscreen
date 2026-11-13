@@ -7,6 +7,7 @@
 //! A hold is released after a short delay, so the screen has settled before live reconnects.
 //! Nothing here touches the screen except through `Pipeline` / `LiveSession` (0x15 [00 0A], 0x11 and frames; stop sends
 //! FF D9 FF D9, 0x0E [1], 0x14 [1,0]).
+use crate::core::sync::MutexExt;
 use crate::live::pipeline::{Pipeline, Sink};
 use crate::live::session::Ending;
 use crate::live::Config;
@@ -131,15 +132,15 @@ impl LiveHost {
 
     /// Something the tray tooltip or the page shows has changed (live items, idle).
     pub fn set_on_change(&self, f: impl Fn() + Send + Sync + 'static) {
-        self.on_change.lock().unwrap().push(Arc::new(f));
+        self.on_change.lock_or_recover().push(Arc::new(f));
     }
 
     pub fn set_on_recovery(&self, f: impl Fn() -> bool + Send + Sync + 'static) {
-        *self.on_recovery.lock().unwrap() = Some(Arc::new(f));
+        *self.on_recovery.lock_or_recover() = Some(Arc::new(f));
     }
 
     fn changed(&self) {
-        let fs = self.on_change.lock().unwrap().clone();
+        let fs = self.on_change.lock_or_recover().clone();
         for f in fs {
             f();
         }
@@ -175,16 +176,16 @@ impl LiveHost {
     }
 
     pub fn set_config_override(&self, c: Option<Config>) {
-        *self.cfg_override.lock().unwrap() = c;
+        *self.cfg_override.lock_or_recover() = c;
     }
 
     fn config(&self) -> Config {
-        self.cfg_override.lock().unwrap().clone().unwrap_or_else(Config::load)
+        self.cfg_override.lock_or_recover().clone().unwrap_or_else(Config::load)
     }
 
     /// The saved fps without creating companion.json (the feature may be off).
     fn quiet_fps(&self) -> u32 {
-        if let Some(c) = self.cfg_override.lock().unwrap().as_ref() {
+        if let Some(c) = self.cfg_override.lock_or_recover().as_ref() {
             return c.fps;
         }
         std::fs::read_to_string(Config::path()).ok().and_then(|s| serde_json::from_str::<Config>(&s).ok()).map(|c| c.fps).unwrap_or(60)
@@ -192,14 +193,14 @@ impl LiveHost {
 
     /// The screen fit for live frames; a running pipeline switches on its next frame.
     pub fn set_fit(self: &Arc<Self>, f: crate::core::fit::Fit) {
-        *self.fit.lock().unwrap() = f;
+        *self.fit.lock_or_recover() = f;
         self.apply_fit();
     }
 
     /// The fit live frames use now: the unsaved one while the Screen fit page is tuning, else the saved one.
     pub fn effective_fit(&self) -> crate::core::fit::Fit {
-        let tuning = *self.fit_tune.lock().unwrap();
-        tuning.unwrap_or(*self.fit.lock().unwrap())
+        let tuning = *self.fit_tune.lock_or_recover();
+        tuning.unwrap_or(*self.fit.lock_or_recover())
     }
 
     fn apply_fit(self: &Arc<Self>) {
@@ -216,7 +217,7 @@ impl LiveHost {
         if self.calibrating() {
             self.calibrate_end();
         }
-        *self.fit_tune.lock().unwrap() = Some(f);
+        *self.fit_tune.lock_or_recover() = Some(f);
         if self.pipeline().is_none() {
             self.tune_temp.store(true, SeqCst);
             self.start();
@@ -226,23 +227,23 @@ impl LiveHost {
 
     /// New unsaved fit for the running tuning; false when none is running.
     pub fn tune_set(self: &Arc<Self>, f: crate::core::fit::Fit) -> bool {
-        if self.fit_tune.lock().unwrap().is_none() {
+        if self.fit_tune.lock_or_recover().is_none() {
             return false;
         }
-        *self.fit_tune.lock().unwrap() = Some(f);
+        *self.fit_tune.lock_or_recover() = Some(f);
         self.apply_fit();
         true
     }
 
     /// Back to the saved fit; a temporary pipeline ends with the normal hand-over (the screen plays its loop again).
     pub fn tune_end(self: &Arc<Self>) {
-        *self.fit_tune.lock().unwrap() = None;
+        *self.fit_tune.lock_or_recover() = None;
         self.apply_fit();
         self.stop_temporary(&self.tune_temp, || {});
     }
 
     pub fn tuning(&self) -> bool {
-        self.fit_tune.lock().unwrap().is_some()
+        self.fit_tune.lock_or_recover().is_some()
     }
 
     // ---------- preview on the real screen (My themes / Browse) ----------
@@ -253,13 +254,13 @@ impl LiveHost {
     }
 
     pub fn previewing(&self) -> bool {
-        self.preview.lock().unwrap().is_some()
+        self.preview.lock_or_recover().is_some()
     }
 
     fn preview_forget(&self) {
-        *self.preview.lock().unwrap() = None;
+        *self.preview.lock_or_recover() = None;
         self.preview_temp.store(false, SeqCst);
-        *self.preview_touched.lock().unwrap() = None;
+        *self.preview_touched.lock_or_recover() = None;
     }
 
     /// Show this theme on the real screen instead of the live theme, nothing saved. Live on: the running stream is given the theme
@@ -269,8 +270,8 @@ impl LiveHost {
         if self.calibrating() {
             self.calibrate_end();
         }
-        *self.preview.lock().unwrap() = Some(t.clone());
-        *self.preview_touched.lock().unwrap() = Some(std::time::Instant::now());
+        *self.preview.lock_or_recover() = Some(t.clone());
+        *self.preview_touched.lock_or_recover() = Some(std::time::Instant::now());
         match self.pipeline() {
             Some(p) => {
                 hlog("preview: another theme on the screen (nothing saved)");
@@ -291,14 +292,14 @@ impl LiveHost {
         if !self.previewing() {
             return false;
         }
-        *self.preview_touched.lock().unwrap() = Some(std::time::Instant::now());
+        *self.preview_touched.lock_or_recover() = Some(std::time::Instant::now());
         true
     }
 
     /// Back to what the screen showed before: live on gets its own theme again; a temporary stream ends with the normal hand-over
     /// (instant when the previewed picture is not the Embedded one). False when no preview was running.
     pub fn preview_end(self: &Arc<Self>) -> bool {
-        if self.preview.lock().unwrap().is_none() {
+        if self.preview.lock_or_recover().is_none() {
             return false;
         }
         let temp = self.stop_temporary(&self.preview_temp, || {});
@@ -306,11 +307,11 @@ impl LiveHost {
             // The detached pipeline reads its previewed theme for the hand-over.
             hlog("preview: ended, the temporary stream stops");
         } else {
-            *self.preview.lock().unwrap() = None;
-            *self.preview_touched.lock().unwrap() = None;
+            *self.preview.lock_or_recover() = None;
+            *self.preview_touched.lock_or_recover() = None;
             hlog("preview: ended, live shows its own theme again");
             if let Some(p) = self.pipeline() {
-                if let Some(t) = self.theme.lock().unwrap().clone() {
+                if let Some(t) = self.theme.lock_or_recover().clone() {
                     p.set_theme(t);
                 }
             }
@@ -328,7 +329,7 @@ impl LiveHost {
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_millis(500));
-                let last = *me.preview_touched.lock().unwrap();
+                let last = *me.preview_touched.lock_or_recover();
                 match last {
                     None => break,
                     Some(t) if t.elapsed() >= Duration::from_millis(me.preview_idle_ms.load(SeqCst)) => {
@@ -398,13 +399,13 @@ impl LiveHost {
     /// Start the Screen fit calibration: the ruler picture for `fit` goes on the screen, whether live is on or not. Live (when on)
     /// steps aside first and comes back after `calibrate_end`. Already running: just updates the picture.
     pub fn calibrate_start(self: &Arc<Self>, fit: crate::core::fit::Fit, sel: usize) {
-        if let Some(c) = self.fit_cal.lock().unwrap().as_ref() {
+        if let Some(c) = self.fit_cal.lock_or_recover().as_ref() {
             c.set(fit, sel);
             return;
         }
         self.hold(FITCAL, Duration::from_secs(6));
         let sink = if self.no_device.load(SeqCst) { Sink::Null } else { Sink::Device };
-        let mut g = self.fit_cal.lock().unwrap();
+        let mut g = self.fit_cal.lock_or_recover();
         if g.is_none() {
             *g = Some(crate::live::fitcal::FitCalibration::start(fit, sel, sink));
         }
@@ -412,7 +413,7 @@ impl LiveHost {
 
     /// New offsets (screen px) and selected edge for the running calibration; false when none is running.
     pub fn calibrate_set(&self, fit: crate::core::fit::Fit, sel: usize) -> bool {
-        match self.fit_cal.lock().unwrap().as_ref() {
+        match self.fit_cal.lock_or_recover().as_ref() {
             Some(c) => {
                 c.set(fit, sel);
                 true
@@ -423,7 +424,7 @@ impl LiveHost {
 
     /// End the calibration: the screen plays its loop clip again and live (when it was on) resumes.
     pub fn calibrate_end(self: &Arc<Self>) {
-        let c = self.fit_cal.lock().unwrap().take();
+        let c = self.fit_cal.lock_or_recover().take();
         if let Some(c) = c {
             c.end();
         }
@@ -433,7 +434,7 @@ impl LiveHost {
     }
 
     fn end_calibration_now(&self) {
-        let c = self.fit_cal.lock().unwrap().take();
+        let c = self.fit_cal.lock_or_recover().take();
         if let Some(c) = c {
             c.end();
         }
@@ -441,17 +442,17 @@ impl LiveHost {
 
     /// The ruler picture is on the screen.
     pub fn calibration_connected(&self) -> bool {
-        self.fit_cal.lock().unwrap().as_ref().is_some_and(|c| c.connected())
+        self.fit_cal.lock_or_recover().as_ref().is_some_and(|c| c.connected())
     }
 
     pub fn calibrating(&self) -> bool {
-        self.fit_cal.lock().unwrap().is_some()
+        self.fit_cal.lock_or_recover().is_some()
     }
 
     /// The theme live shows: kept for pipelines that start later, and given to the running one without ending the stream.
     /// Draw the guide lines on the real screen (live must be on); None clears them. Temporary: never saved.
     pub fn set_calibration(&self, g: Option<crate::live::theme::Guides>) {
-        *self.calibration.lock().unwrap() = g.clone();
+        *self.calibration.lock_or_recover() = g.clone();
         if let Some(p) = self.pipeline() {
             p.set_calibration(g);
         }
@@ -459,7 +460,7 @@ impl LiveHost {
 
     /// A theme whose live layer is off holds live (like a device task does) until another theme, or the switch, brings it back.
     pub fn set_theme(self: &Arc<Self>, t: crate::live::theme::ThemeLive) {
-        *self.theme.lock().unwrap() = Some(t.clone());
+        *self.theme.lock_or_recover() = Some(t.clone());
         if let Some(p) = self.pipeline().filter(|_| !self.previewing()) {
             hlog("theme changed: reloaded in place, the stream goes on");
             p.set_theme(t);
@@ -472,7 +473,7 @@ impl LiveHost {
     fn evaluate_idle(self: &Arc<Self>) {
         let fit = self.effective_fit();
         // while the Screen fit page is tuning, the live picture is what the user is looking at: never idle
-        let idle = !self.tuning() && !self.previewing() && !self.twin_temp.load(SeqCst) && self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer || t.nothing_to_stream(fit));
+        let idle = !self.tuning() && !self.previewing() && !self.twin_temp.load(SeqCst) && self.theme.lock_or_recover().as_ref().is_some_and(|t| !t.theme.live_layer || t.nothing_to_stream(fit));
         let layer_off = idle;
         let held = self.holds.load(SeqCst) & LAYER != 0;
         if layer_off && !held {
@@ -484,11 +485,11 @@ impl LiveHost {
     }
 
     pub fn running(&self) -> bool {
-        self.pipeline.lock().unwrap().is_some()
+        self.pipeline.lock_or_recover().is_some()
     }
 
     pub fn pipeline(&self) -> Option<Arc<Pipeline>> {
-        self.pipeline.lock().unwrap().clone()
+        self.pipeline.lock_or_recover().clone()
     }
 
     fn apply_pause(&self) {
@@ -500,7 +501,7 @@ impl LiveHost {
             }
             p.shared.paused.store(hold, SeqCst);
         } else if self.holds.load(SeqCst) == 0 && self.off_stopped.swap(false, SeqCst) {
-            let cfg = self.last_cfg.lock().unwrap().clone();
+            let cfg = self.last_cfg.lock_or_recover().clone();
             if let Some(c) = cfg {
                 self.start_with(c);
             }
@@ -515,14 +516,14 @@ impl LiveHost {
 
     /// Start live with this config (no-op when already running). Returns quickly; the pipeline connects on its own threads.
     pub fn start_with(&self, cfg: Config) {
-        let _lifecycle = self.lifecycle.lock().unwrap();
+        let _lifecycle = self.lifecycle.lock_or_recover();
         self.start_with_locked(cfg);
     }
 
     /// The lifecycle gate is held by the caller, including while an editor-only
     /// pipeline is retired before its replacement starts.
     fn start_with_locked(&self, cfg: Config) {
-        let mut g = self.pipeline.lock().unwrap();
+        let mut g = self.pipeline.lock_or_recover();
         if g.is_some() {
             self.preview_temp.store(false, SeqCst); // live was switched on during a preview: the stream is live's now
             self.tune_temp.store(false, SeqCst); // likewise, ending fit tuning must leave enabled Live alone
@@ -540,18 +541,18 @@ impl LiveHost {
             return;
         }
         self.off_stopped.store(false, SeqCst);
-        *self.last_cfg.lock().unwrap() = Some(cfg.clone());
+        *self.last_cfg.lock_or_recover() = Some(cfg.clone());
         let sink = if self.no_device.load(SeqCst) || self.twin_temp.load(SeqCst) { Sink::Null } else { Sink::Device };
         hlog(&format!("start (holds: {})", if self.holds.load(SeqCst) == 0 { "none".to_string() } else { reason(self.holds.load(SeqCst)) }));
         let p = Arc::new(Pipeline::start(&cfg, sink));
-        *p.shared.recover.lock().unwrap() = self.on_recovery.lock().unwrap().clone();
+        *p.shared.recover.lock_or_recover() = self.on_recovery.lock_or_recover().clone();
         if self.twin_temp.load(SeqCst) {
             p.lock_rate(15);
         }
-        if let Some(t) = self.preview.lock().unwrap().clone().or_else(|| self.theme.lock().unwrap().clone()) {
+        if let Some(t) = self.preview.lock_or_recover().clone().or_else(|| self.theme.lock_or_recover().clone()) {
             p.set_theme(t);
         }
-        if let Some(g) = self.calibration.lock().unwrap().clone() {
+        if let Some(g) = self.calibration.lock_or_recover().clone() {
             p.set_calibration(Some(g));
         }
         p.set_fit(self.effective_fit());
@@ -564,9 +565,9 @@ impl LiveHost {
     /// Decide ownership and detach under the same lock used to start/claim Live;
     /// blocking shutdown afterward cannot take a newly enabled Live pipeline.
     fn stop_temporary(&self, owner: &AtomicBool, before_stop: impl FnOnce()) -> bool {
-        let _lifecycle = self.lifecycle.lock().unwrap();
+        let _lifecycle = self.lifecycle.lock_or_recover();
         let pipeline = {
-            let mut pipeline = self.pipeline.lock().unwrap();
+            let mut pipeline = self.pipeline.lock_or_recover();
             if !owner.swap(false, SeqCst) {
                 return false;
             }
@@ -585,12 +586,12 @@ impl LiveHost {
 
     /// Stop live and end the stream properly (the screen plays its loop clip again). Blocks until the threads are done.
     pub fn stop(&self) {
-        let _lifecycle = self.lifecycle.lock().unwrap();
+        let _lifecycle = self.lifecycle.lock_or_recover();
         self.off_stopped.store(false, SeqCst);
         self.preview_forget();
         self.twin_temp.store(false, SeqCst);
         self.tune_temp.store(false, SeqCst);
-        let p = self.pipeline.lock().unwrap().take();
+        let p = self.pipeline.lock_or_recover().take();
         if let Some(p) = p {
             hlog("stop (live switched off or the app is closing)");
             p.stop();
@@ -599,13 +600,13 @@ impl LiveHost {
 
     /// Shutdown or logoff: the fast ending (at most 800 ms), loop clip or screen off.
     pub fn stop_fast(&self, screen_off: bool) {
-        let _lifecycle = self.lifecycle.lock().unwrap();
+        let _lifecycle = self.lifecycle.lock_or_recover();
         self.off_stopped.store(false, SeqCst);
         self.preview_forget();
         self.twin_temp.store(false, SeqCst);
         self.tune_temp.store(false, SeqCst);
         self.end_calibration_now();
-        let p = self.pipeline.lock().unwrap().take();
+        let p = self.pipeline.lock_or_recover().take();
         if let Some(p) = p {
             p.stop_fast(if screen_off { Ending::ScreenOff } else { Ending::LoopClip });
         }
@@ -613,7 +614,7 @@ impl LiveHost {
 
     /// Apply a new config while running (fps, seconds, background, music, ...) without ending the stream.
     pub fn reload(&self, cfg: &Config) {
-        *self.last_cfg.lock().unwrap() = Some(cfg.clone());
+        *self.last_cfg.lock_or_recover() = Some(cfg.clone());
         if let Some(p) = self.pipeline() {
             p.reload_config(cfg);
         }
@@ -655,7 +656,7 @@ impl LiveHost {
         let mut c = Config::load();
         c.fps = fps;
         c.save();
-        if let Some(o) = self.cfg_override.lock().unwrap().as_mut() {
+        if let Some(o) = self.cfg_override.lock_or_recover().as_mut() {
             o.fps = fps;
         }
     }
@@ -688,10 +689,10 @@ impl LiveHost {
     /// Like `hold`, but ends the stream with the screen off (sleep or lock set to turn the screen off). Live is started again
     /// when all holds are released.
     pub fn hold_screen_off(&self, bit: u32) {
-        let _lifecycle = self.lifecycle.lock().unwrap();
+        let _lifecycle = self.lifecycle.lock_or_recover();
         self.resume_gen.fetch_add(1, SeqCst);
         self.add_hold(bit);
-        let p = self.pipeline.lock().unwrap().take();
+        let p = self.pipeline.lock_or_recover().take();
         if let Some(p) = p {
             hlog("stop with the screen off (sleep or lock)");
             self.off_stopped.store(true, SeqCst);
@@ -746,7 +747,7 @@ impl LiveHost {
         let connection = if h != 0 {
             json!({ "state": "paused", "message": null, "retryInSeconds": 0, "attempts": 0 })
         } else if let Some(p) = self.pipeline() {
-            let value = p.shared.connection.lock().unwrap().snapshot(Instant::now());
+            let value = p.shared.connection.lock_or_recover().snapshot(Instant::now());
             value
         } else {
             json!({ "state": "off", "message": null, "retryInSeconds": 0, "attempts": 0 })
@@ -762,9 +763,9 @@ impl LiveHost {
             "paused": h & USER != 0,
             "deviceHold": h & DEVICE != 0,
             "systemHold": h & (SLEEP | LOCK) != 0,
-            "layerOff": self.theme.lock().unwrap().as_ref().is_some_and(|t| !t.theme.live_layer),
+            "layerOff": self.theme.lock_or_recover().as_ref().is_some_and(|t| !t.theme.live_layer),
             "idle": h & LAYER != 0,
-            "liveItems": self.theme.lock().unwrap().as_ref().is_none_or(|t| t.has_live_items()),
+            "liveItems": self.theme.lock_or_recover().as_ref().is_none_or(|t| t.has_live_items()),
             "calibrating": self.calibrating(),
             "tuning": self.tuning(),
             "noDevice": self.no_device.load(SeqCst),
@@ -899,9 +900,9 @@ mod tests {
         assert!(!h.running());
         h.tune_start(Fit::new(4, 0, 0, 9));
         let p = h.pipeline().expect("a temporary live session");
-        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(4, 0, 0, 9), "the unsaved fit, not the saved one");
+        assert_eq!(*p.shared.fit.lock_or_recover(), Fit::new(4, 0, 0, 9), "the unsaved fit, not the saved one");
         assert!(h.tune_set(Fit::new(5, 0, 0, 9).with_shift(3, -2)));
-        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(5, 0, 0, 9).with_shift(3, -2), "applied at once, no settings re-read");
+        assert_eq!(*p.shared.fit.lock_or_recover(), Fit::new(5, 0, 0, 9).with_shift(3, -2), "applied at once, no settings re-read");
         assert_eq!(h.status()["tuning"], json!(true));
         eventually(|| p.shared.stats.snap().rendered > 0);
         assert!(p.shared.stats.snap().rendered > 0);
@@ -923,11 +924,11 @@ mod tests {
         h.tune_start(Fit::new(4, 0, 0, 9));
         eventually(|| !p.shared.paused.load(SeqCst));
         assert!(!p.shared.paused.load(SeqCst), "tuning streams so the user sees the effect");
-        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(4, 0, 0, 9));
+        assert_eq!(*p.shared.fit.lock_or_recover(), Fit::new(4, 0, 0, 9));
         h.tune_end();
         std::thread::sleep(Duration::from_millis(500));
         assert!(h.running(), "live was on before: it stays on");
-        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(1, 1, 1, 1));
+        assert_eq!(*p.shared.fit.lock_or_recover(), Fit::new(1, 1, 1, 1));
         assert!(p.shared.paused.load(SeqCst), "and quiet again");
         h.stop();
     }
@@ -942,9 +943,9 @@ mod tests {
         h.start();
         let p = h.pipeline().unwrap();
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(4, 0, 0, 9));
+        assert_eq!(*p.shared.fit.lock_or_recover(), Fit::new(4, 0, 0, 9));
         h.set_fit(Fit::new(1, 2, 3, 4));
-        assert_eq!(*p.shared.fit.lock().unwrap(), Fit::new(1, 2, 3, 4));
+        assert_eq!(*p.shared.fit.lock_or_recover(), Fit::new(1, 2, 3, 4));
         h.stop();
     }
 
@@ -1087,7 +1088,7 @@ mod tests {
         ThemeLive::new(t, std::path::PathBuf::new())
     }
     fn shown(p: &Arc<Pipeline>) -> usize {
-        p.shared.theme.lock().unwrap().as_ref().map(|t| t.theme.widgets.len()).unwrap_or(99)
+        p.shared.theme.lock_or_recover().as_ref().map(|t| t.theme.widgets.len()).unwrap_or(99)
     }
 
     /// Preview with Live off: a temporary stream that follows the clicks without reconnecting, and ends when asked.

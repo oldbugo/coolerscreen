@@ -1,5 +1,6 @@
 //! One-frame rendering without a device, for the app's editor preview and for baking `onBase` items into the base.
 //! Both use the same widget code as the live renderer, with sample data (no sensors, no media session, no USB).
+use crate::core::sync::MutexExt;
 use super::nowplaying::NowPlaying;
 use super::render::{resize_exact, Renderer};
 use super::sensors::{Gpu, Sensors};
@@ -35,11 +36,11 @@ fn first_frame_cached(path: &PathBuf, portrait: bool) -> Option<Arc<Vec<u8>>> {
     static CACHE: OnceLock<Mutex<HashMap<FrameKey, Arc<Vec<u8>>>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let key: FrameKey = (path.clone(), portrait, std::fs::metadata(path).and_then(|m| m.modified()).ok());
-    if let Some(f) = cache.lock().unwrap().get(&key) {
+    if let Some(f) = cache.lock_or_recover().get(&key) {
         return Some(f.clone());
     }
     let f = Arc::new(video::first_frame(path, portrait).ok()?);
-    let mut g = cache.lock().unwrap();
+    let mut g = cache.lock_or_recover();
     if g.len() >= 6 {
         g.clear();
     }

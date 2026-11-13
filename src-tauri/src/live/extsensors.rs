@@ -4,6 +4,7 @@
 //!   2. LibreHardwareMonitor's web server (`http://127.0.0.1:8085/data.json`; Options > "Remote Web Server").
 //! The sources are only looked at while a widget shows one of these metrics (the sampler asks), HWiNFO about every 2 s, the web
 //! server about every 15 s when it is not answering. `status()` says in plain words why a value is missing.
+use crate::core::sync::MutexExt;
 use serde_json::Value;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -231,7 +232,7 @@ fn state() -> &'static Mutex<State> {
 /// Look at the sources if due (called from the sampler thread). Never blocks longer than the LHM timeout, and rarely.
 fn refresh() {
     let (do_hw, do_lhm) = {
-        let s = state().lock().unwrap();
+        let s = state().lock_or_recover();
         let hw_due = s.last_hw.is_none_or(|t| t.elapsed() >= Duration::from_secs(2));
         // the web server is tried only when HWiNFO has nothing, and then at most every 15 s (every 2 s while it works)
         let lhm_gap = if s.source == "lhm" { 2 } else { 15 };
@@ -240,7 +241,7 @@ fn refresh() {
     };
     if do_hw {
         let r = read_hwinfo();
-        let mut s = state().lock().unwrap();
+        let mut s = state().lock_or_recover();
         s.last_hw = Some(Instant::now());
         match r {
             Ok(v) => {
@@ -257,10 +258,10 @@ fn refresh() {
             }
         }
     }
-    let try_lhm = do_lhm && state().lock().unwrap().source != "hwinfo";
+    let try_lhm = do_lhm && state().lock_or_recover().source != "hwinfo";
     if try_lhm {
         let r = read_lhm();
-        let mut s = state().lock().unwrap();
+        let mut s = state().lock_or_recover();
         s.last_lhm = Some(Instant::now());
         match r {
             Ok(v) => {
@@ -281,18 +282,18 @@ fn refresh() {
 
 /// Latest value of an external metric (the sampler calls this; it also keeps the sources fresh).
 pub fn read(metric: &str) -> Option<f32> {
-    state().lock().unwrap().asked = true;
+    state().lock_or_recover().asked = true;
     refresh();
-    let s = state().lock().unwrap();
+    let s = state().lock_or_recover();
     pick(metric, &s.readings)
 }
 
 /// The frame rate of the game in front, from HWiNFO's PresentMon sensors: (fps, frame time in ms). None when HWiNFO is not the
 /// source, has no such sensor, or the value is 0 (no game). Registers demand like `read()`.
 pub fn game_fps() -> Option<(f32, Option<f32>)> {
-    state().lock().unwrap().asked = true;
+    state().lock_or_recover().asked = true;
     refresh();
-    let s = state().lock().unwrap();
+    let s = state().lock_or_recover();
     pick_game_fps(&s.readings)
 }
 
@@ -316,11 +317,11 @@ pub fn pick_game_fps(all: &[Reading]) -> Option<(f32, Option<f32>)> {
 
 /// What to tell the user (editor). Probes right now if nothing has asked yet.
 pub fn status() -> Status {
-    let asked = state().lock().unwrap().asked;
+    let asked = state().lock_or_recover().asked;
     if !asked {
         refresh();
     }
-    let s = state().lock().unwrap();
+    let s = state().lock_or_recover();
     match s.source {
         "hwinfo" | "lhm" => {
             let name = if s.source == "hwinfo" { "HWiNFO" } else { "LibreHardwareMonitor" };

@@ -1,5 +1,6 @@
 //! UC-only injected hardware readings. Standalone never enables this mode.
 //! No native reads, network, filesystem access or local fallback lives here.
+use crate::core::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -126,7 +127,7 @@ pub fn now_ms() -> u64 {
 /// Called only by uc-cooler-worker, before startup. An environment variable in
 /// the standalone application cannot enable an unattended replacement source.
 pub fn enable_for_uc_worker() {
-    *state().lock().unwrap() = State::default();
+    *state().lock_or_recover() = State::default();
     ENABLED.store(true, Ordering::SeqCst);
 }
 pub fn enabled() -> bool {
@@ -253,7 +254,7 @@ fn metric(snapshot: Option<&Snapshot>, key: &str) -> (Option<f32>, Option<f32>) 
     }
 }
 pub fn read_metric(key: &str, hz: u32) -> (Option<f32>, Option<f32>) {
-    let mut s = state().lock().unwrap();
+    let mut s = state().lock_or_recover();
     s.request(
         key,
         match hz {
@@ -266,7 +267,7 @@ pub fn read_metric(key: &str, hz: u32) -> (Option<f32>, Option<f32>) {
     metric(s.fresh(now_ms()), key)
 }
 pub fn gpu_name() -> Option<String> {
-    let mut s = state().lock().unwrap();
+    let mut s = state().lock_or_recover();
     s.request("gpu.name", 1, Instant::now());
     s.fresh(now_ms())?
         .gpu
@@ -275,7 +276,7 @@ pub fn gpu_name() -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 pub fn history(key: &str, secs: f32) -> Vec<(f32, f32)> {
-    let s = state().lock().unwrap();
+    let s = state().lock_or_recover();
     let now = now_ms();
     if s.fresh(now).is_none() {
         return Vec::new();
@@ -294,12 +295,12 @@ pub fn history(key: &str, secs: f32) -> Vec<(f32, f32)> {
 }
 /// Read without registering demand: smoothing runs before actual widget drawing.
 pub fn peek_metric(key: &str) -> (Option<f32>, Option<f32>) {
-    let s = state().lock().unwrap();
+    let s = state().lock_or_recover();
     metric(s.fresh(now_ms()), key)
 }
 const STATS_KEYS: [&str; 5] = ["cpu.load", "ram.used", "gpu.load", "gpu.temp", "gpu.clock"];
 pub fn stats(items: &[usize]) -> [(Option<f32>, Option<f32>); 5] {
-    let mut s = state().lock().unwrap();
+    let mut s = state().lock_or_recover();
     let at = Instant::now();
     for index in items {
         if let Some(key) = STATS_KEYS.get(*index) {
@@ -321,7 +322,7 @@ pub fn exchange(snapshot: Option<Snapshot>) -> Result<Value, String> {
     if !enabled() {
         return Err("Shared hardware is not enabled in this worker".into());
     }
-    let mut s = state().lock().unwrap();
+    let mut s = state().lock_or_recover();
     let now = now_ms();
     if let Some(snapshot) = snapshot {
         s.accept(snapshot, now)?;

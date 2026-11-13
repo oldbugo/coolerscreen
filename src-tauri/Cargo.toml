@@ -1,6 +1,6 @@
 [package]
 name = "coolerscreen"
-version = "4.21.1"
+version = "4.22.0"
 description = "CoolerScreen: put your own videos on the Lovingcool SC70 cooler screen"
 edition = "2021"
 default-run = "coolerscreen"
@@ -46,7 +46,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
+panic = "unwind"
 strip = true
 
 [[bench]]

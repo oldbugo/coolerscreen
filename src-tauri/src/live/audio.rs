@@ -2,6 +2,7 @@
 //! microphone, no permission prompt), 2048-point FFT, 64 log-spaced bands from 40 Hz to 16 kHz.
 //! Implemented directly on the `windows` crate (no extra crate; only two more feature flags). The capture thread runs only
 //! while a visualizer asks for levels and ends a few seconds after the last ask. Silence (no packets) decays to flat.
+use crate::core::sync::MutexExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -30,13 +31,20 @@ pub fn audio() -> &'static Arc<Audio> {
 impl Audio {
     /// The latest band levels (0..1 each, `BANDS` of them); registers the demand and starts the capture thread when needed.
     pub fn levels(self: &Arc<Self>) -> Vec<f32> {
-        let mut g = self.s.lock().unwrap();
+        let mut g = self.s.lock_or_recover();
         g.last_used = Some(Instant::now());
         if !g.running {
             g.running = true;
             self.stop.store(false, Ordering::Relaxed);
             let me = self.clone();
-            std::thread::spawn(move || me.run());
+            // A crash starts the capture again (1 s, doubling to 30 s) while it is still wanted.
+            std::thread::spawn(move || {
+                if crate::core::sync::restarting("audio capture", || !me.wanted(), || me.clone().run()).is_none() {
+                    let mut g = me.s.lock_or_recover();
+                    g.running = false;
+                    g.bands.clear();
+                }
+            });
         }
         if g.bands.len() != BANDS { vec![0.0; BANDS] } else { g.bands.clone() }
     }
@@ -46,7 +54,7 @@ impl Audio {
     }
 
     fn wanted(&self) -> bool {
-        !self.stop.load(Ordering::Relaxed) && self.s.lock().unwrap().last_used.is_some_and(|t| t.elapsed() < KEEP)
+        !self.stop.load(Ordering::Relaxed) && self.s.lock_or_recover().last_used.is_some_and(|t| t.elapsed() < KEEP)
     }
 
     fn run(self: Arc<Self>) {
@@ -62,13 +70,13 @@ impl Audio {
                 }
             }
         }
-        let mut g = self.s.lock().unwrap();
+        let mut g = self.s.lock_or_recover();
         g.running = false;
         g.bands.clear();
     }
 
     fn set_bands(&self, b: Vec<f32>) {
-        self.s.lock().unwrap().bands = b;
+        self.s.lock_or_recover().bands = b;
     }
 
     fn capture(&self) -> Result<(), String> {

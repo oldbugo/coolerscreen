@@ -3,6 +3,7 @@
 //! (2) RivaTuner Statistics Server shared memory if the user runs RTSS, (3) HWiNFO frame-rate sensors if HWiNFO shares them.
 //! Parts: `counter` (pure frame-time statistics), `etw` (the Windows event session), `rtss` (shared-memory reader), `foreground`
 //! (which program is in front, group check), this file (the sampler thread, source choice, reason lines, the widget props).
+use crate::core::sync::MutexExt;
 pub mod counter;
 pub mod etw;
 pub mod foreground;
@@ -132,19 +133,45 @@ fn session() -> &'static Mutex<Option<etw::EtwSession>> {
 
 /// The latest numbers (registers the demand; starts the sampler thread when needed). Never blocks the render thread.
 pub fn read() -> View {
-    let mut g = shared().lock().unwrap();
+    let mut g = shared().lock_or_recover();
     g.last_used = Some(Instant::now());
     if !g.running && !g.stop {
         g.running = true;
-        std::thread::spawn(run);
+        // A crash starts the sampler again (1 s, doubling to 30 s) while it is still asked for. The crashed run's event
+        // session feeds that run's counter, so it is stopped first and the new run creates its own. Stopped while
+        // waiting: the same clean-up as the sampler's own end.
+        std::thread::spawn(|| {
+            let quiet = || {
+                let g = shared().lock_or_recover();
+                g.stop || !g.last_used.is_some_and(|t| t.elapsed() < KEEP)
+            };
+            let mut first = true;
+            let fresh_run = || {
+                if !std::mem::take(&mut first) {
+                    if let Some(mut s) = session().lock_or_recover().take() {
+                        s.stop();
+                    }
+                }
+                run()
+            };
+            if crate::core::sync::restarting("game fps sampler", quiet, fresh_run).is_none() {
+                if let Some(mut s) = session().lock_or_recover().take() {
+                    s.stop();
+                }
+                let mut g = shared().lock_or_recover();
+                g.running = false;
+                g.view = View::idle(State::NoGame);
+                g.etw_err = None;
+            }
+        });
     }
     g.view.clone()
 }
 
 /// Stop our event session and the sampler (called when CoolerScreen quits). Real-time sessions outlive their process, so this matters.
 pub fn shutdown() {
-    shared().lock().unwrap().stop = true;
-    if let Some(mut s) = session().lock().unwrap().take() {
+    shared().lock_or_recover().stop = true;
+    if let Some(mut s) = session().lock_or_recover().take() {
         s.stop();
     }
 }
@@ -161,15 +188,15 @@ fn run() {
     let mut fg_since: Option<(u32, Instant)> = None;
     loop {
         {
-            let g = shared().lock().unwrap();
+            let g = shared().lock_or_recover();
             if g.stop || !g.last_used.is_some_and(|t| t.elapsed() < KEEP) {
                 break;
             }
         }
         // 1. our own event session: created EMPTY first (so it exists before an anti-cheat starts), then the providers are enabled
-        let have = session().lock().unwrap().is_some();
+        let have = session().lock_or_recover().is_some();
         if !have {
-            let wait = match shared().lock().unwrap().etw_err {
+            let wait = match shared().lock_or_recover().etw_err {
                 Some(etw::EtwError::AccessDenied) => Duration::from_secs(15),
                 Some(_) => Duration::from_secs(5),
                 None => Duration::ZERO,
@@ -179,10 +206,10 @@ fn run() {
                 match etw::EtwSession::start(counter.clone()) {
                     Ok(s) => {
                         let enabled = s.enable_providers();
-                        *session().lock().unwrap() = Some(s);
-                        shared().lock().unwrap().etw_err = enabled.err();
+                        *session().lock_or_recover() = Some(s);
+                        shared().lock_or_recover().etw_err = enabled.err();
                     }
-                    Err(e) => shared().lock().unwrap().etw_err = Some(e),
+                    Err(e) => shared().lock_or_recover().etw_err = Some(e),
                 }
             }
         }
@@ -194,11 +221,11 @@ fn run() {
             _ => {}
         }
         let now_ns = etw::EtwSession::now_ns();
-        let have = session().lock().unwrap().is_some();
+        let have = session().lock_or_recover().is_some();
         let mut view: Option<View> = None;
         if have {
             if let Some(f) = &fg {
-                let c = counter.lock().unwrap();
+                let c = counter.lock_or_recover();
                 if let Some(st) = c.stats(f.pid, now_ns) {
                     if f.fullscreen || st.fps >= GAME_MIN_FPS {
                         view = Some(View { state: State::Ok, game: f.name.clone(), fps: Some(st.fps), low1: st.low1, frame_ms: Some(st.frame_ms), hist: c.history(f.pid, now_ns, HIST_SECS), source: "etw" });
@@ -223,24 +250,24 @@ fn run() {
             }
         }
         let view = view.unwrap_or_else(|| {
-            let err = shared().lock().unwrap().etw_err.clone();
+            let err = shared().lock_or_recover().etw_err.clone();
             match (&fg, have, err) {
                 // no event session and nothing else answered: say why
                 (_, false, Some(etw::EtwError::AccessDenied)) => View::idle(if foreground::in_performance_log_users() { State::Blocked } else { State::NeedsGroup }),
                 (_, false, Some(_)) => View::idle(State::Unavailable),
                 // a full-screen program has been in front for a while and the session saw no frames of it at all
-                (Some(f), true, _) if f.fullscreen && fg_since.is_some_and(|(p, t)| p == f.pid && t.elapsed() > Duration::from_secs(6)) && counter.lock().unwrap().stats(f.pid, now_ns).is_none() => View::idle(State::Blocked),
+                (Some(f), true, _) if f.fullscreen && fg_since.is_some_and(|(p, t)| p == f.pid && t.elapsed() > Duration::from_secs(6)) && counter.lock_or_recover().stats(f.pid, now_ns).is_none() => View::idle(State::Blocked),
                 _ => View::idle(State::NoGame),
             }
         });
-        shared().lock().unwrap().view = view;
+        shared().lock_or_recover().view = view;
         std::thread::sleep(TICK);
     }
     // nobody asked for a while: stop our session too (it is created again on the next draw)
-    if let Some(mut s) = session().lock().unwrap().take() {
+    if let Some(mut s) = session().lock_or_recover().take() {
         s.stop();
     }
-    let mut g = shared().lock().unwrap();
+    let mut g = shared().lock_or_recover();
     g.running = false;
     g.view = View::idle(State::NoGame);
     g.etw_err = None;
@@ -273,7 +300,7 @@ pub fn status_for(state: State, source: &str, game: &str) -> Status {
 /// only checks the group, it never starts a session.
 pub fn status() -> Status {
     let (running, view, err) = {
-        let g = shared().lock().unwrap();
+        let g = shared().lock_or_recover();
         (g.running, g.view.clone(), g.etw_err.clone())
     };
     if running {

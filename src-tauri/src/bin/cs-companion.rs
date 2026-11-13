@@ -6,6 +6,7 @@
 //!   cs-companion --measure 60 [--video f] [--no-device]   CPU / RAM / timings for 30 and 60 fps (with and without video)
 //! Settings: %APPDATA%\CoolerScreen\companion.json. Quit, Ctrl+C, closing the console and logoff/shutdown all end the stream
 //! properly: the screen plays its loop clip again (the 2.0 behaviour). No startup entry, nothing runs unless started.
+use cs_core::core::sync::MutexExt;
 use cs_core::live::encode::{frame_budget, rotate_cw, JpegEncoder};
 use cs_core::live::pipeline::{Pipeline, Sink, StatsSnap};
 use cs_core::live::render::Renderer;
@@ -304,7 +305,7 @@ fn dry_run(cfg: &Config, theme: Option<ThemeLive>) -> i32 {
         match cs_core::live::video::first_frame(b, true) {
             Ok(f) => {
                 let first = std::sync::Arc::new(f);
-                *r.first_frame_slot().lock().unwrap() = Some(first.clone());
+                *r.first_frame_slot().lock_or_recover() = Some(first.clone());
                 for (name, p) in [("handover-25", 0.25f32), ("handover-50", 0.5), ("handover-100", 1.0)] {
                     r.set_live_alpha(1.0 - p);
                     r.set_handover(Some((HandTarget::FirstFrame, p)));
@@ -481,7 +482,7 @@ fn measure(base: &Config, theme: Option<ThemeLive>, secs: u64, use_device: bool)
 
 fn child_handle(p: &Pipeline) -> Option<HANDLE> {
     std::thread::sleep(Duration::from_millis(500));
-    p.video_child.lock().unwrap().filter(|h| *h != 0).map(|h| h as HANDLE)
+    p.video_child.lock_or_recover().filter(|h| *h != 0).map(|h| h as HANDLE)
 }
 
 fn avg_ms(us: u64, n: u64) -> f64 {

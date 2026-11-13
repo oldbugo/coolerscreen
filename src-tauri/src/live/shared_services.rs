@@ -1,4 +1,5 @@
 //! Typed UC source delivery. This receiver performs no native or network reads.
+use crate::core::sync::MutexExt;
 use super::{
     nowplaying::{Cover, NowPlaying},
     weather::{Place, WeatherData},
@@ -216,7 +217,7 @@ fn receiver() -> &'static Mutex<Receiver> {
     R.get_or_init(|| Mutex::new(Receiver::default()))
 }
 pub fn enable_for_uc_worker() {
-    *receiver().lock().unwrap() = Receiver::default();
+    *receiver().lock_or_recover() = Receiver::default();
     ENABLED.store(true, Ordering::SeqCst);
 }
 pub fn enabled() -> bool {
@@ -234,7 +235,7 @@ pub fn touch_music(preferred_app: Option<String>) {
     .validate()
     .is_ok()
     {
-        receiver().lock().unwrap().music_demand = Some((demand, Instant::now()));
+        receiver().lock_or_recover().music_demand = Some((demand, Instant::now()));
     }
 }
 impl Receiver {
@@ -275,7 +276,7 @@ impl Receiver {
     }
 }
 pub fn now_playing() -> Option<NowPlaying> {
-    let mut r = receiver().lock().unwrap();
+    let mut r = receiver().lock_or_recover();
     let now = now_ms();
     let s = r.fresh(now)?;
     let m = &s.music;
@@ -317,7 +318,7 @@ pub fn now_playing() -> Option<NowPlaying> {
     NowPlaying::from_shared(&d, at, cover)
 }
 pub fn weather_get(place: Option<Place>) -> Result<WeatherData, &'static str> {
-    let mut r = receiver().lock().unwrap();
+    let mut r = receiver().lock_or_recover();
     let Some(place) = place else {
         r.weather_demand = None;
         return Err("no place");
@@ -337,7 +338,7 @@ pub fn exchange(snapshot: Option<Snapshot>) -> Result<Value, String> {
     if !enabled() {
         return Err("Shared services mode is not enabled".into());
     }
-    let mut r = receiver().lock().unwrap();
+    let mut r = receiver().lock_or_recover();
     let now = now_ms();
     if let Some(s) = snapshot {
         r.accept(s, now)?;

@@ -7,6 +7,8 @@ loops forever. You only need the app while you are changing the picture.
 **Optional since 3.0: a live screen.** Turn **Live** on and CoolerScreen also draws a clock, music, PC stats, weather and
 more on top of your picture while it runs. It is **off by default**.
 
+**Engine 4.22.0:** crash recovery as in Unified Control 0.10.0. A crash in one job, request or live data source is logged in one short device.log line and recovered; locks survive it. In UC's cooler worker an unguarded crash still ends the worker so UC restarts it cleanly. USB commands and timings are unchanged.
+
 **UC engine4.21.1:** buffered finite Live connection/stop step diagnostics are sent privately to UC after each transaction. UC owns the diagnostics opt-out and bounded local persistence. Commands, delays, timeouts and recovery policy remain unchanged; successful writes do not establish visible playback. The standalone installation is untouched.
 
 **UC engine4.21.0:** named dock controls select/cycle Live themes, set/toggle Live and change screen brightness.

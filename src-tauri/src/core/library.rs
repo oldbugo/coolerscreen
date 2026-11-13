@@ -3,6 +3,7 @@
 //!   library/<originalId>/original.json  thumb.jpg  frame.jpg  [proxy.mp4|proxy.jpg]  [original.<ext> for .ht/.zip]
 //!   library/<originalId>/versions/<versionId>/version.json  device.mp4  preview.mp4  thumb.jpg
 //! Records are kept as JSON objects (unknown fields survive a round trip through 2.0).
+use crate::core::sync::{MutexExt, RwLockExt};
 use super::error::{CoreError, CoreResult};
 use super::js::{self, fmt, num, r3, read_json, round, to_num, truthy, write_json};
 use super::mask::{base_key, norm_frame, notch_key};
@@ -139,10 +140,10 @@ impl Library {
 
     /// Absolute prefix for media URLs (`http://127.0.0.1:PORT/TOKEN`); empty = 1.2's relative `/media/...`.
     pub fn set_media_base(&self, b: &str) {
-        *self.media_base.write().unwrap() = b.trim_end_matches('/').to_string();
+        *self.media_base.write_or_recover() = b.trim_end_matches('/').to_string();
     }
     pub fn media_base(&self) -> String {
-        self.media_base.read().unwrap().clone()
+        self.media_base.read_or_recover().clone()
     }
     pub fn url(&self, rel: &str) -> String {
         format!("{}{}", self.media_base(), rel)
@@ -168,14 +169,14 @@ impl Library {
     // ---------- change counter ----------
 
     pub fn set_on_change(&self, f: impl Fn(u64) + Send + Sync + 'static) {
-        *self.on_change.lock().unwrap() = Some(Box::new(f));
+        *self.on_change.lock_or_recover() = Some(Box::new(f));
     }
     pub fn rev(&self) -> u64 {
         self.rev.load(Ordering::SeqCst)
     }
     pub fn bump(&self) -> u64 {
         let r = self.rev.fetch_add(1, Ordering::SeqCst) + 1;
-        if let Some(f) = self.on_change.lock().unwrap().as_ref() {
+        if let Some(f) = self.on_change.lock_or_recover().as_ref() {
             f(r);
         }
         r
@@ -267,7 +268,7 @@ impl Library {
         {
             let _g = self.lock();
             let _ = std::fs::remove_dir_all(self.o_dir(oid));
-            self.v_index.lock().unwrap().retain(|_, o| o != oid);
+            self.v_index.lock_or_reset(HashMap::clear).retain(|_, o| o != oid);
         }
         self.bump();
     }
@@ -284,7 +285,7 @@ impl Library {
                 continue;
             }
             if let Some(v) = read_json(&self.v_dir(oid, &vid).join("version.json")).filter(Value::is_object) {
-                self.v_index.lock().unwrap().insert(vid, oid.to_string());
+                self.v_index.lock_or_reset(HashMap::clear).insert(vid, oid.to_string());
                 out.push(v);
             }
         }
@@ -297,7 +298,7 @@ impl Library {
         if !is_id(vid) {
             return None;
         }
-        let mut oid = self.v_index.lock().unwrap().get(vid).cloned();
+        let mut oid = self.v_index.lock_or_reset(HashMap::clear).get(vid).cloned();
         if oid.as_ref().is_none_or(|o| !self.v_dir(o, vid).exists()) {
             oid = self
                 .list_originals()
@@ -308,7 +309,7 @@ impl Library {
         }
         let oid = oid?;
         let v = read_json(&self.v_dir(&oid, vid).join("version.json")).filter(Value::is_object)?;
-        self.v_index.lock().unwrap().insert(vid.to_string(), oid.clone());
+        self.v_index.lock_or_reset(HashMap::clear).insert(vid.to_string(), oid.clone());
         Some((oid, v))
     }
 
@@ -320,7 +321,7 @@ impl Library {
         }
         std::fs::create_dir_all(self.v_dir(oid, vid))?;
         write_json(&self.v_dir(oid, vid).join("version.json"), v)?;
-        self.v_index.lock().unwrap().insert(vid.to_string(), oid.to_string());
+        self.v_index.lock_or_reset(HashMap::clear).insert(vid.to_string(), oid.to_string());
         self.bump();
         Ok(v.clone())
     }
@@ -341,7 +342,7 @@ impl Library {
             let _g = self.lock();
             let Some((oid, _)) = self.find_version(vid) else { return false };
             let _ = std::fs::remove_dir_all(self.v_dir(&oid, vid));
-            self.v_index.lock().unwrap().remove(vid);
+            self.v_index.lock_or_reset(HashMap::clear).remove(vid);
         }
         self.bump();
         true

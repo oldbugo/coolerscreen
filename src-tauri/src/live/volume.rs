@@ -1,5 +1,6 @@
 //! 4.0 stream B2: the PC's master volume and mute (default playback device, Windows Core Audio endpoint volume). Read only: we
 //! never change the volume. A small thread polls 4 times a second while a widget asks for it and ends a few seconds after.
+use crate::core::sync::MutexExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -28,12 +29,19 @@ const KEEP: Duration = Duration::from_secs(4);
 
 /// The latest volume (None until the first poll, or when there is no playback device). Registers the demand.
 pub fn read() -> Option<Vol> {
-    let mut g = state().lock().unwrap();
+    let mut g = state().lock_or_recover();
     g.last_used = Some(Instant::now());
     if !g.running {
         g.running = true;
         STOP.store(false, Ordering::Relaxed);
-        std::thread::spawn(run);
+        // A crash starts the poller again (1 s, doubling to 30 s) while the volume is still asked for.
+        std::thread::spawn(|| {
+            if crate::core::sync::restarting("volume poll", || !wanted(), run).is_none() {
+                let mut g = state().lock_or_recover();
+                g.running = false;
+                g.vol = None;
+            }
+        });
     }
     g.vol
 }
@@ -43,7 +51,7 @@ pub fn shutdown() {
 }
 
 fn wanted() -> bool {
-    !STOP.load(Ordering::Relaxed) && state().lock().unwrap().last_used.is_some_and(|t| t.elapsed() < KEEP)
+    !STOP.load(Ordering::Relaxed) && state().lock_or_recover().last_used.is_some_and(|t| t.elapsed() < KEEP)
 }
 
 fn run() {
@@ -70,10 +78,10 @@ fn run() {
             if v.is_none() {
                 ep = None; // the default device may have changed: look again next time
             }
-            state().lock().unwrap().vol = v;
+            state().lock_or_recover().vol = v;
             std::thread::sleep(Duration::from_millis(250));
         }
-        let mut g = state().lock().unwrap();
+        let mut g = state().lock_or_recover();
         g.running = false;
         g.vol = None;
         drop(ep);

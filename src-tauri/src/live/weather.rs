@@ -2,6 +2,7 @@
 //! app's HTTP client, cached for 15 minutes. The place comes from settings.json `weather.place` {name, lat, lon, tz} - chosen
 //! by the user (never guessed from the IP). No place: nothing is fetched. Offline: the last value stays, flagged `stale`.
 //! Temperatures are stored in degrees Celsius; the widget converts.
+use crate::core::sync::MutexExt;
 use serde_json::Value;
 use serde::{Serialize,Deserialize};
 use std::collections::HashMap;
@@ -81,13 +82,19 @@ pub fn get() -> Result<WeatherData, &'static str> {
 /// Source-only explicit input: this never reads app settings or geolocation.
 pub fn get_for(place:Option<Place>)->Result<WeatherData,&'static str>{
     let st = state().clone();
-    let mut g = st.lock().unwrap();
+    let mut g = st.lock_or_recover();
     if place.is_some(){g.last_ask = Some(Instant::now());}
     g.place = place;
     if !g.running && g.place.is_some() {
         g.running = true;
         let me = st.clone();
-        std::thread::spawn(move || run(me));
+        // A crash starts the fetcher again (1 s, doubling to 30 s) while weather is still asked for.
+        std::thread::spawn(move || {
+            let idle = || me.lock_or_recover().last_ask.is_none_or(|t| t.elapsed() > IDLE_END);
+            if crate::core::sync::restarting("weather fetch", idle, || run(me.clone())).is_none() {
+                me.lock_or_recover().running = false;
+            }
+        });
     }
     if g.place.is_none() {
         return Err("no place");
@@ -99,7 +106,7 @@ pub fn get_for(place:Option<Place>)->Result<WeatherData,&'static str>{
     }
 }
 pub fn source_observation(place:Option<Place>)->super::shared_services::WeatherObservation{
-    let _=get_for(place.clone());let g=state().lock().unwrap();
+    let _=get_for(place.clone());let g=state().lock_or_recover();
     let entry=place.as_ref().and_then(|p|g.cache.get(&key(p)));
     super::shared_services::WeatherObservation{status:if place.is_none(){"inactive"}else if entry.is_some_and(|e|e.data.is_some()){if entry.is_some_and(|e|e.failed){"stale"}else{"ok"}}else if entry.is_some_and(|e|e.failed){"error"}else{"loading"}.into(),observed_at_ms:entry.and_then(|e|e.observed_at_ms),place,data:entry.and_then(|e|e.data.clone())}
 }
@@ -122,25 +129,25 @@ pub fn parse_place(v: &Value) -> Option<Place> {
 fn run(st: Arc<Mutex<State>>) {
     loop {
         let (place, due, idle) = {
-            let g = st.lock().unwrap();
+            let g = st.lock_or_recover();
             let idle = g.last_ask.is_none_or(|t| t.elapsed() > IDLE_END);
             let due=g.place.as_ref().map(|p|g.cache.get(&key(p)).is_none_or(|e|e.attempted.is_none_or(|t|t.elapsed()>=if e.failed{Duration::from_secs(60)}else{CACHE}))).unwrap_or(false);
             (g.place.clone(),due,idle)
         };
         if idle {
-            st.lock().unwrap().running = false;
+            st.lock_or_recover().running = false;
             return;
         }
         if let (Some(p), true) = (place, due) {
             FETCHES.fetch_add(1,Ordering::Relaxed);
             match fetch(&p) {
                 Ok(d) => {
-                    let mut g = st.lock().unwrap();
+                    let mut g = st.lock_or_recover();
                     g.cache.insert(key(&p),CacheEntry{data:Some(d),observed_at_ms:Some(super::shared_services::now_ms()),attempted:Some(Instant::now()),failed:false});
                 }
                 Err(_) => {
                     crate::device::log("weather: source unavailable");
-                    let mut g = st.lock().unwrap();
+                    let mut g = st.lock_or_recover();
                     let entry=g.cache.entry(key(&p)).or_default();
                     if let Some(d) = entry.data.as_mut() {
                         d.stale = true;
@@ -149,7 +156,7 @@ fn run(st: Arc<Mutex<State>>) {
                     entry.failed=true;entry.attempted=Some(Instant::now());
                 }
             }
-            let mut g=st.lock().unwrap();if g.cache.len()>8{let current=g.place.as_ref().map(key);let oldest=g.cache.iter().filter(|(k,_)|Some(*k)!=current.as_ref()).min_by_key(|(_,v)|v.observed_at_ms.unwrap_or(0)).map(|(k,_)|k.clone());if let Some(oldest)=oldest{g.cache.remove(&oldest);}}
+            let mut g=st.lock_or_recover();if g.cache.len()>8{let current=g.place.as_ref().map(key);let oldest=g.cache.iter().filter(|(k,_)|Some(*k)!=current.as_ref()).min_by_key(|(_,v)|v.observed_at_ms.unwrap_or(0)).map(|(k,_)|k.clone());if let Some(oldest)=oldest{g.cache.remove(&oldest);}}
         }
         std::thread::sleep(Duration::from_secs(3));
     }

@@ -12,6 +12,7 @@
 //! Raw intermediates are kept in an LRU cache keyed by everything that changes the frames, so a quality-only change or
 //! a save right after an estimate costs nothing but the preview. Selections whose raw frames would exceed
 //! [`RAW_MAX_BYTES`] fall back to 1.2's method (2 s sample from raw, extrapolate with a 0.97 margin, direct encode).
+use crate::core::sync::MutexExt;
 use super::assets::corner_mask_file;
 use super::ffmpeg::{self, p};
 use super::graph::{self, device_graph_ov, input_args_ov, mjpeg_args, q_from_quality, quality_from_q, Base, Corners, Frame, Mask};
@@ -292,7 +293,7 @@ impl Engine {
         eng.remove_stale_runs();
         let _ = super::sys::remove_tree_best_effort(&eng.dir);
         let _ = std::fs::create_dir_all(&eng.dir);
-        RUN_DIRS.lock().unwrap().push(eng.dir.clone());
+        RUN_DIRS.lock_or_recover().push(eng.dir.clone());
         eng
     }
     /// Delete what dead runs left in work_dir (`run-<pid>` folders of processes that are gone, and loose files from
@@ -328,7 +329,7 @@ impl Engine {
     }
     /// Bytes held by the raw cache.
     pub fn cache_bytes(&self) -> u64 {
-        self.cache.lock().unwrap().iter().map(|e| e.bytes).sum()
+        self.cache.lock_or_recover().iter().map(|e| e.bytes).sum()
     }
     pub fn config(&self) -> &MediaConfig {
         &self.cfg
@@ -341,7 +342,7 @@ impl Engine {
     }
     /// Drop all raw intermediates (e.g. when the notch changes or on low disk).
     pub fn clear_cache(&self) {
-        let mut c = self.cache.lock().unwrap();
+        let mut c = self.cache.lock_or_recover();
         for e in c.drain(..) {
             super::sys::remove_tree_best_effort(&e.dir);
         }
@@ -436,7 +437,7 @@ impl Engine {
         let raw_max = std::env::var("CS_MEDIA_RAW_MAX").ok().and_then(|v| v.parse().ok()).unwrap_or(RAW_MAX_BYTES);
         let base_key = c.key();
         let entry = {
-            let mut cache = self.cache.lock().unwrap();
+            let mut cache = self.cache.lock_or_recover();
             let hit = cache
                 .iter()
                 .position(|e| e.key == format!("{base_key}|false"))
@@ -662,7 +663,7 @@ impl Engine {
             }
             None => match self.choose_auto(&c, cancel, &|f, m| progress(0.75 * f, m))? {
                 Ok((d, q, e, _)) => {
-                    let s = e.state.lock().unwrap().sizes[&q];
+                    let s = e.state.lock_or_recover().sizes[&q];
                     (q, d, e, s)
                 }
                 Err(worst) => return Err(MediaError::TooLong { max_fit_length: Self::max_fit_length(&c, worst) }),

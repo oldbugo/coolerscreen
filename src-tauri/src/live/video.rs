@@ -3,6 +3,7 @@
 //! paced in real time with -re. Decoding tries the GPU first (CUDA decode and scale on NVIDIA, then D3D11 decode with
 //! software scaling) and falls back to software if ffmpeg cannot start that way. The reader keeps only the newest frame.
 //! Environment overrides for experiments: CS_VIDEO_DECODE = software | auto | d3d11va | cuda | dxva2, CS_VIDEO_THREADS.
+use crate::core::sync::MutexExt;
 use super::{LH, LW};
 use std::io::Read;
 use std::path::Path;
@@ -76,24 +77,24 @@ impl VideoBg {
                 #[cfg(windows)]
                 {
                     use std::os::windows::io::AsRawHandle;
-                    *h2.lock().unwrap() = Some(child.as_raw_handle() as usize);
+                    *h2.lock_or_recover() = Some(child.as_raw_handle() as usize);
                 }
-                *hw2.lock().unwrap() = accel.to_string();
+                *hw2.lock_or_recover() = accel.to_string();
                 let started = Instant::now();
                 let mut got = false;
                 let mut out = child.stdout.take().unwrap();
-                *p2.lock().unwrap() = Some(child);
+                *p2.lock_or_recover() = Some(child);
                 loop {
                     let mut buf = vec![0u8; FRAME_BYTES];
                     if s2.load(Ordering::Relaxed) || out.read_exact(&mut buf).is_err() {
                         break;
                     }
                     got = true;
-                    *l2.lock().unwrap() = Some(Arc::new(buf));
+                    *l2.lock_or_recover() = Some(Arc::new(buf));
                     ix2.fetch_add(1, Ordering::Relaxed);
                 }
-                *h2.lock().unwrap() = None;
-                if let Some(mut c) = p2.lock().unwrap().take() {
+                *h2.lock_or_recover() = None;
+                if let Some(mut c) = p2.lock_or_recover().take() {
                     let _ = c.kill();
                     let _ = c.wait();
                 }
@@ -111,7 +112,7 @@ impl VideoBg {
     }
 
     pub fn frame(&self) -> Option<Arc<Vec<u8>>> {
-        self.latest.lock().unwrap().clone()
+        self.latest.lock_or_recover().clone()
     }
 }
 
@@ -187,7 +188,7 @@ impl Drop for VideoBg {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         // Killing ffmpeg unblocks the reader's read_exact (only this decoder: the app may have other ffmpegs running).
-        if let Some(c) = self.proc.lock().unwrap().as_mut() {
+        if let Some(c) = self.proc.lock_or_recover().as_mut() {
             let _ = c.kill();
         }
         if let Some(t) = self.thread.take() {

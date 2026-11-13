@@ -2,6 +2,7 @@
 //! The widget shows the latest titles of an RSS or Atom feed whose link the USER pasted. Nothing else is fetched: one GET of that
 //! link every 15 minutes, only while a headlines widget is drawn (the loader thread ends 30 s after the last draw).
 //! The parser is a small tolerant scanner (no XML crate): RSS 2.0 / RSS 1.0 and Atom, CDATA, entities, HTML inside titles.
+use crate::core::sync::MutexExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -593,12 +594,20 @@ pub fn read(source: &str) -> HeadlinesView {
     let Some(url) = valid_source(source) else {
         return HeadlinesView { entries: Vec::new(), title: None, loaded: true, error: Some("Not a feed link".into()) };
     };
-    let mut g = slots().lock().unwrap();
+    let mut g = slots().lock_or_recover();
     let s = g.entry(url.clone()).or_insert_with(|| Slot { last_used: Instant::now(), running: false, view: HeadlinesView::default() });
     s.last_used = Instant::now();
     if !s.running {
         s.running = true;
-        std::thread::spawn(move || run(url));
+        // A crash starts this feed's fetcher again (1 s, doubling to 30 s) while it is still asked for.
+        std::thread::spawn(move || {
+            let quiet = || slots().lock_or_recover().get(&url).is_none_or(|s| s.last_used.elapsed() > KEEP);
+            if crate::core::sync::restarting("headlines fetch", quiet, || run(url.clone())).is_none() {
+                if let Some(s) = slots().lock_or_recover().get_mut(&url) {
+                    s.running = false;
+                }
+            }
+        });
     }
     s.view.clone()
 }
@@ -643,7 +652,7 @@ fn fetch(url: &str) -> Result<Feed, String> {
 fn run(key: String) {
     let mut next = Instant::now();
     loop {
-        let idle = match slots().lock().unwrap().get(&key) {
+        let idle = match slots().lock_or_recover().get(&key) {
             Some(s) => s.last_used.elapsed() > KEEP,
             None => true,
         };
@@ -653,7 +662,7 @@ fn run(key: String) {
         if Instant::now() >= next {
             let r = fetch(&key);
             next = Instant::now() + if r.is_ok() { REFRESH } else { RETRY };
-            if let Some(s) = slots().lock().unwrap().get_mut(&key) {
+            if let Some(s) = slots().lock_or_recover().get_mut(&key) {
                 s.view.loaded = true;
                 match r {
                     Ok(f) => {
@@ -668,7 +677,7 @@ fn run(key: String) {
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    if let Some(s) = slots().lock().unwrap().get_mut(&key) {
+    if let Some(s) = slots().lock_or_recover().get_mut(&key) {
         s.running = false;
     }
 }
@@ -676,7 +685,7 @@ fn run(key: String) {
 /// Test helper: a ready-made view for a link, with no loader thread (so no network).
 #[cfg(test)]
 pub fn test_inject(url: String, view: HeadlinesView) {
-    slots().lock().unwrap().insert(url, Slot { last_used: Instant::now(), running: true, view });
+    slots().lock_or_recover().insert(url, Slot { last_used: Instant::now(), running: true, view });
 }
 
 #[cfg(test)]

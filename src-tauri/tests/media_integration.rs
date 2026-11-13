@@ -1,6 +1,7 @@
 //! Media pipeline integration tests against a real clip (ffmpeg sidecar, no screen).
 //! Set CS_TEST_CLIP to a video file (e.g. a copy of the pink-blue original); without it the tests do nothing.
 //! `cargo test --release --test media_integration -- --nocapture --test-threads 1`
+use cs_core::core::sync::MutexExt;
 use cs_core::media::{self, assets, encode::VersionRequest, gpu, graph, loops, verify, CancelToken, Engine, MediaConfig, MediaError};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -40,7 +41,7 @@ fn estimate_progress_and_cancel() {
     let eng = Engine::new(cfg.clone());
     // progress: increasing to 1
     let seen = Mutex::new(vec![]);
-    let e = eng.estimate(&clip, None, &req(2.0, 6.0), &CancelToken::new(), &|f, m| seen.lock().unwrap().push((f, m.to_string()))).unwrap();
+    let e = eng.estimate(&clip, None, &req(2.0, 6.0), &CancelToken::new(), &|f, m| seen.lock_or_recover().push((f, m.to_string()))).unwrap();
     let seen = seen.into_inner().unwrap();
     assert!(e.fits && e.exact);
     assert_eq!(seen.last().unwrap().0, 1.0);
