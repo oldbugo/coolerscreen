@@ -96,11 +96,13 @@ pub struct LiveSettings {
     pub on_lock: String,
     /// Draw the live frames-per-second counter on the screen (off by default).
     pub fps_overlay: bool,
+    /// Seconds the first Live connect after a stop waits so the screen can settle (default 30, 0 = off, at most 120).
+    pub settle_after_stop_s: u32,
 }
 
 impl Default for LiveSettings {
     fn default() -> Self {
-        LiveSettings { in_app: false, destroy_window: true, background: String::new(), show_seconds: false, music: true, screen_off_on_shutdown: false, on_sleep: "loop".into(), on_lock: "loop".into(), fps_overlay: false }
+        LiveSettings { in_app: false, destroy_window: true, background: String::new(), show_seconds: false, music: true, screen_off_on_shutdown: false, on_sleep: "loop".into(), on_lock: "loop".into(), fps_overlay: false, settle_after_stop_s: crate::live::session::settle::DEFAULT_SECONDS }
     }
 }
 
@@ -122,6 +124,7 @@ impl LiveSettings {
             on_sleep: mode("onSleep", &d.on_sleep),
             on_lock: mode("onLock", &d.on_lock),
             fps_overlay: b("fpsOverlay", d.fps_overlay),
+            settle_after_stop_s: settle_seconds(v.and_then(|x| x.get("settleAfterStopSeconds"))).unwrap_or(d.settle_after_stop_s),
         }
     }
     /// Only the keys that differ from the defaults.
@@ -137,12 +140,19 @@ impl LiveSettings {
         if self.on_sleep != d.on_sleep { m.insert("onSleep".into(), json!(self.on_sleep)); }
         if self.on_lock != d.on_lock { m.insert("onLock".into(), json!(self.on_lock)); }
         if self.fps_overlay != d.fps_overlay { m.insert("fpsOverlay".into(), json!(self.fps_overlay)); }
+        if self.settle_after_stop_s != d.settle_after_stop_s { m.insert("settleAfterStopSeconds".into(), json!(self.settle_after_stop_s)); }
         Value::Object(m)
     }
     pub fn to_full_value(&self) -> Value {
         json!({ "inApp": self.in_app, "destroyWindow": self.destroy_window, "background": self.background, "showSeconds": self.show_seconds, "music": self.music,
-            "screenOffOnShutdown": self.screen_off_on_shutdown, "onSleep": self.on_sleep, "onLock": self.on_lock, "fpsOverlay": self.fps_overlay })
+            "screenOffOnShutdown": self.screen_off_on_shutdown, "onSleep": self.on_sleep, "onLock": self.on_lock, "fpsOverlay": self.fps_overlay,
+            "settleAfterStopSeconds": self.settle_after_stop_s })
     }
+}
+
+/// A whole number of seconds from 0 to 120 (the settle wait after a Live stop); anything else is not accepted.
+pub fn settle_seconds(v: Option<&Value>) -> Option<u32> {
+    v.and_then(Value::as_u64).filter(|s| *s <= u64::from(crate::live::session::settle::MAX_SECONDS)).map(|s| s as u32)
 }
 
 pub fn defaults() -> Value {
@@ -581,6 +591,20 @@ pub fn is_blank(slot: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settle_after_stop_defaults_to_30_and_accepts_only_0_to_120() {
+        assert_eq!(LiveSettings::from_value(None).settle_after_stop_s, 30);
+        assert!(LiveSettings::default().to_min_value().get("settleAfterStopSeconds").is_none());
+        let l = LiveSettings::from_value(Some(&json!({"settleAfterStopSeconds": 0})));
+        assert_eq!(l.settle_after_stop_s, 0);
+        assert_eq!(l.to_min_value()["settleAfterStopSeconds"], 0);
+        assert_eq!(LiveSettings::from_value(Some(&json!({"settleAfterStopSeconds": 120}))).settle_after_stop_s, 120);
+        for bad in [json!(121), json!(-5), json!(1.5), json!("10")] {
+            assert_eq!(LiveSettings::from_value(Some(&json!({"settleAfterStopSeconds": bad}))).settle_after_stop_s, 30);
+        }
+        assert_eq!(LiveSettings::default().to_full_value()["settleAfterStopSeconds"], 30);
+    }
 
     #[test]
     fn defaults_match_node() {

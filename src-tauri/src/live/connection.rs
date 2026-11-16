@@ -43,6 +43,12 @@ impl Connection {
         self.retry_at = None; self.delay = 1; self.last_log = None;
     }
     pub fn resume(&mut self) { if self.state == "paused" { self.state = "connecting"; } }
+    /// The last stop was moments ago: wait `left` before the next connect (state stays "connecting"; the countdown shows it).
+    pub fn settling(&mut self, now: Instant, left: Duration) {
+        self.state = "connecting";
+        self.message = Some(format!("Letting the screen settle after the last stop ({} s)", left.as_secs() + u64::from(left.subsec_nanos() > 0)));
+        self.retry_at = Some(now + left);
+    }
     /// Conservative limit: one firmware restart for this pipeline lifetime, even through pauses/recovery.
     pub fn request_recovery(&mut self, e: &DevErr) -> bool {
         if e.code.as_deref() != Some("noReply") || self.recovery_used { return false; }
@@ -89,6 +95,16 @@ mod tests {
         assert_eq!(c.snapshot(now), json!({"state":"paused","message":null,"attempts":0,"retryInSeconds":0}));
         c.resume(); assert_eq!(c.snapshot(now)["state"], "connecting");
         c.failed(&err("busy"), now); assert_eq!(c.snapshot(now)["retryInSeconds"], 1);
+    }
+    #[test]
+    fn settling_delays_the_connect_without_counting_a_failure() {
+        let mut c = Connection::new(false); let now = Instant::now();
+        c.settling(now, Duration::from_millis(21_500));
+        let snap = c.snapshot(now);
+        assert_eq!(snap["state"], "connecting"); assert_eq!(snap["attempts"], 0); assert_eq!(snap["retryInSeconds"], 22);
+        assert!(!c.due(now + Duration::from_secs(21))); assert!(c.due(now + Duration::from_millis(21_500)));
+        c.begin(); c.connected(); assert_eq!(c.snapshot(now)["message"], serde_json::Value::Null);
+        c.settling(now, Duration::from_secs(5)); c.paused(); assert!(c.due(now));
     }
     #[test]
     fn only_verified_no_reply_can_request_one_restart() {

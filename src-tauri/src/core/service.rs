@@ -1243,6 +1243,7 @@ impl App {
         let mut c = crate::live::Config::load();
         c.show_seconds = l.show_seconds;
         c.fps_overlay = l.fps_overlay;
+        c.settle_after_stop_s = l.settle_after_stop_s;
         c.background = None;
         c.music.enabled = true;
         c
