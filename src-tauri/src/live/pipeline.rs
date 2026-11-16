@@ -558,6 +558,15 @@ impl Pipeline {
                             std::thread::sleep(Duration::from_millis(100));
                             continue;
                         }
+                        // 4.23.0: the first connect after a stop (ours, or the previous worker's before an update) waits until the
+                        // screen has settled. Same commands; only the start is later. 0 s in the setting turns it off.
+                        let settle = Duration::from_secs(u64::from(sh.cfg.lock_or_recover().settle_after_stop_s.min(super::session::settle::MAX_SECONDS)));
+                        let left = super::session::settle::remaining(settle);
+                        if !left.is_zero() {
+                            log(&format!("waiting {} s for the screen to settle after the last stop", left.as_secs() + u64::from(left.subsec_nanos() > 0)));
+                            sh.connection.lock_or_recover().settling(Instant::now(), left);
+                            continue;
+                        }
                         // A connect in progress counts as an open session: a device task asking live to step aside waits for it
                         // (and for the pause to end it), instead of opening the screen at the same moment.
                         sh.session_active.store(true, Relaxed);

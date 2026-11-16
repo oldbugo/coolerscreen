@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.23.0 - 2026-11-17 (settle wait after a Live stop)
+
+- The cooler screen hung three times (6, 11 and 17 Nov) when Live started again about 8 s after a stop, at Unified
+  Control updates. Connects with the stored clip already playing for minutes never hung. Now the first Live connect
+  after a stop waits until 30 s have passed since that stop. The stop time is kept in `live-last-stop.txt` in the app
+  folder, so a new process after an update or a worker restart waits too. While it waits, the state is "connecting"
+  with the message "Letting the screen settle after the last stop" and a countdown.
+- New Live setting `settleAfterStopSeconds`: whole seconds from 0 to 120, default 30; 0 turns the wait off.
+- The enter-Live write may now take up to 2 s (was 500 ms). The screen always needed 150 to 230 ms for it. Same command.
+- USB commands and their order are unchanged; the other write timeouts and waits are unchanged. User-approved
+  2026-11-17 (options A and C). Not yet verified on hardware: the next UC update with Live on is the test.
+
 ## 4.22.0 - 2026-11-13 (crash recovery, as in Unified Control 0.10.0)
 
 - Release builds now unwind on panic instead of aborting, so one crashing job or thread no longer ends the whole app.

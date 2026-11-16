@@ -85,11 +85,13 @@ pub struct Config {
     pub video_decode: String,
     /// Draw the measured frames per second on the screen picture (a debugging aid; off by default).
     pub fps_overlay: bool,
+    /// Seconds the first connect after a stop waits, so the screen can settle (0 = no wait; at most 120). 4.23.0.
+    pub settle_after_stop_s: u32,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { fps: 60, background: None, show_seconds: false, max_kb: 200, music: MusicConfig::default(), notch: "app".into(), video_decode: "auto".into(), fps_overlay: false }
+        Config { fps: 60, background: None, show_seconds: false, max_kb: 200, music: MusicConfig::default(), notch: "app".into(), video_decode: "auto".into(), fps_overlay: false, settle_after_stop_s: session::settle::DEFAULT_SECONDS }
     }
 }
 

@@ -469,6 +469,7 @@ fn live_set(app: &App, args: &Value) -> CoreResult<Value> {
         "fps",
         "paused",
         "autostart",
+        "settleAfterStopSeconds",
     ];
     if patch
         .as_object()
@@ -508,6 +509,10 @@ fn live_set(app: &App, args: &Value) -> CoreResult<Value> {
             }
             *destination = value.into();
         }
+    }
+    if patch.get("settleAfterStopSeconds").is_some() {
+        now.settle_after_stop_s = cs_core::core::settings::settle_seconds(patch.get("settleAfterStopSeconds"))
+            .ok_or_else(|| bad("settleAfterStopSeconds"))?;
     }
     let fps = if patch.get("fps").is_some() {
         let fps = patch["fps"]
@@ -1230,6 +1235,14 @@ mod tests {
         assert!(!app.live.running());
         assert!(dispatch(&app, "live_set", &json!({"patch":{"fps":45}})).is_err());
         assert!(dispatch(&app, "live_set", &json!({"patch":{"autostart":true}})).is_err());
+        assert_eq!(state["live"]["settings"]["settleAfterStopSeconds"], 30);
+        let state = dispatch(&app, "live_set", &json!({"patch":{"settleAfterStopSeconds":0}})).unwrap();
+        assert_eq!(state["live"]["settings"]["settleAfterStopSeconds"], 0);
+        assert_eq!(app.live_config().settle_after_stop_s, 0);
+        for bad_value in [json!(121), json!(-1), json!(2.5), json!("30"), json!(null)] {
+            assert!(dispatch(&app, "live_set", &json!({"patch":{"settleAfterStopSeconds":bad_value}})).is_err());
+        }
+        dispatch(&app, "live_set", &json!({"patch":{"settleAfterStopSeconds":30}})).unwrap();
         assert!(dispatch(&app, "device_setup", &json!({}))
             .unwrap_err()
             .code_is("test_mode"));

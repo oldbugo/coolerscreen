@@ -9,8 +9,14 @@ use std::time::{Duration, Instant};
 pub mod trace;
 use trace::{Flow, Step, Trace};
 
+#[path = "settle.rs"]
+pub mod settle;
+
 pub const KEEPALIVE: Duration = Duration::from_millis(1500);
 const END_OF_STREAM: [u8; 4] = [0xff, 0xd9, 0xff, 0xd9];
+/// The screen takes 150 to 230 ms to accept enter-Live (every other step takes under 10 ms). 4.23.0 allows 2 s
+/// (was 500 ms), so a slow answer is not cut off. Same command and order.
+pub const ENTER_LIVE_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// How a live stream ends.
 /// LoopClip (default, the 2.0 behaviour): display on and the stored loop clip plays.
@@ -79,6 +85,7 @@ impl LiveSession {
         if let Some(scr) = self.scr.take() {
             let mut trace = Trace::new(Flow::Stop);
             stop_sequence(scr, ending, StopMode::Normal, &mut trace);
+            settle::record_stop();
             trace.flush();
         }
     }
@@ -88,6 +95,7 @@ impl LiveSession {
         if let Some(scr) = self.scr.take() {
             let mut trace = Trace::new(Flow::StopFast);
             stop_sequence(scr, ending, StopMode::Fast, &mut trace);
+            settle::record_stop();
             trace.flush();
         }
     }
@@ -105,6 +113,7 @@ impl LiveSession {
         if let Some(scr) = self.scr.take() {
             let mut trace = Trace::new(Flow::CancelConnect);
             stop_sequence(scr, Ending::LoopClip, StopMode::Cancel, &mut trace);
+            settle::record_stop();
             trace.flush();
         }
     }
@@ -176,7 +185,7 @@ fn connect_sequence<O: SessionOps>(
         trace.run(Step::EnterLive, || {
             scr.write(
                 &crate::device::frame::frame(0x11, &[]),
-                Duration::from_millis(500),
+                ENTER_LIVE_TIMEOUT,
             )
         })
     })();
@@ -398,7 +407,7 @@ mod tests {
                 Call::Info,
                 written(0x15, &[0, 10], 500),
                 Call::Wait(Duration::from_millis(100)),
-                written(0x11, &[], 500),
+                written(0x11, &[], 2000),
             ]
         );
         let record = trace.value();
@@ -505,7 +514,7 @@ mod tests {
             assert_eq!(entries[entries.len() - 2]["result"], "cancelled");
             assert_eq!(entries.last().unwrap()["step"], "close");
             assert_eq!(calls.lock_or_recover().last(), Some(&Call::Close));
-            assert!(!calls.lock_or_recover().contains(&written(0x11, &[], 500)));
+            assert!(!calls.lock_or_recover().contains(&written(0x11, &[], 2000)));
         }
     }
 
