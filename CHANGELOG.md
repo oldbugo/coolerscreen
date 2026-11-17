@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.24.0 - 2026-11-17 (send the keep-display-on setting only once)
+
+- The 30 s settle wait (4.23.0) was not enough: on 17 Nov the screen hung again at a Unified Control update, 32.5 s after
+  the stop (1 hang in 5 updates with the wait, 3 in 5 without it). Every hang started at enter-Live, the step right after
+  0x15 [00 0A]. The screen stores that setting in its own memory and is busy for about 200 ms after it.
+- Now 0x15 [00 0A] is sent only until the screen has taken it once (a Live start that completes). That fact is kept in
+  `live-ending-stored.txt` in the app folder, so it holds after an update or a worker restart. Later Live starts send
+  FF D9 FF D9, info, wait 100 ms, 0x11. Delete the file to send the setting once more.
+- The connect step trace leaves out `preserve_ending` when it is not sent. The other commands, their order, waits and
+  timeouts are unchanged; the 4.23.0 settle wait stays. User-approved 2026-11-17 (option D). Not yet verified on hardware.
 ## 4.23.0 - 2026-11-17 (settle wait after a Live stop)
 
 - The cooler screen hung three times (6, 11 and 17 Nov) when Live started again about 8 s after a stop, at Unified

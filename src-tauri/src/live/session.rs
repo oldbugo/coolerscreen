@@ -1,5 +1,6 @@
 //! The live link to the screen over WinUSB (via the device layer). Sequence, as the vendor app does it:
 //! connect: FF D9 FF D9 (end any old stream), 0x15 [00 0A] (stored: do not switch the display off after live), 0x11 (enter live).
+//! 4.24.0: 0x15 is sent only until the screen has taken it once (preserve.rs); later starts leave it out.
 //! Frames: u32LE length | JPEG | u16LE sum. Keepalive 0x11 every 1.5 s. stop: FF D9 FF D9, display on (0x0E [1]),
 //! loop clip (0x14 [1,0]), so the 2.0 behaviour (the loop clip keeps playing) holds when the companion stops.
 use crate::device::{DevErr, Screen};
@@ -11,6 +12,9 @@ use trace::{Flow, Step, Trace};
 
 #[path = "settle.rs"]
 pub mod settle;
+
+#[path = "preserve.rs"]
+pub mod preserve;
 
 pub const KEEPALIVE: Duration = Duration::from_millis(1500);
 const END_OF_STREAM: [u8; 4] = [0xff, 0xd9, 0xff, 0xd9];
@@ -41,13 +45,18 @@ impl LiveSession {
 
     pub fn connect_checked(cancelled: &dyn Fn() -> bool) -> Result<LiveSession, DevErr> {
         let mut trace = Trace::new(Flow::Connect);
+        let send_ending = !preserve::stored();
         let result = connect_sequence(
             || Screen::open_usb().map_err(crate::device::ops::live_open_error),
             cancelled,
+            send_ending,
             &mut trace,
         );
         trace.flush();
         let scr = result?;
+        if send_ending {
+            preserve::record_stored();
+        }
         Ok(LiveSession {
             scr: Some(scr),
             last_keep: Instant::now(),
@@ -163,6 +172,7 @@ fn check_cancelled(cancelled: &dyn Fn() -> bool, trace: &mut Trace) -> Result<()
 fn connect_sequence<O: SessionOps>(
     open: impl FnOnce() -> Result<O, DevErr>,
     cancelled: &dyn Fn() -> bool,
+    send_ending: bool,
     trace: &mut Trace,
 ) -> Result<O, DevErr> {
     let mut scr = trace.run(Step::Open, open)?;
@@ -174,12 +184,15 @@ fn connect_sequence<O: SessionOps>(
         scr.wait(Duration::from_millis(100));
         trace.run(Step::Info, || scr.info(cancelled))?;
         check_cancelled(cancelled, trace)?;
-        trace.run(Step::PreserveEnding, || {
-            scr.write(
-                &crate::device::frame::frame(0x15, &[0x00, 0x0a]),
-                Duration::from_millis(500),
-            )
-        })?;
+        // Left out (and not traced) once the screen has stored it; the wait stays, so enter-Live timing is unchanged.
+        if send_ending {
+            trace.run(Step::PreserveEnding, || {
+                scr.write(
+                    &crate::device::frame::frame(0x15, &preserve::PAYLOAD),
+                    Duration::from_millis(500),
+                )
+            })?;
+        }
         scr.wait(Duration::from_millis(100));
         check_cancelled(cancelled, trace)?;
         trace.run(Step::EnterLive, || {
@@ -395,6 +408,7 @@ mod tests {
                 })
             },
             &|| false,
+            true,
             &mut trace,
         )
         .unwrap();
@@ -437,6 +451,47 @@ mod tests {
     }
 
     #[test]
+    fn connect_with_the_setting_stored_leaves_out_0x15_only() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut trace = Trace::new(Flow::Connect);
+        let scr = connect_sequence(
+            || {
+                calls.lock_or_recover().push(Call::Open);
+                Ok(FakeOps {
+                    calls: calls.clone(),
+                    failure: None,
+                })
+            },
+            &|| false,
+            false,
+            &mut trace,
+        )
+        .unwrap();
+        assert_eq!(
+            *calls.lock_or_recover(),
+            vec![
+                Call::Open,
+                Call::Write(END_OF_STREAM.to_vec(), Duration::from_millis(500)),
+                Call::Wait(Duration::from_millis(100)),
+                Call::Info,
+                Call::Wait(Duration::from_millis(100)),
+                written(0x11, &[], 2000),
+            ]
+        );
+        let record = trace.value();
+        assert_eq!(
+            record["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["step"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["open", "end_stream", "info", "enter_live"]
+        );
+        scr.close();
+    }
+
+    #[test]
     fn connect_failure_at_each_step_stops_forward_progress_closes_and_preserves_error() {
         let steps = [
             Step::Open,
@@ -461,6 +516,7 @@ mod tests {
                     }
                 },
                 &|| false,
+                true,
                 &mut trace,
             );
             let error = match result {
@@ -501,6 +557,7 @@ mod tests {
                     checks.set(check + 1);
                     check == checkpoint
                 },
+                true,
                 &mut trace,
             );
             let error = match result {

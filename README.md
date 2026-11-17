@@ -7,6 +7,8 @@ loops forever. You only need the app while you are changing the picture.
 **Optional since 3.0: a live screen.** Turn **Live** on and CoolerScreen also draws a clock, music, PC stats, weather and
 more on top of your picture while it runs. It is **off by default**.
 
+**Engine 4.24.0:** the keep-display-on setting (0x15 [00 0A]) is sent to the screen only once; later Live starts leave it out (record: `live-ending-stored.txt`). Every screen hang started right after it.
+
 **Engine 4.23.0:** after a Live stop, the first new Live connect waits 30 s so the screen can settle (setting `settleAfterStopSeconds`, 0 to 120 s, 0 = off), and the enter-Live write may take 2 s. Quick reconnects after Unified Control updates had made the screen hang. USB commands and their order are unchanged.
 
 **Engine 4.22.0:** crash recovery as in Unified Control 0.10.0. A crash in one job, request or live data source is logged in one short device.log line and recovered; locks survive it. In UC's cooler worker an unguarded crash still ends the worker so UC restarts it cleanly. USB commands and timings are unchanged.
